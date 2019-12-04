@@ -93,6 +93,8 @@ enum Reg {
     RReg(RReg),
     VReg(VReg)
 }
+fn Reg_R(rreg: RReg) -> Reg { Reg::RReg(rreg) }
+fn Reg_V(vreg: VReg) -> Reg { Reg::VReg(vreg) }
 impl Show for Reg {
     fn show(&self) -> String {
         match self {
@@ -1223,7 +1225,7 @@ enum MFrag_SME {
 
 impl<'a> CFG<'a> {
     // Calculate all the MFrags for |bix|.  Add them to |outMap| and the new
-    // Frags thaty they reference to outFrags.  |bix|, |livein| and |liveout|
+    // Frags that they reference to outFrags.  |bix|, |livein| and |liveout|
     // are expected to be valid in the context of the CFG |self| (duh!)
     fn get_MFrags_for_block(&self, bix: BlockIx,
                             livein: &Set::<Reg>, liveout: &Set::<Reg>,
@@ -1508,10 +1510,10 @@ fn merge_MFrags(mfrag_vecs_per_reg: &HashMap::<Reg, Vec<MFrag>>,
                     if !state[j].valid {
                         continue;
                     }
-                    let do_merge = // block i feeds a value to block j
+                    let do_merge = // frag group i feeds a value to group j
                         state[i].succs_of_live_out_blocks
                                 .intersects(&state[j].live_in_blocks)
-                        || // block j feeds a value to block i
+                        || // frag group j feeds a value to group i
                         state[j].succs_of_live_out_blocks
                                 .intersects(&state[i].live_in_blocks);
                     if do_merge {
@@ -1613,13 +1615,29 @@ fn cmpFrags(f1: &Frag, f2: &Frag) -> FCR {
     FCR::UN
 }
 
-struct SortedMFragVec {
+
+#[derive(Clone)]
+struct SortedMFrags {
     vec: Vec::<MFrag>
 }
 
-impl SortedMFragVec {
+impl SortedMFrags {
+    // Structural equality, at least.  Not equality in the sense of
+    // deferencing the contained FragIxes.
+    fn equals(&self, other: &SortedMFrags) -> bool {
+        if self.vec.len() != other.vec.len() {
+            return false;
+        }
+        for (mf1, mf2) in self.vec.iter().zip(&other.vec) {
+            if mf1 != mf2 {
+                return false;
+            }
+        }
+        true
+    }
+
     fn new(source: &Vec::<MFrag>, ctx: &Vec::<Frag>) -> Self {
-        let res = SortedMFragVec { vec: source.clone() };
+        let res = SortedMFrags { vec: source.clone() };
         // check the source is ordered, and clone (or sort it)
         res.check(ctx);
         res
@@ -1640,38 +1658,38 @@ impl SortedMFragVec {
             }
         }
         if !ok {
-            panic!("SortedMFragVec::check: vector not ok");
+            panic!("SortedMFrags::check: vector not ok");
         }
     }
 
     fn add(&mut self, to_add: &Self, ctx: &Vec::<Frag>) {
         self.check(ctx);
         to_add.check(ctx);
-        let vx = &self.vec;
-        let vy = &to_add.vec;
+        let smf_x = &self;
+        let smf_y = &to_add;
         let mut ix = 0;
         let mut iy = 0;
         let mut res = Vec::<MFrag>::new();
-        while ix < vx.len() && iy < vy.len() {
-            let fx = self.getFrag(ix, ctx);
-            let fy = self.getFrag(iy, ctx);
+        while ix < smf_x.vec.len() && iy < smf_y.vec.len() {
+            let fx = smf_x.getFrag(ix, ctx);
+            let fy = smf_y.getFrag(iy, ctx);
             match cmpFrags(fx, fy) {
-                FCR::LT => { res.push(vx[ix]); ix += 1; },
-                FCR::GT => { res.push(vy[iy]); iy += 1; },
+                FCR::LT => { res.push(smf_x.vec[ix]); ix += 1; },
+                FCR::GT => { res.push(smf_y.vec[iy]); iy += 1; },
                 FCR::EQ | FCR::UN
-                    => panic!("SortedMFragVec::add: vectors intersect")
+                    => panic!("SortedMFrags::add: vectors intersect")
             }
         }
         // At this point, one or the other or both vectors are empty.  Hence
         // it doesn't matter in which order the following two while-loops
         // appear.
-        debug_assert!(ix == vx.len() || iy == vy.len());
-        while ix < vx.len() {
-            res.push(vx[ix]);
+        debug_assert!(ix == smf_x.vec.len() || iy == smf_y.vec.len());
+        while ix < smf_x.vec.len() {
+            res.push(smf_x.vec[ix]);
             ix += 1;
         }
-        while iy < vy.len() {
-            res.push(vy[iy]);
+        while iy < smf_y.vec.len() {
+            res.push(smf_y.vec[iy]);
             iy += 1;
         }
         self.vec = res;
@@ -1683,13 +1701,13 @@ impl SortedMFragVec {
         // exactly in the cases where add() would have panic'd.
         self.check(ctx);
         to_add.check(ctx);
-        let vx = &self.vec;
-        let vy = &to_add.vec;
+        let smf_x = &self;
+        let smf_y = &to_add;
         let mut ix = 0;
         let mut iy = 0;
-        while ix < vx.len() && iy < vy.len() {
-            let fx = self.getFrag(ix, ctx);
-            let fy = self.getFrag(iy, ctx);
+        while ix < smf_x.vec.len() && iy < smf_y.vec.len() {
+            let fx = smf_x.getFrag(ix, ctx);
+            let fy = smf_y.getFrag(iy, ctx);
             match cmpFrags(fx, fy) {
                 FCR::LT => { ix += 1; },
                 FCR::GT => { iy += 1; },
@@ -1698,19 +1716,229 @@ impl SortedMFragVec {
         }
         // At this point, one or the other or both vectors are empty.  So
         // we're guaranteed to succeed.
-        debug_assert!(ix == vx.len() || iy == vy.len());
+        debug_assert!(ix == smf_x.vec.len() || iy == smf_y.vec.len());
         true
     }
 
-    /*
-    fn del(&mut self, other: &Self, ctx: &Vec::<Frag>) {
+    fn del(&mut self, to_del: &Self, ctx: &Vec::<Frag>) {
+        self.check(ctx);
+        to_del.check(ctx);
+        let smf_x = &self;
+        let smf_y = &to_del;
+        let mut ix = 0;
+        let mut iy = 0;
+        let mut res = Vec::<MFrag>::new();
+        while ix < smf_x.vec.len() && iy < smf_y.vec.len() {
+            let fx = smf_x.getFrag(ix, ctx);
+            let fy = smf_y.getFrag(iy, ctx);
+            match cmpFrags(fx, fy) {
+                FCR::LT => { res.push(smf_x.vec[ix]); ix += 1; },
+                FCR::EQ => { ix += 1; iy += 1; }
+                FCR::GT => { iy += 1; },
+                FCR::EQ | FCR::UN
+                    => panic!("SortedMFrags::del: partial overlap")
+            }
+        }
+        debug_assert!(ix == smf_x.vec.len() || iy == smf_y.vec.len());
+        // Handle leftovers
+        while ix < smf_x.vec.len() {
+            res.push(smf_x.vec[ix]);
+            ix += 1;
+        }
+        self.vec = res;
+        self.check(ctx);
     }
 
-    fn can_add_if_we_first_del(&mut self, to_add: &Self, to_del: &Self,
+    fn can_add_if_we_first_del(&self, to_del: &Self, to_add: &Self,
                                ctx: &Vec::<Frag>) -> bool {
+        // For now, just do this the stupid way.  It would be possible to do
+        // it without any allocation, but that sounds complex.
+        let mut after_del = self.clone();
+        after_del.del(&to_del, ctx);
+        return after_del.can_add(&to_add, ctx);
     }
-*/
+
 }
+
+#[test]
+fn test_SortedMFrags() {
+
+    // Create a Frag and FragIx from two FragPoints.
+    fn gen_fix(ctx: &mut Vec::<Frag>,
+               first: FragPoint, last: FragPoint) -> FragIx {
+        assert!(first <= last);
+        let res = mkFragIx(ctx.len() as u32);
+        let frag = Frag { bix: mkBlockIx(123),
+                          kind: FragKind::Local, first, last };
+        ctx.push(frag);
+        res
+    }
+
+    fn getFrag<'a>(ctx: &'a Vec::<Frag>, fix: FragIx) -> &'a Frag {
+        &ctx[ fix.get_usize() ]
+    }
+
+    let iix3  = mkInsnIx(3);
+    let iix4  = mkInsnIx(4);
+    let iix5  = mkInsnIx(5);
+    let iix6  = mkInsnIx(6);
+    let iix7  = mkInsnIx(7);
+    let iix10 = mkInsnIx(10);
+    let iix12 = mkInsnIx(12);
+    let iix15 = mkInsnIx(15);
+
+    let fp_3u = FragPoint_U(iix3);
+    let fp_3d = FragPoint_D(iix3);
+
+    let fp_4u = FragPoint_U(iix4);
+
+    let fp_5u = FragPoint_U(iix5);
+    let fp_5d = FragPoint_D(iix5);
+
+    let fp_6u = FragPoint_U(iix6);
+    let fp_6d = FragPoint_D(iix6);
+
+    let fp_7u = FragPoint_U(iix7);
+    let fp_7d = FragPoint_D(iix7);
+
+    let fp_10u = FragPoint_U(iix10);
+    let fp_12u = FragPoint_U(iix12);
+    let fp_15u = FragPoint_U(iix15);
+
+    let mut ctx = Vec::<Frag>::new();
+
+    let fix_3u    = gen_fix(&mut ctx, fp_3u, fp_3u);
+    let fix_3d    = gen_fix(&mut ctx, fp_3d, fp_3d);
+    let fix_4u    = gen_fix(&mut ctx, fp_4u, fp_4u);
+    let fix_3u_5u = gen_fix(&mut ctx, fp_3u, fp_5u);
+    let fix_3d_5d = gen_fix(&mut ctx, fp_3d, fp_5d);
+    let fix_3d_5u = gen_fix(&mut ctx, fp_3d, fp_5u);
+    let fix_3u_5d = gen_fix(&mut ctx, fp_3u, fp_5d);
+    let fix_6u_6d = gen_fix(&mut ctx, fp_6u, fp_6d);
+    let fix_7u_7d = gen_fix(&mut ctx, fp_7u, fp_7d);
+    let fix_10u   = gen_fix(&mut ctx, fp_10u, fp_10u);
+    let fix_12u   = gen_fix(&mut ctx, fp_12u, fp_12u);
+    let fix_15u   = gen_fix(&mut ctx, fp_15u, fp_15u);
+
+    // Boundary checks for point ranges, 3u vs 3d
+    assert!(cmpFrags(getFrag(&ctx, fix_3u), getFrag(&ctx, fix_3u))
+            == FCR::EQ);
+    assert!(cmpFrags(getFrag(&ctx, fix_3u), getFrag(&ctx, fix_3d))
+            == FCR::LT);
+    assert!(cmpFrags(getFrag(&ctx, fix_3d), getFrag(&ctx, fix_3u))
+            == FCR::GT);
+
+    // Boundary checks for point ranges, 3d vs 4u
+    assert!(cmpFrags(getFrag(&ctx, fix_3d), getFrag(&ctx, fix_3d))
+            == FCR::EQ);
+    assert!(cmpFrags(getFrag(&ctx, fix_3d), getFrag(&ctx, fix_4u))
+            == FCR::LT);
+    assert!(cmpFrags(getFrag(&ctx, fix_4u), getFrag(&ctx, fix_3d))
+            == FCR::GT);
+
+    // Partially overlapping
+    assert!(cmpFrags(getFrag(&ctx, fix_3d_5d), getFrag(&ctx, fix_3u_5u))
+            == FCR::UN);
+    assert!(cmpFrags(getFrag(&ctx, fix_3u_5u), getFrag(&ctx, fix_3d_5d))
+            == FCR::UN);
+
+    // Completely overlapping: one contained within the other
+    assert!(cmpFrags(getFrag(&ctx, fix_3d_5u), getFrag(&ctx, fix_3u_5d))
+            == FCR::UN);
+    assert!(cmpFrags(getFrag(&ctx, fix_3u_5d), getFrag(&ctx, fix_3d_5u))
+            == FCR::UN);
+
+    // Create a SortedMFrags from a bunch of Frag indices
+    fn genSMF(ctx: &Vec::<Frag>, frags: &Vec::<FragIx>) -> SortedMFrags {
+        let mfrags = frags.iter().map(|fix| MFrag { fix: *fix, count: 0 })
+                          .collect();
+        SortedMFrags::new(&mfrags, ctx)
+    }
+
+    // Construction tests
+    // These fail due to overlap
+    //let _ = genSMF(&ctx, &vec![fix_3u_3u, fix_3u_3u]);
+    //let _ = genSMF(&ctx, &vec![fix_3u_5u, fix_3d_5d]);
+
+    // These fail due to not being in order
+    //let _ = genSMF(&ctx, &vec![fix_4u_4u, fix_3u_3u]);
+
+    // Simple non-overlap tests for add()
+
+    let smf_empty  = genSMF(&ctx, &vec![]);
+    let smf_6_7_10 = genSMF(&ctx, &vec![fix_6u_6d, fix_7u_7d, fix_10u]);
+    let smf_3_12   = genSMF(&ctx, &vec![fix_3u, fix_12u]);
+    let smf_3_6_7_10_12 = genSMF(&ctx, &vec![fix_3u, fix_6u_6d, fix_7u_7d,
+                                             fix_10u, fix_12u]);
+    let mut tmp;
+
+    tmp = smf_empty. clone() ; tmp.add(&smf_empty, &ctx);
+    assert!(tmp .equals( &smf_empty ));
+
+    tmp = smf_3_12 .clone() ; tmp.add(&smf_empty, &ctx);
+    assert!(tmp .equals( &smf_3_12 ));
+
+    tmp = smf_empty .clone() ; tmp.add(&smf_3_12, &ctx);
+    assert!(tmp .equals( &smf_3_12 ));
+
+    tmp = smf_6_7_10 .clone() ; tmp.add(&smf_3_12, &ctx);
+    assert!(tmp .equals( &smf_3_6_7_10_12 ));
+
+    tmp = smf_3_12 .clone() ; tmp.add(&smf_6_7_10, &ctx);
+    assert!(tmp .equals( &smf_3_6_7_10_12 ));
+
+    // Tests for can_add()
+    assert!(true  == smf_empty .can_add( &smf_empty, &ctx ));
+    assert!(true  == smf_empty .can_add( &smf_3_12,  &ctx ));
+    assert!(true  == smf_3_12  .can_add( &smf_empty, &ctx ));
+    assert!(false == smf_3_12  .can_add( &smf_3_12,  &ctx ));
+
+    assert!(true == smf_6_7_10 .can_add( &smf_3_12, &ctx ));
+
+    assert!(true == smf_3_12 .can_add( &smf_6_7_10, &ctx ));
+
+    // Tests for del()
+    let smf_6_7  = genSMF(&ctx, &vec![fix_6u_6d, fix_7u_7d]);
+    let smf_6_10 = genSMF(&ctx, &vec![fix_6u_6d, fix_10u]);
+    let smf_7    = genSMF(&ctx, &vec![fix_7u_7d]);
+    let smf_10   = genSMF(&ctx, &vec![fix_10u]);
+
+    tmp = smf_empty. clone() ; tmp.del(&smf_empty, &ctx);
+    assert!(tmp .equals( &smf_empty ));
+
+    tmp = smf_3_12 .clone() ; tmp.del(&smf_empty, &ctx);
+    assert!(tmp .equals( &smf_3_12 ));
+
+    tmp = smf_empty .clone() ; tmp.del(&smf_3_12, &ctx);
+    assert!(tmp .equals( &smf_empty ));
+
+    tmp = smf_6_7_10 .clone() ; tmp.del(&smf_3_12, &ctx);
+    assert!(tmp .equals( &smf_6_7_10 ));
+
+    tmp = smf_3_12 .clone() ; tmp.del(&smf_6_7_10, &ctx);
+    assert!(tmp .equals( &smf_3_12 ));
+
+    tmp = smf_6_7_10 .clone() ; tmp.del(&smf_6_7, &ctx);
+    assert!(tmp .equals( &smf_10 ));
+
+    tmp = smf_6_7_10 .clone() ; tmp.del(&smf_10, &ctx);
+    assert!(tmp .equals( &smf_6_7 ));
+
+    tmp = smf_6_7_10 .clone() ; tmp.del(&smf_7, &ctx);
+    assert!(tmp .equals( &smf_6_10 ));
+
+    // Tests for can_add_if_we_first_del()
+    let smf_10_12 = genSMF(&ctx, &vec![fix_10u, fix_12u]);
+
+    assert!(true == smf_6_7_10
+                    .can_add_if_we_first_del( /*d=*/&smf_10_12,
+                                              /*a=*/&smf_3_12, &ctx ));
+
+    assert!(false == smf_6_7_10
+                     .can_add_if_we_first_del( /*d=*/&smf_10_12,
+                                               /*a=*/&smf_7, &ctx ));
+}
+
 
 //=============================================================================
 // Example programs
@@ -1768,7 +1996,7 @@ fn example_1<'a>() -> CFG<'a> {
     let vNENT = cfg.vreg();
     let vI    = cfg.vreg();
     let vSUM  = cfg.vreg();
-    let rTMP  = Reg::RReg(mkRReg(2)); // "2" is arbitrary.
+    let rTMP  = Reg_R(mkRReg(2)); // "2" is arbitrary.
     let vTMP2 = cfg.vreg();
 
     // Loop pre-header for filling array with numbers.
