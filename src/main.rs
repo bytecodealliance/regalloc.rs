@@ -429,9 +429,7 @@ fn resolveInsn<'a, F>(insn: &mut Insn<'a>, lookup: F)
      = sum, for each frag:
             frag.#uses / frag.len * frag.block.eef
        with the proviso that spill/reload LRs must have spill cost of infinity
-     Suggested: u32, so that the subterm frag.#uses * frag.block.eef can 
-       be calculated with a single 16 *u 16 -> 32 bit multiply.
-     Also, u32::max (0xFFFF_FFFF) is reserved to mean "infinity"
+     Do this with a f32 so we don't have to worry about scaling/overflow.
 */
 
 
@@ -445,7 +443,7 @@ struct Block<'a> {
     eef: u16
 }
 fn mkBlock<'a>(name: &'a str, start: InsnIx, len: u32) -> Block<'a> {
-    Block { name: name, start: start, len: len, eef: 0 }
+    Block { name: name, start: start, len: len, eef: 1 }
 }
 impl<'a> Block<'a> {
     fn containsInsnIx(&self, iix: InsnIx) -> bool {
@@ -1296,9 +1294,9 @@ impl<'a> CFG<'a> {
             }
 
             // Examine writes.  The general idea is that a write causes us to
-            // terminate the existing frag, if any, add it to |out|, and start
-            // a new frag.  But we have to be careful to deal correctly with
-            // dead writes.
+            // terminate the existing frag, if any, add it to |tmpResultVec|,
+            // and start a new frag.  But we have to be careful to deal
+            // correctly with dead writes.
             for r in regs_d.iter() {
                 let new_sme: Frag_SME;
                 match state.get(r) {
@@ -1508,8 +1506,15 @@ impl SortedFragIxs {
 // the Frags which they refer to.
 //
 // Live ranges may contain metrics.  Not all are initially filled in:
-// * |size|, is the number of instructions in total spanned by the LR
-// * |cost|, an abstractified measure of the cost of spilling the LR
+//
+// * |size| is the number of instructions in total spanned by the LR
+//
+// * |cost| is an abstractified measure of the cost of spilling the LR.  The
+//   only constraint (w.r.t. correctness) is that normal LRs have a |Some|
+//   value, whilst |None| is reserved for live ranges created for spills and
+//   reloads and interpreted to mean "infinity".  This is needed to guarantee
+//   that allocation can always succeed in the worst case, in which all of the
+//   original live ranges of the program are spilled.
 //
 // I find it helpful to think of a live range as a "renaming equivalence
 // class".  That is, if you rename |reg| at some point inside |sfrags|, then
@@ -1519,12 +1524,21 @@ struct LR {
     reg:    Reg,
     sfrags: SortedFragIxs,
     size:   u16,
-    cost:   u32,
+    cost:   Option<f32>,
 }
 impl Show for LR {
     fn show(&self) -> String {
+        let cost_str: String;
+        match self.cost {
+            None => {
+                cost_str = "*INF*".to_string();
+            },
+            Some(c) => {
+                cost_str = format!("{:<5.2}", c);
+            }
+        }
         self.reg.show() + &" s=".to_string() + &self.size.to_string()
-            + &",c=".to_string() + &self.cost.to_string()
+            + &",c=".to_string() + &cost_str
             + &" ".to_string() + &self.sfrags.show()
     }
 }
@@ -1548,7 +1562,7 @@ impl Show for LRIx {
 
 
 //=============================================================================
-// Merging of Frags, producing the final LRs
+// Merging of Frags, producing the final LRs, minus metrics
 
 fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
                frag_env: &Vec::</*FragIx, */Frag>,
@@ -1649,7 +1663,7 @@ fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
             if valid {
                 let lr = LR { reg: *reg,
                               sfrags: SortedFragIxs::new(&fragIxs, &frag_env),
-                              size: 0, cost: 0 };
+                              size: 0, cost: Some(0.0) };
                 res.push(lr);
             }
         }
@@ -1658,6 +1672,63 @@ fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
     }
 
     res
+}
+
+
+//=============================================================================
+// Finalising of LRs, by setting the |size| and |cost| metrics.
+
+// |size|: this is simple.  Simply sum the size of the individual fragments.
+// Note that this must produce a value > 0 for a dead write, hence the "+1".
+//
+// |cost|: try to estimate the number of spills and reloads that would result
+// from spilling the LR, thusly:
+//    sum, for each frag
+//        # mentions of the Reg in the frag
+//            (that's the per-frag, per pass spill cost)
+//        *
+//        the estimated execution count of the containing block
+//
+// all the while being very careful to avoid overflow.
+
+fn set_LR_metrics(lrs: &mut Vec::<LR>,
+                  fenv: &Vec::<Frag>, blocks: &Vec::<Block>)
+{
+    for lr in lrs {
+        debug_assert!(lr.size == 0 && lr.cost == Some(0.0));
+        let mut tot_size: u32 = 0;
+        let mut tot_cost: f32 = 0.0;
+
+        for fix in &lr.sfrags.fragIxs {
+            let frag = &fenv[fix.get_usize()];
+
+            // Add on the size of this fragment, but make sure we can't
+            // overflow a u32 no matter how many fragments there are.
+            let mut frag_size: u32 = frag.last.iix.get()
+                                     - frag.first.iix.get() + 1;
+            if frag_size > 0xFFFF {
+                frag_size = 0xFFFF;
+            }
+            tot_size += frag_size;
+            if tot_size > 0xFFFF { tot_size = 0xFFFF; }
+
+            // tot_cost is a float, so no such paranoia there.
+            tot_cost += frag.count as f32
+                        * blocks[frag.bix.get_usize()].eef as f32;
+        }
+
+        debug_assert!(tot_cost >= 0.0);
+        debug_assert!(tot_size >= 1 && tot_size <= 0xFFFF);
+        lr.size = tot_size as u16;
+
+        // Divide tot_cost by the total length, so as to increase the apparent
+        // spill cost of short LRs.  This is so as to give the advantage to
+        // short LRs in competition for registers.  This seems a bit of a hack
+        // to me, but hey ..
+        tot_cost /= tot_size as f32;
+        tot_cost *= 10.0; // Just to make the numbers look a bit nicer
+        lr.cost = Some(tot_cost);
+    }
 }
 
 
@@ -1874,13 +1945,21 @@ fn run_main(cfg: CFG, nRRegs: usize) {
     }
 
     println!("");
-    let live_ranges = merge_Frags(&fragIxs_per_reg, &frag_env, &cfg_map);
+    let mut live_ranges = merge_Frags(&fragIxs_per_reg, &frag_env, &cfg_map);
     n = 0;
     for lr in &live_ranges {
         println!("live range {}   {}", n, lr.show());
         n += 1;
     }
-/*
+
+    println!("");
+    set_LR_metrics(&mut live_ranges, &frag_env, &cfg.blocks);
+    n = 0;
+    for lr in &live_ranges {
+        println!("live range {}   {}", n, lr.show());
+        n += 1;
+    }
+    /*
 
     // Alloc main
 
