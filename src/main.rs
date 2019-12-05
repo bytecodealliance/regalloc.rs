@@ -490,16 +490,17 @@ impl<'a> CFG<'a> {
         println!("");
         println!("CFG {}: name='{}' entry='{}' {{",
                  who, self.name, self.entry.show());
-        let mut bix = 0;
+        let mut ix = 0;
         for b in self.blocks.iter() {
-            if bix > 0 {
+            if ix > 0 {
                 println!("");
             }
-            println!("  {}:{}", bix, b.name);
+            println!("  {}:{}", mkBlockIx(ix).show(), b.name);
             for i in b.start.get() .. b.start.get() + b.len {
-                println!("      {:<2}    {}", i, self.insns[i as usize].show());
+                println!("      {:<3}   {}"
+                         , mkInsnIx(i).show(), self.insns[i as usize].show());
             }
-            bix += 1;
+            ix += 1;
         }
         println!("}}");
     }
@@ -988,7 +989,7 @@ impl<'a> CFG<'a> {
 
 
 //=============================================================================
-// Representing and printing live ranges.  This is for both R and V regs.
+// Representing and printing of live range fragments.
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Ord)]
 enum UorD { U, D }
@@ -1095,62 +1096,84 @@ impl Show for FragIx {
 // that FragPoint values have a total ordering, at least within a single basic
 // block: the insn number is used as the primary key, and the Use/Def part is
 // the secondary key, with Use < Def.
+//
+// Finally, a Frag has a |count| field, which is a u16 indicating how often
+// the associated storage unit (Reg) is mentioned inside the Frag.  It is
+// assumed that the Frag is associated with some Reg.  If not, the |count|
+// field is meaningless.
+//
+// The |bix| field is actually redundant, since the containing |Block| can be
+// inferred, laboriously, from |first| and |last|, providing you have a
+// |Block| table to hand.  It is included here for convenience.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct Frag {
     bix:   BlockIx,
     kind:  FragKind,
     first: FragPoint,
-    last:  FragPoint
+    last:  FragPoint,
+    count: u16
 }
 impl Show for Frag {
     fn show(&self) -> String {
-        self.kind.show() + &"-".to_string()
+        self.bix.show() + &"-".to_string()
+            + &self.count.to_string() + &"x-".to_string()
+            + &self.kind.show() + &"-".to_string()
             + &self.first.show() + &"-" + &self.last.show()
     }
 }
 fn mk_Frag_Local(blocks: &Vec::<Block>, bix: BlockIx,
-                 live_after: InsnIx, dead_after: InsnIx) -> Frag {
+                 live_after: InsnIx, dead_after: InsnIx, count: u16) -> Frag {
     let block = &blocks[bix.get_usize()];
     debug_assert!(block.containsInsnIx(live_after));
     debug_assert!(block.containsInsnIx(dead_after));
     debug_assert!(live_after <= dead_after);
     if live_after == dead_after {
         // A dead write, but we must represent it correctly.
+        debug_assert!(count == 1);
         Frag { bix:   bix,
                kind:  FragKind::Local,
                first: FragPoint_D(live_after),
-               last:  FragPoint_D(live_after) }
+               last:  FragPoint_D(live_after),
+               count: count }
     } else {
+        debug_assert!(count >= 2);
         Frag { bix:   bix,
                kind:  FragKind::Local,
                first: FragPoint_D(live_after),
-               last:  FragPoint_U(dead_after) }
+               last:  FragPoint_U(dead_after),
+               count: count }
     }
 }
 fn mk_Frag_LiveIn(blocks: &Vec::<Block>,
-                  bix: BlockIx, dead_after: InsnIx) -> Frag {
+                  bix: BlockIx, dead_after: InsnIx, count: u16) -> Frag {
+    debug_assert!(count >= 1);
     let block = &blocks[bix.get_usize()];
     debug_assert!(block.containsInsnIx(dead_after));
     Frag { bix:   bix,
            kind:  FragKind::LiveIn,
            first: FragPoint_U(block.start),
-           last:  FragPoint_U(dead_after) }
+           last:  FragPoint_U(dead_after),
+           count: count }
 }
 fn mk_Frag_LiveOut(blocks: &Vec::<Block>,
-                  bix: BlockIx, live_after: InsnIx) -> Frag {
+                  bix: BlockIx, live_after: InsnIx, count: u16) -> Frag {
+    debug_assert!(count >= 1);
     let block = &blocks[bix.get_usize()];
     debug_assert!(block.containsInsnIx(live_after));
     Frag { bix:   bix,
            kind:  FragKind::LiveOut,
            first: FragPoint_D(live_after),
-           last:  FragPoint_D(block.start.plus(block.len - 1)) }
+           last:  FragPoint_D(block.start.plus(block.len - 1)),
+           count: count }
 }
-fn mk_Frag_Thru(blocks: &Vec::<Block>, bix: BlockIx) -> Frag {
+fn mk_Frag_Thru(blocks: &Vec::<Block>, bix: BlockIx, count: u16) -> Frag {
+    debug_assert!(count >= 0);
     let block = &blocks[bix.get_usize()];
     Frag { bix:   bix,
            kind:  FragKind::Thru,
            first: FragPoint_U(block.start),
-           last:  FragPoint_D(block.start.plus(block.len - 1)) }
+           last:  FragPoint_D(block.start.plus(block.len - 1)),
+           count: count }
 }
 
 
@@ -1166,23 +1189,348 @@ fn cmpFrags(f1: &Frag, f2: &Frag) -> FCR {
 }
 
 
-// "Metricated Frags".  This a FragIx plus a u16 indicating how often the
-// associated storage unit (Reg) is mentioned inside the Frag.
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-struct MFrag {
-    fix:   FragIx,
-    count: u16
-}
-fn mkMFrag(fix: FragIx, count: u16) -> MFrag { MFrag { fix, count } }
-impl Show for MFrag {
-    fn show(&self) -> String {
-        self.count.to_string() + &"x_".to_string()
-            + &self.fix.show()
+//=============================================================================
+// Computation of Frags (Live Range Fragments)
+
+// This is surprisingly complex, in part because of the need to correctly
+// handle dead writes.
+
+// Frag_SME ("Frag State Machine Entry") defines states for a state machine
+// used to track states of Regs during Frag construction.  Each state contains
+// information for an Frag that is currently under construction.  There are
+// really 3 states: NoInfo, Written and WrThenRd.  We don't represent NoInfo
+// explicitly because most blocks don't reference most Regs, so in
+// |get_Frags_for_block|, it would be wasteful to have a mapping for all Regs
+// most of which were just to NoInfo.  Instead, NoInfo is implied by a Reg not
+// being mapped in |state|.
+
+impl<'a> CFG<'a> {
+    // Calculate all the Frags for |bix|.  Add them to |outFEnv| and add to
+    // |outMap|, the associated FragIxs, segregated by Reg.  |bix|, |livein|
+    // and |liveout| are expected to be valid in the context of the CFG |self|
+    // (duh!)
+    fn get_Frags_for_block(&self, bix: BlockIx,
+                           livein: &Set::<Reg>, liveout: &Set::<Reg>,
+                           outMap: &mut HashMap::<Reg, Vec::<FragIx>>,
+                           outFEnv: &mut Vec::<Frag>)
+    {
+        // State machine entries.  See comment above.
+        enum Frag_SME {
+            // So far we have seen no mention of the Reg, either in the block
+            // proper or in livein.  This state is implied, per comments
+            // above, and not represented.  NoInfo { .. },
+
+            // Reg has been written.  Either prior to the block (iow, it is
+            // live-in), if |wp| is None.  Or else |wp| is Some(live_after),
+            // to indicate the defining insn.
+            Written { uses: u16, wp: Option<InsnIx> },
+
+            // Written, then read.  Meaning of |wp| is same as above.  |rp| is
+            // the most recently observed read point, using the usual
+            // dead_after indexing.
+            WrThenRd { uses: u16, wp: Option<InsnIx>, rp: InsnIx }
+        }
+        // end State machine entries
+
+        // Helper function: compare ordering of frag start points, taking into
+        // account a possible live-in start point.
+        fn precedes(point1: Option<InsnIx>, point2: InsnIx) -> bool {
+            if let Some(point1_iix) = point1 {
+                point1_iix.get() <= point2.get()
+            } else {
+                true
+            }
+        }
+        fn plus1(n: u16) -> u16 { if n == 0xFFFFu16 { n } else { n+1 } }
+        // end Helper functions
+
+        // The running state.
+        let blocks = &self.blocks;
+        let block = &blocks[bix.get_usize()];
+        let mut state = HashMap::<Reg, Frag_SME>::new();
+
+        // The generated Frag components are initially are dumped in here.  We
+        // group them by Reg at the end of this function.
+        let mut tmpResultVec = Vec::<(Reg, Frag)>::new();
+
+        // First, set up |state| as if all of |livein| had been written just
+        // prior to the block.
+        for r in livein.to_vec().iter() {
+            state.insert(*r, Frag_SME::Written { uses: 0, wp: None });
+        }
+
+        // Now visit each instruction in turn, examining first its reads and
+        // then its writes.
+        for ix in block.start.get() .. block.start.get() + block.len {
+            let iix = mkInsnIx(ix);
+            let insn = &self.insns[ix as usize];
+            let (regs_d, regs_u) = insn.getRegUsage();
+
+            // Examine reads.  This is pretty simple.  They simply extend
+            // existing fragments.
+            for r in regs_u.iter() {
+                let new_sme: Frag_SME;
+                match state.get(r) {
+                    // First event for |r| is a read, but it's not listed
+                    // in |livein|.
+                    None => {
+                        panic!("get_Frags_for_block: fail #1");
+                    },
+                    // The first read after a write.  Note that the "write"
+                    // can be either a real write, or due to the fact that |r|
+                    // is listed in |livein|.  We don't care here.
+                    Some(Frag_SME::Written { uses, wp }) => {
+                        new_sme = Frag_SME::WrThenRd { uses: plus1(*uses),
+                                                       wp: *wp, rp: iix };
+                    },
+                    // A subsequent read (== second or more read after a
+                    // write).  Same comment as above re meaning of "write".
+                    Some(Frag_SME::WrThenRd { uses, wp, rp }) => {
+                        debug_assert!(precedes(*wp, *rp));
+                        debug_assert!(precedes(Some(*rp), iix));
+                        new_sme = Frag_SME::WrThenRd { uses: plus1(*uses),
+                                                       wp: *wp, rp: iix };
+                    }
+                }
+                state.insert(*r, new_sme);
+            }
+
+            // Examine writes.  The general idea is that a write causes us to
+            // terminate the existing frag, if any, add it to |out|, and start
+            // a new frag.  But we have to be careful to deal correctly with
+            // dead writes.
+            for r in regs_d.iter() {
+                let new_sme: Frag_SME;
+                match state.get(r) {
+                    // First mention of a Reg we've never heard of before.
+                    // Note it and keep going.
+                    None => {
+                        new_sme = Frag_SME::Written { uses: 1, wp: Some(iix) };
+                    },
+                    // |r| must be in |livein|, but the first event for it is
+                    // a write.  That can't happen -- |livein| must be
+                    // incorrect.
+                    Some(Frag_SME::Written { uses:_, wp: None }) => {
+                        panic!("get_Frags_for_block: fail #2");
+                    },
+                    // |r| has been written before in this block, but not
+                    // subsequently read.  Hence the write is dead.  Emit a
+                    // "point" frag, then note this new write instead.
+                    Some(Frag_SME::Written { uses, wp: Some(wp_iix) }) => {
+                        debug_assert!(*uses == 1);
+                        let frag = mk_Frag_Local(blocks, bix,
+                                                 *wp_iix, *wp_iix, *uses);
+                        tmpResultVec.push((*r, frag));
+                        new_sme = Frag_SME::Written { uses: 1, wp: Some(iix) };
+                    },
+                    // There's already a valid frag for |r|.  This write will
+                    // start a new frag, so flush the existing one and note
+                    // this write.
+                    Some(Frag_SME::WrThenRd { uses, wp, rp }) => {
+                        let frag: Frag;
+                        if let Some(wr_iix) = wp {
+                            frag = mk_Frag_Local(blocks, bix,
+                                                 *wr_iix, *rp, *uses);
+                        } else {
+                            frag = mk_Frag_LiveIn(blocks, bix, *rp, *uses);
+                        }
+                        tmpResultVec.push((*r, frag));
+                        new_sme = Frag_SME::Written { uses: 1, wp: Some(iix) };
+                    }
+                }
+                state.insert(*r, new_sme);
+            }
+        }
+
+        // We are at the end of the block.  We still have to deal with
+        // live-out Regs.  We must also deal with fragments in |state| that
+        // are for registers not listed as live-out.
+
+        // Deal with live-out Regs.  Treat each one as if it is read just
+        // after the block.
+        for r in liveout.to_vec().iter() {
+            match state.get(r) {
+                // This can't happen.  It implies that |r| is in |liveout|,
+                // but is neither defined in the block nor present in |livein|.
+                None => {
+                    panic!("get_Frags_for_block: fail #3");
+                },
+                // |r| is "written", either literally or by virtue of being
+                // present in |livein|, and may or may not subsequently be
+                // read (we don't care).  Create a |LiveOut| or |Thru| frag
+                // accordingly.
+                Some(Frag_SME::Written { uses, wp }) |
+                Some(Frag_SME::WrThenRd { uses, wp, rp:_ }) => {
+                    let frag: Frag;
+                    if let Some(wr_iix) = wp {
+                        frag = mk_Frag_LiveOut(blocks, bix, *wr_iix, *uses);
+                    } else {
+                        frag = mk_Frag_Thru(blocks, bix, *uses);
+                    }
+                    tmpResultVec.push((*r, frag));
+                }
+            }
+            // Remove the entry from |state| so that the following loop
+            // doesn't process it again.
+            state.remove(r);
+        }
+
+        // Finally, round up any remaining valid fragments left in |state|.
+        for (r, st) in state.iter() {
+            match st {
+                // This implies |r| is in |livein| but is neither in |liveout|
+                // nor is it read in the block.  Which can't happen.
+                Frag_SME::Written { uses:_, wp: None } => {
+                    panic!("get_Frags_for_block: fail #4");
+                },
+                // This implies |r| has been written, but was never read,
+                // either directly or by virtue of being in |liveout|.  So
+                // just emit a "point" frag.
+                Frag_SME::Written { uses, wp: Some(wp_iix) } => {
+                    debug_assert!(*uses == 1);
+                    let frag = mk_Frag_Local(blocks, bix,
+                                             *wp_iix, *wp_iix, *uses);
+                    tmpResultVec.push((*r, frag));
+                },
+                // This is a more normal case.  |r| is either in |livein| or
+                // is first written inside the block, and later read, but is
+                // not in |liveout|.
+                Frag_SME::WrThenRd { uses, wp, rp } => {
+                    let frag: Frag;
+                    if let Some(wr_iix) = wp {
+                        frag = mk_Frag_Local(blocks, bix, *wr_iix, *rp, *uses);
+                    } else {
+                        frag = mk_Frag_LiveIn(blocks, bix, *rp, *uses);
+                    }
+                    tmpResultVec.push((*r, frag));
+                }
+            }
+        }
+
+        // Copy the entries in |tmpResultVec| into |outMap| and |outVec|.
+        // TODO: do this as we go along, so as to avoid the use of a temporary
+        // vector.
+        for (r, frag) in tmpResultVec {
+            outFEnv.push(frag);
+            let new_fix = mkFragIx(outFEnv.len() as u32 - 1);
+            match outMap.get_mut(&r) {
+                None => { outMap.insert(r, vec![new_fix]); },
+                Some(fragVec) => { fragVec.push(new_fix); }
+            }
+        }
+    }
+
+    fn get_Frags(&self,
+                 livein_sets_per_block:  &Vec::<Set<Reg>>,
+                 liveout_sets_per_block: &Vec::<Set<Reg>>
+                ) -> (HashMap::<Reg, Vec<FragIx>>, Vec::<Frag>)
+    {
+        debug_assert!(livein_sets_per_block.len()  == self.blocks.len());
+        debug_assert!(liveout_sets_per_block.len() == self.blocks.len());
+        let mut resMap  = HashMap::<Reg, Vec<FragIx>>::new();
+        let mut resFEnv = Vec::<Frag>::new();
+        for bix in 0 .. self.blocks.len() {
+            self.get_Frags_for_block(mkBlockIx(bix.try_into().unwrap()),
+                                     &livein_sets_per_block[bix],
+                                     &liveout_sets_per_block[bix],
+                                     &mut resMap, &mut resFEnv);
+        }
+        (resMap, resFEnv)
     }
 }
 
 
-// Indices into vectors of LRs (see below).
+//=============================================================================
+// Vectors of FragIxs, sorted so that the associated Frags are in ascending
+// order (per their FragPoint fields).  
+
+// The "fragment environment" (sometimes called 'fenv') to which the FragIxs
+// refer, is not stored here.
+
+#[derive(Clone)]
+struct SortedFragIxs {
+    fragIxs: Vec::<FragIx>
+}
+impl SortedFragIxs {
+    fn show(&self) -> String {
+        self.fragIxs.show()
+    }
+
+    fn show_with_fenv(&self, fenv: &Vec::<Frag>) -> String {
+        let mut frags = Vec::<Frag>::new();
+        for fix in &self.fragIxs {
+            frags.push(fenv[fix.get_usize()]);
+        }
+        "SFIxs_".to_string() + &frags.show()
+    }
+
+    fn check(&self, fenv: &Vec::<Frag>) {
+        let mut ok = true;
+        for i in 1 .. self.fragIxs.len() {
+            let prev_frag = &fenv[self.fragIxs[i-1].get_usize()];
+            let this_frag = &fenv[self.fragIxs[i-0].get_usize()];
+            if cmpFrags(prev_frag, this_frag) != FCR::LT {
+                ok = false;
+                break;
+            }
+        }
+        if !ok {
+            panic!("SortedMFrags::check: vector not ok");
+        }
+    }
+
+    fn new(source: &Vec::<FragIx>, fenv: &Vec::<Frag>) -> Self {
+        let mut res = SortedFragIxs { fragIxs: source.clone() };
+        // check the source is ordered, and clone (or sort it)
+        res.fragIxs.sort_unstable_by(
+            |fix_a, fix_b| {
+                match cmpFrags(&fenv[fix_a.get_usize()],
+                               &fenv[fix_b.get_usize()]) {
+                    FCR::LT => Ordering::Less,
+                    FCR::GT => Ordering::Greater,
+                    FCR::EQ | FCR::UN =>
+                        panic!("SortedFragIxs::new: overlapping or dup Frags!")
+                }
+            });
+        res.check(fenv);
+        res
+    }
+}
+
+
+//=============================================================================
+// Representing and printing live ranges.  This is for both R and V regs.
+
+// Finally, a live range.  This is the fundamental unit of allocation.  This
+// pairs a Reg with a vector of FragIxs in which it is live.  The FragIxs are
+// indices into some vector of Frags (a "fragment environment, 'fenv'), which
+// is not specified here.  They are sorted so as to give ascending order to
+// the Frags which they refer to.
+//
+// Live ranges may contain metrics.  Not all are initially filled in:
+// * |size|, is the number of instructions in total spanned by the LR
+// * |cost|, an abstractified measure of the cost of spilling the LR
+//
+// I find it helpful to think of a live range as a "renaming equivalence
+// class".  That is, if you rename |reg| at some point inside |sfrags|, then
+// you must rename *all* occurrences of |reg| inside |sfrags|, since otherwise
+// the program will no longer work.
+struct LR {
+    reg:    Reg,
+    sfrags: SortedFragIxs,
+    size:   u16,
+    cost:   u32,
+}
+impl Show for LR {
+    fn show(&self) -> String {
+        self.reg.show() + &" s=".to_string() + &self.size.to_string()
+            + &",c=".to_string() + &self.cost.to_string()
+            + &" ".to_string() + &self.sfrags.show()
+    }
+}
+
+
+// Indices into vectors of LRs.
 #[derive(Clone, Copy)]
 enum LRIx {
     LRIx(u32)
@@ -1199,288 +1547,20 @@ impl Show for LRIx {
 }
 
 
-// Finally, a live range.  This is the fundamental unit of allocation.  This
-// pairs an Reg with a vector of MFrags in which it is live.
-//
-// I find it easier to think of a live range as a "renaming equivalence
-// class".  That is, if you rename |reg| at some point inside |frags|, then
-// you must rename *all* occurrences of |reg| inside |frags|, since otherwise
-// the program will no longer work.
-struct LR {
-    reg:   Reg,
-    frags: Vec::<MFrag>
-}
-impl Show for LR {
-    fn show(&self) -> String {
-        self.reg.show() + &" @ ".to_string() + &self.frags.show()
-    }
-}
-
-
 //=============================================================================
-// Computation of MFrags (Metricated Live Range Fragments)
+// Merging of Frags, producing the final LRs
 
-// This is surprisingly complex, in part because of the need to correctly
-// handle dead writes.
-
-// MFrag_SME ("MFrag State Machine Entry") defines states for a state machine
-// used to track states of Regs during MFrag construction.  Each state
-// contains information for an MFrag that is currently under construction.
-// There are really 3 states: NoInfo, Written and WrThenRd.  We don't
-// represent NoInfo explicitly because most blocks don't reference most Regs,
-// so in |get_MFrags_for_block|, it would be wasteful to have a mapping for
-// all Regs most of which were just to NoInfo.  Instead, NoInfo is implied by
-// a Reg not being mapped in |state|.
-//
-// MFrag_SME is used only within |get_MFrags_for_block|.  It could be made
-// local to that function.
-
-enum MFrag_SME {
-    // So far we have seen no mention of the Reg, either in the block proper
-    // or in livein.  This state is implied, per comments above, and not
-    // represented.
-    // NoInfo { .. },
-
-    // Reg has been written.  Either prior to the block (iow, it is live-in),
-    // if |wp| is None.  Or else |wp| is Some(live_after), to indicate the
-    // defining insn.
-    Written { uses: u16, wp: Option<InsnIx> },
-
-    // Written, then read.  Meaning of |wp| is same as above.  |rp| is the
-    // most recently observed read point, using the usual dead_after indexing.
-    WrThenRd { uses: u16, wp: Option<InsnIx>, rp: InsnIx }
-}
-
-
-impl<'a> CFG<'a> {
-    // Calculate all the MFrags for |bix|.  Add them to |outMap| and the new
-    // Frags that they reference to outFrags.  |bix|, |livein| and |liveout|
-    // are expected to be valid in the context of the CFG |self| (duh!)
-    fn get_MFrags_for_block(&self, bix: BlockIx,
-                            livein: &Set::<Reg>, liveout: &Set::<Reg>,
-                            outMap: &mut HashMap::<Reg, Vec::<MFrag>>,
-                            outFrags: &mut Vec::<Frag>)
-    {
-        // Helper function: compare ordering of frag start points, taking into
-        // account a possible live-in start point.
-        fn precedes(point1: Option<InsnIx>, point2: InsnIx) -> bool {
-            if let Some(point1_iix) = point1 {
-                point1_iix.get() <= point2.get()
-            } else {
-                true
-            }
-        }
-        fn plus1(n: u16) -> u16 { if n == 0xFFFFu16 { n } else { n+1 } }
-        // end Helper functions
-
-        // The running state.
-        let blocks = &self.blocks;
-        let block = &blocks[bix.get_usize()];
-        let mut state = HashMap::<Reg, MFrag_SME>::new();
-
-        // The generated MFrag components are initially are dumped in here.
-        // We group them by Reg at the end of this function.
-        let mut tmpResultVec = Vec::<(Reg, u16, Frag)>::new();
-
-        // First, set up |state| as if all of |livein| had been written just
-        // prior to the block.
-        for r in livein.to_vec().iter() {
-            state.insert(*r, MFrag_SME::Written { uses: 0, wp: None });
-        }
-
-        // Now visit each instruction in turn, examining first its reads and
-        // then its writes.
-        for ix in block.start.get() .. block.start.get() + block.len {
-            let iix = mkInsnIx(ix);
-            let insn = &self.insns[ix as usize];
-            let (regs_d, regs_u) = insn.getRegUsage();
-
-            // Examine reads.  This is pretty simple.  They simply extend
-            // existing fragments.
-            for r in regs_u.iter() {
-                let new_sme: MFrag_SME;
-                match state.get(r) {
-                    // First event for |r| is a read, but it's not listed
-                    // in |livein|.
-                    None => {
-                        panic!("get_MFrags_for_block: fail #1");
-                    },
-                    // The first read after a write.  Note that the "write"
-                    // can be either a real write, or due to the fact that |r|
-                    // is listed in |livein|.  We don't care here.
-                    Some(MFrag_SME::Written { uses, wp }) => {
-                        new_sme = MFrag_SME::WrThenRd { uses: plus1(*uses),
-                                                        wp: *wp, rp: iix };
-                    },
-                    // A subsequent read (== second or more read after a
-                    // write).  Same comment as above re meaning of "write".
-                    Some(MFrag_SME::WrThenRd { uses, wp, rp }) => {
-                        debug_assert!(precedes(*wp, *rp));
-                        debug_assert!(precedes(Some(*rp), iix));
-                        new_sme = MFrag_SME::WrThenRd { uses: plus1(*uses),
-                                                        wp: *wp, rp: iix };
-                    }
-                }
-                state.insert(*r, new_sme);
-            }
-
-            // Examine writes.  The general idea is that a write causes us to
-            // terminate the existing frag, if any, add it to |out|, and start
-            // a new frag.  But we have to be careful to deal correctly with
-            // dead writes.
-            for r in regs_d.iter() {
-                let new_sme: MFrag_SME;
-                match state.get(r) {
-                    // First mention of a Reg we've never heard of before.
-                    // Note it and keep going.
-                    None => {
-                        new_sme = MFrag_SME::Written { uses: 1, wp: Some(iix) };
-                    },
-                    // |r| must be in |livein|, but the first event for it is
-                    // a write.  That can't happen -- |livein| must be
-                    // incorrect.
-                    Some(MFrag_SME::Written { uses:_, wp: None }) => {
-                        panic!("get_MFrags_for_block: fail #2");
-                    },
-                    // |r| has been written before in this block, but not
-                    // subsequently read.  Hence the write is dead.  Emit a
-                    // "point" frag, then note this new write instead.
-                    Some(MFrag_SME::Written { uses, wp: Some(wp_iix) }) => {
-                        debug_assert!(*uses == 1);
-                        let frag = mk_Frag_Local(blocks, bix, *wp_iix, *wp_iix);
-                        tmpResultVec.push((*r, 1, frag));
-                        new_sme = MFrag_SME::Written { uses: 1, wp: Some(iix) };
-                    },
-                    // There's already a valid frag for |r|.  This write will
-                    // start a new frag, so flush the existing one and note
-                    // this write.
-                    Some(MFrag_SME::WrThenRd { uses, wp, rp }) => {
-                        let frag: Frag;
-                        if let Some(wr_iix) = wp {
-                            frag = mk_Frag_Local(blocks, bix, *wr_iix, *rp);
-                        } else {
-                            frag = mk_Frag_LiveIn(blocks, bix, *rp);
-                        }
-                        tmpResultVec.push((*r, *uses, frag));
-                        new_sme = MFrag_SME::Written { uses: 1, wp: Some(iix) };
-                    }
-                }
-                state.insert(*r, new_sme);
-            }
-        }
-
-        // We are at the end of the block.  We still have to deal with
-        // live-out Regs.  We must also deal with fragments in |state| that
-        // are for registers not listed as live-out.
-
-        // Deal with live-out regs.  Treat each one as if it is read just
-        // after the block.
-        for r in liveout.to_vec().iter() {
-            match state.get(r) {
-                // This can't happen.  It implies that |r| is in |liveout|,
-                // but is neither defined in the block nor present in |livein|.
-                None => {
-                    panic!("get_MFrags_for_block: fail #3");
-                },
-                // |r| is "written", either literally or by virtue of being
-                // present in |livein|, and may or may not subsequently be
-                // read (we don't care).  Create a |LiveOut| or |Thru| frag
-                // accordingly.
-                Some(MFrag_SME::Written { uses, wp }) |
-                Some(MFrag_SME::WrThenRd { uses, wp, rp:_ }) => {
-                    let frag: Frag;
-                    if let Some(wr_iix) = wp {
-                        frag = mk_Frag_LiveOut(blocks, bix, *wr_iix);
-                    } else {
-                        frag = mk_Frag_Thru(blocks, bix);
-                    }
-                    tmpResultVec.push((*r, *uses, frag));
-                }
-            }
-            // Remove the entry from |state| so that the following loop
-            // doesn't process it again.
-            state.remove(r);
-        }
-
-        // Finally, round up any remaining valid fragments left in |state|.
-        for (r, st) in state.iter() {
-            match st {
-                // This implies |r| is in |livein| but is neither in |liveout|
-                // nor is it read in the block.  Which can't happen.
-                MFrag_SME::Written { uses:_, wp: None } => {
-                    panic!("get_MFrags_for_block: fail #4");
-                },
-                // This implies |r| has been written, but was never read,
-                // either directly or by virtue of being in |liveout|.  So
-                // just emit a "point" frag.
-                MFrag_SME::Written { uses, wp: Some(wp_iix) } => {
-                    debug_assert!(*uses == 1);
-                    let frag = mk_Frag_Local(blocks, bix, *wp_iix, *wp_iix);
-                    tmpResultVec.push((*r, 1, frag));
-                },
-                // This is a more normal case.  |r| is either in |livein| or
-                // is first written inside the block, and later read, but is
-                // not in |liveout|.
-                MFrag_SME::WrThenRd { uses, wp, rp } => {
-                    let frag: Frag;
-                    if let Some(wr_iix) = wp {
-                        frag = mk_Frag_Local(blocks, bix, *wr_iix, *rp);
-                    } else {
-                        frag = mk_Frag_LiveIn(blocks, bix, *rp);
-                    }
-                    tmpResultVec.push((*r, *uses, frag));
-                }
-            }
-        }
-
-        // Copy the entries in |tmpResultVec| into |outMap| and |outVec|.
-        // TODO: do this as we go along, so as to avoid the use of a temporary
-        // vector.
-        for (r, uses, frag) in tmpResultVec {
-            outFrags.push(frag);
-            let new_fix = mkFragIx(outFrags.len() as u32 - 1);
-            let new_mfrag = mkMFrag(new_fix, uses);
-            match outMap.get_mut(&r) {
-                None => { outMap.insert(r, vec![new_mfrag]); },
-                Some(mfragVec) => { mfragVec.push(new_mfrag); }
-            }
-        }
-    }
-
-    fn get_MFrags(&self,
-                  livein_sets_per_block:  &Vec::<Set<Reg>>,
-                  liveout_sets_per_block: &Vec::<Set<Reg>>
-                 ) -> (HashMap::<Reg, Vec<MFrag>>, Vec::<Frag>)
-    {
-        debug_assert!(livein_sets_per_block.len()  == self.blocks.len());
-        debug_assert!(liveout_sets_per_block.len() == self.blocks.len());
-        let mut resMap   = HashMap::<Reg, Vec<MFrag>>::new();
-        let mut resFrags = Vec::<Frag>::new();
-        for bix in 0 .. self.blocks.len() {
-            self.get_MFrags_for_block(mkBlockIx(bix.try_into().unwrap()),
-                                      &livein_sets_per_block[bix],
-                                      &liveout_sets_per_block[bix],
-                                      &mut resMap, &mut resFrags);
-        }
-        (resMap, resFrags)
-    }
-}
-
-
-//=============================================================================
-// Merging of MFrags, producing the final LRs
-
-fn merge_MFrags(mfrag_vecs_per_reg: &HashMap::<Reg, Vec<MFrag>>,
-                frag_table: &Vec::</*FragIx, */Frag>,
-                cfg_map: &CFGMap) -> Vec::<LR>
+fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
+               frag_env: &Vec::</*FragIx, */Frag>,
+               cfg_map: &CFGMap) -> Vec::<LR>
 {
     let mut res = Vec::<LR>::new();
-    for (reg, all_mfrags_for_reg) in mfrag_vecs_per_reg.iter() {
+    for (reg, all_fragIxs_for_reg) in fragIx_vecs_per_reg.iter() {
 
-        // BEGIN merge |all_mfrags_for_reg| entries as much as possible
-        // |state| is a vector of four components:
+        // BEGIN merge |all_fragIxs_for_reg| entries as much as possible.
+        // Each |state| entry has four components:
         //    (1) An is-this-entry-still-valid flag
-        //    (2) A vec of MFrags.  These I think should be disjoint.
+        //    (2) A vec of FragIxs.  These should refer to disjoint Frags.
         //    (3) A set of blocks, which are those corresponding to (2)
         //        that are LiveIn or Thru (== have an inbound value)
         //    (4) A set of blocks, which are the union of the successors of
@@ -1488,39 +1568,39 @@ fn merge_MFrags(mfrag_vecs_per_reg: &HashMap::<Reg, Vec<MFrag>>,
         //        (== have an outbound value)
         struct MergeGroup {
             valid: bool,
-            mfrags: Vec::<MFrag>,
+            fragIxs: Vec::<FragIx>,
             live_in_blocks: Set::<BlockIx>,
             succs_of_live_out_blocks: Set::<BlockIx>
         }
 
         let mut state = Vec::<MergeGroup>::new();
 
-        // Create the initial state by giving each MFrag its own Vec, and
+        // Create the initial state by giving each FragIx its own Vec, and
         // tagging it with its interface blocks.
-        for mfrag in all_mfrags_for_reg.iter() {
+        for fix in all_fragIxs_for_reg {
             let mut live_in_blocks = Set::<BlockIx>::empty();
             let mut succs_of_live_out_blocks = Set::<BlockIx>::empty();
-            let frag = &frag_table[mfrag.fix.get_usize()];
-            let mfrag_bix = frag.bix;
-            let mfrag_succ_bixes = &cfg_map.succ_map[mfrag_bix.get_usize()];
+            let frag = &frag_env[fix.get_usize()];
+            let frag_bix = frag.bix;
+            let frag_succ_bixes = &cfg_map.succ_map[frag_bix.get_usize()];
             match frag.kind {
                 FragKind::Local => {
                 },
                 FragKind::LiveIn => {
-                    live_in_blocks.insert(mfrag_bix);
+                    live_in_blocks.insert(frag_bix);
                 },
                 FragKind::LiveOut => {
-                    succs_of_live_out_blocks.union(mfrag_succ_bixes);
+                    succs_of_live_out_blocks.union(frag_succ_bixes);
                 },
                 FragKind::Thru => {
-                    live_in_blocks.insert(mfrag_bix);
-                    succs_of_live_out_blocks.union(mfrag_succ_bixes);
+                    live_in_blocks.insert(frag_bix);
+                    succs_of_live_out_blocks.union(frag_succ_bixes);
                 }
             }
 
             let valid = true;
-            let mfrags = vec![*mfrag];
-            let mg = MergeGroup { valid, mfrags,
+            let fragIxs = vec![*fix];
+            let mg = MergeGroup { valid, fragIxs,
                                   live_in_blocks, succs_of_live_out_blocks };
             state.push(mg);
         }
@@ -1546,8 +1626,8 @@ fn merge_MFrags(mfrag_vecs_per_reg: &HashMap::<Reg, Vec<MFrag>>,
                         state[j].succs_of_live_out_blocks
                                 .intersects(&state[i].live_in_blocks);
                     if do_merge {
-                        let mut tmp_mfrags = state[i].mfrags.clone();
-                        state[j].mfrags.append(&mut tmp_mfrags);
+                        let mut tmp_fragIxs = state[i].fragIxs.clone();
+                        state[j].fragIxs.append(&mut tmp_fragIxs);
                         let tmp_libs = state[i].live_in_blocks.clone();
                         state[j].live_in_blocks.union(&tmp_libs);
                         let tmp_solobs
@@ -1564,10 +1644,13 @@ fn merge_MFrags(mfrag_vecs_per_reg: &HashMap::<Reg, Vec<MFrag>>,
             }
         }
 
-        // Harvest the merged MFrag sets from |state|
-        for MergeGroup { valid, mfrags, .. } in state {
+        // Harvest the merged MFrag sets from |state|, and turn them into LRs.
+        for MergeGroup { valid, fragIxs, .. } in state {
             if valid {
-                res.push(LR { reg: *reg, frags: mfrags.clone() });
+                let lr = LR { reg: *reg,
+                              sfrags: SortedFragIxs::new(&fragIxs, &frag_env),
+                              size: 0, cost: 0 };
+                res.push(lr);
             }
         }
 
@@ -1579,32 +1662,16 @@ fn merge_MFrags(mfrag_vecs_per_reg: &HashMap::<Reg, Vec<MFrag>>,
 
 
 //=============================================================================
-// Sorted MFrag vectors and sorted live ranges
+// Further methods on SortedFragIxs.  These are needed by the core algorithm.
 
-#[derive(Clone)]
-struct SortedMFrags {
-    vec: Vec::<MFrag>
-}
-
-
-struct SortedLR<R> {
-    reg:   R,
-    frags: SortedMFrags,
-}
-
-
-impl SortedMFrags {
-    fn show(&self) -> String {
-        self.vec.show()
-    }
-    
+impl SortedFragIxs {
     // Structural equality, at least.  Not equality in the sense of
     // deferencing the contained FragIxes.
-    fn equals(&self, other: &SortedMFrags) -> bool {
-        if self.vec.len() != other.vec.len() {
+    fn equals(&self, other: &SortedFragIxs) -> bool {
+        if self.fragIxs.len() != other.fragIxs.len() {
             return false;
         }
-        for (mf1, mf2) in self.vec.iter().zip(&other.vec) {
+        for (mf1, mf2) in self.fragIxs.iter().zip(&other.fragIxs) {
             if mf1 != mf2 {
                 return false;
             }
@@ -1612,79 +1679,54 @@ impl SortedMFrags {
         true
     }
 
-    fn new(source: &Vec::<MFrag>, ctx: &Vec::<Frag>) -> Self {
-        let res = SortedMFrags { vec: source.clone() };
-        // check the source is ordered, and clone (or sort it)
-        res.check(ctx);
-        res
-    }
-
-    fn getFrag<'a>(&self, ix: usize, ctx: &'a Vec::<Frag>) -> &'a Frag {
-        &ctx[ self.vec[ix].fix.get_usize() ]
-    }
-
-    fn check(&self, ctx: &Vec::<Frag>) {
-        let mut ok = true;
-        for i in 1 .. self.vec.len() {
-            let prev_frag = self.getFrag(i-1, ctx);
-            let this_frag = self.getFrag(i-0, ctx);
-            if cmpFrags(prev_frag, this_frag) != FCR::LT {
-                ok = false;
-                break;
-            }
-        }
-        if !ok {
-            panic!("SortedMFrags::check: vector not ok");
-        }
-    }
-
-    fn add(&mut self, to_add: &Self, ctx: &Vec::<Frag>) {
-        self.check(ctx);
-        to_add.check(ctx);
-        let smf_x = &self;
-        let smf_y = &to_add;
+    fn add(&mut self, to_add: &Self, fenv: &Vec::<Frag>) {
+        self.check(fenv);
+        to_add.check(fenv);
+        let sfixs_x = &self;
+        let sfixs_y = &to_add;
         let mut ix = 0;
         let mut iy = 0;
-        let mut res = Vec::<MFrag>::new();
-        while ix < smf_x.vec.len() && iy < smf_y.vec.len() {
-            let fx = smf_x.getFrag(ix, ctx);
-            let fy = smf_y.getFrag(iy, ctx);
-            match cmpFrags(fx, fy) {
-                FCR::LT => { res.push(smf_x.vec[ix]); ix += 1; },
-                FCR::GT => { res.push(smf_y.vec[iy]); iy += 1; },
+        let mut res = Vec::<FragIx>::new();
+        while ix < sfixs_x.fragIxs.len() && iy < sfixs_y.fragIxs.len() {
+            let fx = fenv[ sfixs_x.fragIxs[ix].get_usize() ];
+            let fy = fenv[ sfixs_y.fragIxs[iy].get_usize() ];
+            match cmpFrags(&fx, &fy) {
+                FCR::LT => { res.push(sfixs_x.fragIxs[ix]); ix += 1; },
+                FCR::GT => { res.push(sfixs_y.fragIxs[iy]); iy += 1; },
                 FCR::EQ | FCR::UN
-                    => panic!("SortedMFrags::add: vectors intersect")
+                    => panic!("SortedFragIxs::add: vectors intersect")
             }
         }
         // At this point, one or the other or both vectors are empty.  Hence
         // it doesn't matter in which order the following two while-loops
         // appear.
-        debug_assert!(ix == smf_x.vec.len() || iy == smf_y.vec.len());
-        while ix < smf_x.vec.len() {
-            res.push(smf_x.vec[ix]);
+        debug_assert!(ix == sfixs_x.fragIxs.len()
+                      || iy == sfixs_y.fragIxs.len());
+        while ix < sfixs_x.fragIxs.len() {
+            res.push(sfixs_x.fragIxs[ix]);
             ix += 1;
         }
-        while iy < smf_y.vec.len() {
-            res.push(smf_y.vec[iy]);
+        while iy < sfixs_y.fragIxs.len() {
+            res.push(sfixs_y.fragIxs[iy]);
             iy += 1;
         }
-        self.vec = res;
-        self.check(ctx);
+        self.fragIxs = res;
+        self.check(fenv);
     }
 
-    fn can_add(&self, to_add: &Self, ctx: &Vec::<Frag>) -> bool {
+    fn can_add(&self, to_add: &Self, fenv: &Vec::<Frag>) -> bool {
         // This is merely a partial evaluation of add() which returns |false|
         // exactly in the cases where add() would have panic'd.
-        self.check(ctx);
-        to_add.check(ctx);
-        let smf_x = &self;
-        let smf_y = &to_add;
+        self.check(fenv);
+        to_add.check(fenv);
+        let sfixs_x = &self;
+        let sfixs_y = &to_add;
         let mut ix = 0;
         let mut iy = 0;
-        while ix < smf_x.vec.len() && iy < smf_y.vec.len() {
-            let fx = smf_x.getFrag(ix, ctx);
-            let fy = smf_y.getFrag(iy, ctx);
-            match cmpFrags(fx, fy) {
+        while ix < sfixs_x.fragIxs.len() && iy < sfixs_y.fragIxs.len() {
+            let fx = fenv[ sfixs_x.fragIxs[ix].get_usize() ];
+            let fy = fenv[ sfixs_y.fragIxs[iy].get_usize() ];
+            match cmpFrags(&fx, &fy) {
                 FCR::LT => { ix += 1; },
                 FCR::GT => { iy += 1; },
                 FCR::EQ | FCR::UN => { return false; }
@@ -1692,53 +1734,87 @@ impl SortedMFrags {
         }
         // At this point, one or the other or both vectors are empty.  So
         // we're guaranteed to succeed.
-        debug_assert!(ix == smf_x.vec.len() || iy == smf_y.vec.len());
+        debug_assert!(ix == sfixs_x.fragIxs.len()
+                      || iy == sfixs_y.fragIxs.len());
         true
     }
 
-    fn del(&mut self, to_del: &Self, ctx: &Vec::<Frag>) {
-        self.check(ctx);
-        to_del.check(ctx);
-        let smf_x = &self;
-        let smf_y = &to_del;
+    fn del(&mut self, to_del: &Self, fenv: &Vec::<Frag>) {
+        self.check(fenv);
+        to_del.check(fenv);
+        let sfixs_x = &self;
+        let sfixs_y = &to_del;
         let mut ix = 0;
         let mut iy = 0;
-        let mut res = Vec::<MFrag>::new();
-        while ix < smf_x.vec.len() && iy < smf_y.vec.len() {
-            let fx = smf_x.getFrag(ix, ctx);
-            let fy = smf_y.getFrag(iy, ctx);
-            match cmpFrags(fx, fy) {
-                FCR::LT => { res.push(smf_x.vec[ix]); ix += 1; },
+        let mut res = Vec::<FragIx>::new();
+        while ix < sfixs_x.fragIxs.len() && iy < sfixs_y.fragIxs.len() {
+            let fx = fenv[ sfixs_x.fragIxs[ix].get_usize() ];
+            let fy = fenv[ sfixs_y.fragIxs[iy].get_usize() ];
+            match cmpFrags(&fx, &fy) {
+                FCR::LT => { res.push(sfixs_x.fragIxs[ix]); ix += 1; },
                 FCR::EQ => { ix += 1; iy += 1; }
                 FCR::GT => { iy += 1; },
                 FCR::EQ | FCR::UN
-                    => panic!("SortedMFrags::del: partial overlap")
+                    => panic!("SortedFragIxs::del: partial overlap")
             }
         }
-        debug_assert!(ix == smf_x.vec.len() || iy == smf_y.vec.len());
+        debug_assert!(ix == sfixs_x.fragIxs.len()
+                      || iy == sfixs_y.fragIxs.len());
         // Handle leftovers
-        while ix < smf_x.vec.len() {
-            res.push(smf_x.vec[ix]);
+        while ix < sfixs_x.fragIxs.len() {
+            res.push(sfixs_x.fragIxs[ix]);
             ix += 1;
         }
-        self.vec = res;
-        self.check(ctx);
+        self.fragIxs = res;
+        self.check(fenv);
     }
 
     fn can_add_if_we_first_del(&self, to_del: &Self, to_add: &Self,
-                               ctx: &Vec::<Frag>) -> bool {
+                               fenv: &Vec::<Frag>) -> bool {
         // For now, just do this the stupid way.  It would be possible to do
         // it without any allocation, but that sounds complex.
         let mut after_del = self.clone();
-        after_del.del(&to_del, ctx);
-        return after_del.can_add(&to_add, ctx);
+        after_del.del(&to_del, fenv);
+        return after_del.can_add(&to_add, fenv);
     }
-
 }
 
 
 //=============================================================================
 // Allocator top level
+
+/* (more or less const) For each virtual live range
+   - its sorted Frags
+   - its total size
+   - its spill cost
+
+   (mut) For each real register
+   - the sorted MFrags assigned to it (todo: rm the M)
+   - the virtual LR indices assigned to it.  This is so we can eject
+     a VLR from the commitment, as needed
+
+   (mut) the set of VLRs not yet allocated, prioritised by total size
+
+   (mut) the edit list that is produced
+*/
+/*
+fn show_commit_tab(commit_tab: &Vec::<SortedFragIxs>,
+                   who: &str,
+                   context: &Vec::<Frag>) -> String {
+    let mut res = "Commit Table at '".to_string()
+                  + &who.to_string() + &"'\n".to_string();
+    let mut rregNo = 0;
+    for smf in commit_tab.iter() {
+        res += &"  ".to_string();
+        res += &mkRReg(rregNo).show();
+        res += &" ".to_string();
+        res += &smf.show_with_fenv(&context);
+        res += &"\n".to_string();
+        rregNo += 1;
+    }
+    res
+}
+ */
 
 fn run_main(cfg: CFG, nRRegs: usize) {
     cfg.print("Initial");
@@ -1752,7 +1828,8 @@ fn run_main(cfg: CFG, nRRegs: usize) {
     let mut n = 0;
     println!("");
     for (def, uce) in def_sets_per_block.iter().zip(&use_sets_per_block) {
-        println!("block {}:  def {:<16}  use {}", n, def.show(), uce.show());
+        println!("{:<3}   def {:<16}  use {}",
+                 mkBlockIx(n).show(), def.show(), uce.show());
         n += 1;
     }
 
@@ -1761,8 +1838,8 @@ fn run_main(cfg: CFG, nRRegs: usize) {
     n = 0;
     println!("");
     for (preds, succs) in cfg_map.succ_map.iter().zip(&cfg_map.pred_map) {
-        println!("block {}:  preds {:<16}  succs {}",
-                 n, preds.show(), succs.show());
+        println!("{:<3}   preds {:<16}  succs {}",
+                 mkBlockIx(n).show(), preds.show(), succs.show());
         n += 1;
     }
 
@@ -1776,32 +1853,34 @@ fn run_main(cfg: CFG, nRRegs: usize) {
     println!("");
     for (livein, liveout) in livein_sets_per_block.iter()
                                                   .zip(&liveout_sets_per_block) {
-        println!("block {}:  livein {:<16}  liveout {:<16}",
-                 n, livein.show(), liveout.show());
+        println!("{:<3}   livein {:<16}  liveout {:<16}",
+                 mkBlockIx(n).show(), livein.show(), liveout.show());
         n += 1;
     }
 
-    println!("");
-    let (mlrf_sets_per_reg, frag_table) =
-        cfg.get_MFrags(&livein_sets_per_block, &liveout_sets_per_block);
-    for (reg, mlrf) in mlrf_sets_per_reg.iter() {
-        println!("mlrfs   for {}   {}", reg.show(), mlrf.show());
-    }
+    let (fragIxs_per_reg, frag_env) =
+        cfg.get_Frags(&livein_sets_per_block, &liveout_sets_per_block);
 
     println!("");
     n = 0;
-    for frag in &frag_table {
-        println!("frag {}  {}", n, frag.show());
+    for frag in &frag_env {
+        println!("{:<3}   {}", mkFragIx(n).show(), frag.show());
         n += 1;
     }
 
     println!("");
-    let live_ranges = merge_MFrags(&mlrf_sets_per_reg, &frag_table, &cfg_map);
+    for (reg, fragIxs) in fragIxs_per_reg.iter() {
+        println!("frags for {}   {}", reg.show(), fragIxs.show());
+    }
+
+    println!("");
+    let live_ranges = merge_Frags(&fragIxs_per_reg, &frag_env, &cfg_map);
     n = 0;
     for lr in &live_ranges {
-        println!("live range {}  {}", n, lr.show());
+        println!("live range {}   {}", n, lr.show());
         n += 1;
     }
+/*
 
     // Alloc main
 
@@ -1809,40 +1888,52 @@ fn run_main(cfg: CFG, nRRegs: usize) {
     let mut rreg_lrs = Vec::<SortedLR<RReg>>::new();
     let mut vreg_lrs = Vec::<SortedLR<VReg>>::new();
     for LR { reg, frags } in live_ranges {
-        let smf = SortedMFrags::new(&frags, &frag_table);
+        let smf = SortedFragIxs::new(&frags, &frag_table);
         match reg {
             Reg::RReg(rreg) => {
-                rreg_lrs.push(SortedLR { reg: rreg, frags: smf });
+                rreg_lrs.push(SortedLR { reg: rreg, mfrags: smf });
             }
             Reg::VReg(vreg) => {
-                vreg_lrs.push(SortedLR { reg: vreg, frags: smf });
+                vreg_lrs.push(SortedLR { reg: vreg, mfrags: smf });
             }
         }
     }
-/*    
+
     println!("");
     n = 0;
     for rlr in &rreg_lrs {
         println!("rreg LR {}  {}", n, rlr.show());
+        println!("        {}  {}", n, rlr.show_with_fenv(&frag_table));
         n += 1;
     }
-    
+
     println!("");
     n = 0;
     for vlr in &vreg_lrs {
         println!("vreg LR {}  {}", n, vlr.show());
+        println!("        {}  {}", n, vlr.show_with_fenv(&frag_table));
         n += 1;
     }
 
     // Create the initial RReg commitment table, and install the RLRs in it
-    let mut commit_tab = Vec::<SortedMFrags>::new();
-    let smf_empty = SortedMFrags { vec: vec![] };
+    let mut commit_tab = Vec::<SortedFragIxs>::new();
+    let smf_empty = SortedFragIxs { vec: vec![] };
     commit_tab.resize(nRRegs, smf_empty);
+    for rlr in &rreg_lrs {
+        let rregNo = rlr.reg.get_usize();
+        // Ignore RLRs for unallocable rregs.  As far as the allocator is
+        // concerned, any mentions of unallocable rregs simply don't exist.
+        if rregNo >= nRRegs {
+            continue;
+        }
+        commit_tab[rregNo].add(&rlr.mfrags, &frag_table);
+    }
+    println!("");
+    println!("{}", show_commit_tab(&commit_tab, "Initial", &frag_table));
+*/
+    /*
 
     for rlr in &rreg_lrs {
-        let rreg = rlr.reg.getRReg();
-        if rreg.get() >= nRRegs { continue; } // Ignore RLRs for unallocable regs
-        commit_tab[rreg.get_usize()].add(.. well, what.  Convert all LRs to SortedLRs at the start.
     }
     
     println!("");
@@ -1852,12 +1943,11 @@ fn run_main(cfg: CFG, nRRegs: usize) {
         println!("ctab {}  {}", Reg_R(mkRReg(n)).show(), cte.show());
         n += 1;
     }
-
-    println!("");
 */
+    println!("");
 }
 
-
+/*
 //=============================================================================
 // Top level: the allocator's state
 
@@ -1917,7 +2007,7 @@ A list of LRIxes that have been committed to, ordered by increasing
 
 //=============================================================================
 // Top level
-
+*/
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
@@ -1945,21 +2035,21 @@ fn main() {
 // Test cases
 
 #[test]
-fn test_SortedMFrags() {
+fn test_SortedFragIxs() {
 
     // Create a Frag and FragIx from two FragPoints.
-    fn gen_fix(ctx: &mut Vec::<Frag>,
+    fn gen_fix(fenv: &mut Vec::<Frag>,
                first: FragPoint, last: FragPoint) -> FragIx {
         assert!(first <= last);
-        let res = mkFragIx(ctx.len() as u32);
+        let res = mkFragIx(fenv.len() as u32);
         let frag = Frag { bix: mkBlockIx(123),
-                          kind: FragKind::Local, first, last };
-        ctx.push(frag);
+                          kind: FragKind::Local, first, last, count: 0 };
+        fenv.push(frag);
         res
     }
 
-    fn getFrag<'a>(ctx: &'a Vec::<Frag>, fix: FragIx) -> &'a Frag {
-        &ctx[ fix.get_usize() ]
+    fn getFrag<'a>(fenv: &'a Vec::<Frag>, fix: FragIx) -> &'a Frag {
+        &fenv[ fix.get_usize() ]
     }
 
     let iix3  = mkInsnIx(3);
@@ -1989,138 +2079,138 @@ fn test_SortedMFrags() {
     let fp_12u = FragPoint_U(iix12);
     let fp_15u = FragPoint_U(iix15);
 
-    let mut ctx = Vec::<Frag>::new();
+    let mut fenv = Vec::<Frag>::new();
 
-    let fix_3u    = gen_fix(&mut ctx, fp_3u, fp_3u);
-    let fix_3d    = gen_fix(&mut ctx, fp_3d, fp_3d);
-    let fix_4u    = gen_fix(&mut ctx, fp_4u, fp_4u);
-    let fix_3u_5u = gen_fix(&mut ctx, fp_3u, fp_5u);
-    let fix_3d_5d = gen_fix(&mut ctx, fp_3d, fp_5d);
-    let fix_3d_5u = gen_fix(&mut ctx, fp_3d, fp_5u);
-    let fix_3u_5d = gen_fix(&mut ctx, fp_3u, fp_5d);
-    let fix_6u_6d = gen_fix(&mut ctx, fp_6u, fp_6d);
-    let fix_7u_7d = gen_fix(&mut ctx, fp_7u, fp_7d);
-    let fix_10u   = gen_fix(&mut ctx, fp_10u, fp_10u);
-    let fix_12u   = gen_fix(&mut ctx, fp_12u, fp_12u);
-    let fix_15u   = gen_fix(&mut ctx, fp_15u, fp_15u);
+    let fix_3u    = gen_fix(&mut fenv, fp_3u, fp_3u);
+    let fix_3d    = gen_fix(&mut fenv, fp_3d, fp_3d);
+    let fix_4u    = gen_fix(&mut fenv, fp_4u, fp_4u);
+    let fix_3u_5u = gen_fix(&mut fenv, fp_3u, fp_5u);
+    let fix_3d_5d = gen_fix(&mut fenv, fp_3d, fp_5d);
+    let fix_3d_5u = gen_fix(&mut fenv, fp_3d, fp_5u);
+    let fix_3u_5d = gen_fix(&mut fenv, fp_3u, fp_5d);
+    let fix_6u_6d = gen_fix(&mut fenv, fp_6u, fp_6d);
+    let fix_7u_7d = gen_fix(&mut fenv, fp_7u, fp_7d);
+    let fix_10u   = gen_fix(&mut fenv, fp_10u, fp_10u);
+    let fix_12u   = gen_fix(&mut fenv, fp_12u, fp_12u);
+    let fix_15u   = gen_fix(&mut fenv, fp_15u, fp_15u);
 
     // Boundary checks for point ranges, 3u vs 3d
-    assert!(cmpFrags(getFrag(&ctx, fix_3u), getFrag(&ctx, fix_3u))
+    assert!(cmpFrags(getFrag(&fenv, fix_3u), getFrag(&fenv, fix_3u))
             == FCR::EQ);
-    assert!(cmpFrags(getFrag(&ctx, fix_3u), getFrag(&ctx, fix_3d))
+    assert!(cmpFrags(getFrag(&fenv, fix_3u), getFrag(&fenv, fix_3d))
             == FCR::LT);
-    assert!(cmpFrags(getFrag(&ctx, fix_3d), getFrag(&ctx, fix_3u))
+    assert!(cmpFrags(getFrag(&fenv, fix_3d), getFrag(&fenv, fix_3u))
             == FCR::GT);
 
     // Boundary checks for point ranges, 3d vs 4u
-    assert!(cmpFrags(getFrag(&ctx, fix_3d), getFrag(&ctx, fix_3d))
+    assert!(cmpFrags(getFrag(&fenv, fix_3d), getFrag(&fenv, fix_3d))
             == FCR::EQ);
-    assert!(cmpFrags(getFrag(&ctx, fix_3d), getFrag(&ctx, fix_4u))
+    assert!(cmpFrags(getFrag(&fenv, fix_3d), getFrag(&fenv, fix_4u))
             == FCR::LT);
-    assert!(cmpFrags(getFrag(&ctx, fix_4u), getFrag(&ctx, fix_3d))
+    assert!(cmpFrags(getFrag(&fenv, fix_4u), getFrag(&fenv, fix_3d))
             == FCR::GT);
 
     // Partially overlapping
-    assert!(cmpFrags(getFrag(&ctx, fix_3d_5d), getFrag(&ctx, fix_3u_5u))
+    assert!(cmpFrags(getFrag(&fenv, fix_3d_5d), getFrag(&fenv, fix_3u_5u))
             == FCR::UN);
-    assert!(cmpFrags(getFrag(&ctx, fix_3u_5u), getFrag(&ctx, fix_3d_5d))
+    assert!(cmpFrags(getFrag(&fenv, fix_3u_5u), getFrag(&fenv, fix_3d_5d))
             == FCR::UN);
 
     // Completely overlapping: one contained within the other
-    assert!(cmpFrags(getFrag(&ctx, fix_3d_5u), getFrag(&ctx, fix_3u_5d))
+    assert!(cmpFrags(getFrag(&fenv, fix_3d_5u), getFrag(&fenv, fix_3u_5d))
             == FCR::UN);
-    assert!(cmpFrags(getFrag(&ctx, fix_3u_5d), getFrag(&ctx, fix_3d_5u))
+    assert!(cmpFrags(getFrag(&fenv, fix_3u_5d), getFrag(&fenv, fix_3d_5u))
             == FCR::UN);
 
-    // Create a SortedMFrags from a bunch of Frag indices
-    fn genSMF(ctx: &Vec::<Frag>, frags: &Vec::<FragIx>) -> SortedMFrags {
-        let mfrags = frags.iter().map(|fix| MFrag { fix: *fix, count: 0 })
-                          .collect();
-        SortedMFrags::new(&mfrags, ctx)
+    // Create a SortedFragIxs from a bunch of Frag indices
+    fn genSMF(fenv: &Vec::<Frag>, frags: &Vec::<FragIx>) -> SortedFragIxs {
+        //let mfrags = frags.iter().map(|fix| MFrag { fix: *fix, count: 0 })
+        //                  .collect();
+        SortedFragIxs::new(&frags, fenv)
     }
 
     // Construction tests
     // These fail due to overlap
-    //let _ = genSMF(&ctx, &vec![fix_3u_3u, fix_3u_3u]);
-    //let _ = genSMF(&ctx, &vec![fix_3u_5u, fix_3d_5d]);
+    //let _ = genSMF(&fenv, &vec![fix_3u_3u, fix_3u_3u]);
+    //let _ = genSMF(&fenv, &vec![fix_3u_5u, fix_3d_5d]);
 
     // These fail due to not being in order
-    //let _ = genSMF(&ctx, &vec![fix_4u_4u, fix_3u_3u]);
+    //let _ = genSMF(&fenv, &vec![fix_4u_4u, fix_3u_3u]);
 
     // Simple non-overlap tests for add()
 
-    let smf_empty  = genSMF(&ctx, &vec![]);
-    let smf_6_7_10 = genSMF(&ctx, &vec![fix_6u_6d, fix_7u_7d, fix_10u]);
-    let smf_3_12   = genSMF(&ctx, &vec![fix_3u, fix_12u]);
-    let smf_3_6_7_10_12 = genSMF(&ctx, &vec![fix_3u, fix_6u_6d, fix_7u_7d,
+    let smf_empty  = genSMF(&fenv, &vec![]);
+    let smf_6_7_10 = genSMF(&fenv, &vec![fix_6u_6d, fix_7u_7d, fix_10u]);
+    let smf_3_12   = genSMF(&fenv, &vec![fix_3u, fix_12u]);
+    let smf_3_6_7_10_12 = genSMF(&fenv, &vec![fix_3u, fix_6u_6d, fix_7u_7d,
                                              fix_10u, fix_12u]);
     let mut tmp;
 
-    tmp = smf_empty. clone() ; tmp.add(&smf_empty, &ctx);
+    tmp = smf_empty. clone() ; tmp.add(&smf_empty, &fenv);
     assert!(tmp .equals( &smf_empty ));
 
-    tmp = smf_3_12 .clone() ; tmp.add(&smf_empty, &ctx);
+    tmp = smf_3_12 .clone() ; tmp.add(&smf_empty, &fenv);
     assert!(tmp .equals( &smf_3_12 ));
 
-    tmp = smf_empty .clone() ; tmp.add(&smf_3_12, &ctx);
+    tmp = smf_empty .clone() ; tmp.add(&smf_3_12, &fenv);
     assert!(tmp .equals( &smf_3_12 ));
 
-    tmp = smf_6_7_10 .clone() ; tmp.add(&smf_3_12, &ctx);
+    tmp = smf_6_7_10 .clone() ; tmp.add(&smf_3_12, &fenv);
     assert!(tmp .equals( &smf_3_6_7_10_12 ));
 
-    tmp = smf_3_12 .clone() ; tmp.add(&smf_6_7_10, &ctx);
+    tmp = smf_3_12 .clone() ; tmp.add(&smf_6_7_10, &fenv);
     assert!(tmp .equals( &smf_3_6_7_10_12 ));
 
     // Tests for can_add()
-    assert!(true  == smf_empty .can_add( &smf_empty, &ctx ));
-    assert!(true  == smf_empty .can_add( &smf_3_12,  &ctx ));
-    assert!(true  == smf_3_12  .can_add( &smf_empty, &ctx ));
-    assert!(false == smf_3_12  .can_add( &smf_3_12,  &ctx ));
+    assert!(true  == smf_empty .can_add( &smf_empty, &fenv ));
+    assert!(true  == smf_empty .can_add( &smf_3_12,  &fenv ));
+    assert!(true  == smf_3_12  .can_add( &smf_empty, &fenv ));
+    assert!(false == smf_3_12  .can_add( &smf_3_12,  &fenv ));
 
-    assert!(true == smf_6_7_10 .can_add( &smf_3_12, &ctx ));
+    assert!(true == smf_6_7_10 .can_add( &smf_3_12, &fenv ));
 
-    assert!(true == smf_3_12 .can_add( &smf_6_7_10, &ctx ));
+    assert!(true == smf_3_12 .can_add( &smf_6_7_10, &fenv ));
 
     // Tests for del()
-    let smf_6_7  = genSMF(&ctx, &vec![fix_6u_6d, fix_7u_7d]);
-    let smf_6_10 = genSMF(&ctx, &vec![fix_6u_6d, fix_10u]);
-    let smf_7    = genSMF(&ctx, &vec![fix_7u_7d]);
-    let smf_10   = genSMF(&ctx, &vec![fix_10u]);
+    let smf_6_7  = genSMF(&fenv, &vec![fix_6u_6d, fix_7u_7d]);
+    let smf_6_10 = genSMF(&fenv, &vec![fix_6u_6d, fix_10u]);
+    let smf_7    = genSMF(&fenv, &vec![fix_7u_7d]);
+    let smf_10   = genSMF(&fenv, &vec![fix_10u]);
 
-    tmp = smf_empty. clone() ; tmp.del(&smf_empty, &ctx);
+    tmp = smf_empty. clone() ; tmp.del(&smf_empty, &fenv);
     assert!(tmp .equals( &smf_empty ));
 
-    tmp = smf_3_12 .clone() ; tmp.del(&smf_empty, &ctx);
+    tmp = smf_3_12 .clone() ; tmp.del(&smf_empty, &fenv);
     assert!(tmp .equals( &smf_3_12 ));
 
-    tmp = smf_empty .clone() ; tmp.del(&smf_3_12, &ctx);
+    tmp = smf_empty .clone() ; tmp.del(&smf_3_12, &fenv);
     assert!(tmp .equals( &smf_empty ));
 
-    tmp = smf_6_7_10 .clone() ; tmp.del(&smf_3_12, &ctx);
+    tmp = smf_6_7_10 .clone() ; tmp.del(&smf_3_12, &fenv);
     assert!(tmp .equals( &smf_6_7_10 ));
 
-    tmp = smf_3_12 .clone() ; tmp.del(&smf_6_7_10, &ctx);
+    tmp = smf_3_12 .clone() ; tmp.del(&smf_6_7_10, &fenv);
     assert!(tmp .equals( &smf_3_12 ));
 
-    tmp = smf_6_7_10 .clone() ; tmp.del(&smf_6_7, &ctx);
+    tmp = smf_6_7_10 .clone() ; tmp.del(&smf_6_7, &fenv);
     assert!(tmp .equals( &smf_10 ));
 
-    tmp = smf_6_7_10 .clone() ; tmp.del(&smf_10, &ctx);
+    tmp = smf_6_7_10 .clone() ; tmp.del(&smf_10, &fenv);
     assert!(tmp .equals( &smf_6_7 ));
 
-    tmp = smf_6_7_10 .clone() ; tmp.del(&smf_7, &ctx);
+    tmp = smf_6_7_10 .clone() ; tmp.del(&smf_7, &fenv);
     assert!(tmp .equals( &smf_6_10 ));
 
     // Tests for can_add_if_we_first_del()
-    let smf_10_12 = genSMF(&ctx, &vec![fix_10u, fix_12u]);
+    let smf_10_12 = genSMF(&fenv, &vec![fix_10u, fix_12u]);
 
     assert!(true == smf_6_7_10
                     .can_add_if_we_first_del( /*d=*/&smf_10_12,
-                                              /*a=*/&smf_3_12, &ctx ));
+                                              /*a=*/&smf_3_12, &fenv ));
 
     assert!(false == smf_6_7_10
                      .can_add_if_we_first_del( /*d=*/&smf_10_12,
-                                               /*a=*/&smf_7, &ctx ));
+                                               /*a=*/&smf_7, &fenv ));
 }
 
 
