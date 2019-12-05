@@ -103,6 +103,20 @@ impl Show for Reg {
         }
     }
 }
+impl Reg {
+    fn getRReg(&self) -> RReg {
+        match self {
+            Reg::RReg(rreg) => *rreg,
+            Reg::VReg(_)    => panic!("Reg::getRReg: is not a RReg!")
+        }
+    }
+    fn getVReg(&self) -> VReg {
+        match self {
+            Reg::RReg(_)     => panic!("Reg::getRReg: is not a VReg!"),
+            Reg::VReg(vreg)  => *vreg
+        }
+    }
+}
 
 
 #[derive(Copy, Clone)]
@@ -1140,6 +1154,18 @@ fn mk_Frag_Thru(blocks: &Vec::<Block>, bix: BlockIx) -> Frag {
 }
 
 
+// Comparison of Frags.  They form a partial order.
+#[derive(PartialEq)]
+enum FCR { LT, GT, EQ, UN }
+
+fn cmpFrags(f1: &Frag, f2: &Frag) -> FCR {
+    if f1.last < f2.first { return FCR::LT; }
+    if f1.first > f2.last { return FCR::GT; }
+    if f1.first == f2.first && f1.last == f2.last { return FCR::EQ; }
+    FCR::UN
+}
+
+
 // "Metricated Frags".  This a FragIx plus a u16 indicating how often the
 // associated storage unit (Reg) is mentioned inside the Frag.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -1205,6 +1231,9 @@ impl Show for LR {
 // so in |get_MFrags_for_block|, it would be wasteful to have a mapping for
 // all Regs most of which were just to NoInfo.  Instead, NoInfo is implied by
 // a Reg not being mapped in |state|.
+//
+// MFrag_SME is used only within |get_MFrags_for_block|.  It could be made
+// local to that function.
 
 enum MFrag_SME {
     // So far we have seen no mention of the Reg, either in the block proper
@@ -1550,78 +1579,25 @@ fn merge_MFrags(mfrag_vecs_per_reg: &HashMap::<Reg, Vec<MFrag>>,
 
 
 //=============================================================================
-// Top level: the allocator's state
-
-/*
-struct RAState {
-    // Results of initial analysis:
-    preds_by_bix: Vec::</*BlockIx, */Set::<BlockIx>>,
-    succs_by_bix: Vec::</*BlockIx, */Set::<BlockIx>>,
-
-    defsets_by_bix: Vec::</*BlockIx, */Set::<Reg>>,
-    usesets_by_bix: Vec::</*BlockIx, */Set::<Reg>>,
-
-    liveins_by_bix:  Vec::</*BlockIx, */Set::<Reg>>,
-    liveouts_by_bix: Vec::</*BlockIx, */Set::<Reg>>,
-
-    frags_by_fix: Vec::</*FragIx */, Frag>,
-    live_ranges_by_lrix: Vec::</*LRIx, */, LR>,
-
-    // The running state of the core allocation algorithm
-
-    // The current commitment per-register
-
-    fixed_uses_by_rreg: Vec::</*RReg*/, Vec::<LRIx>>,
-    nonfixed_uses
-}
-
-The live ranges must contain a sequence of nonoverlapping MFrags, in
-increasing order.  So they form a total order.
-
-struct PerRReg {
-    committed: Vec::<Frag>,   // non overlapping, in order
-
-}
-
-Questions for committed vector:
-* does it have space for the LR (meaning, its Frags) ? (easy)
-* if so add it (easy)
-* and remove it (easy)
-* does it have space for this LR if we eject some other LR
-  (which it already has) ? (difficult)
-
-Edit List
-a vec of pairs (FragPoint, Insn) to be inserted there
-
-SortedMFragVec:
-   can another one be added?
-   add another one, must not overlap
-   remove one (must have been previously added)
-   can another one be added if we first remove some third one
-      (that was previously added?)
-
-A list of LRIxes that have been committed to, ordered by increasing
-  spill weight.  This is so that we can visit candidates to evict
-  (un-commit) in O(not very much) time.
-*/
-
-#[derive(PartialEq)]
-enum FCR { LT, GT, EQ, UN }
-
-fn cmpFrags(f1: &Frag, f2: &Frag) -> FCR {
-    if f1.last < f2.first { return FCR::LT; }
-    if f1.first > f2.last { return FCR::GT; }
-    if f1.first == f2.first && f1.last == f2.last { return FCR::EQ; }
-    FCR::UN
-}
-
+// Sorted MFrag vectors and sorted live ranges
 
 #[derive(Clone)]
 struct SortedMFrags {
     vec: Vec::<MFrag>
 }
 
+
+struct SortedLR<R> {
+    reg:   R,
+    frags: SortedMFrags,
+}
+
+
 impl SortedMFrags {
+    fn show(&self) -> String {
+        self.vec.show()
+    }
+    
     // Structural equality, at least.  Not equality in the sense of
     // deferencing the contained FragIxes.
     fn equals(&self, other: &SortedMFrags) -> bool {
@@ -1759,6 +1735,214 @@ impl SortedMFrags {
     }
 
 }
+
+
+//=============================================================================
+// Allocator top level
+
+fn run_main(cfg: CFG, nRRegs: usize) {
+    cfg.print("Initial");
+
+    cfg.run("Before allocation");
+
+    let (def_sets_per_block, use_sets_per_block) = cfg.calc_def_and_use();
+    debug_assert!(def_sets_per_block.len() == cfg.blocks.len());
+    debug_assert!(use_sets_per_block.len() == cfg.blocks.len());
+
+    let mut n = 0;
+    println!("");
+    for (def, uce) in def_sets_per_block.iter().zip(&use_sets_per_block) {
+        println!("block {}:  def {:<16}  use {}", n, def.show(), uce.show());
+        n += 1;
+    }
+
+    let cfg_map = CFGMap::create(&cfg);
+
+    n = 0;
+    println!("");
+    for (preds, succs) in cfg_map.succ_map.iter().zip(&cfg_map.pred_map) {
+        println!("block {}:  preds {:<16}  succs {}",
+                 n, preds.show(), succs.show());
+        n += 1;
+    }
+
+    let (livein_sets_per_block, liveout_sets_per_block) =
+        cfg.calc_livein_and_liveout(&def_sets_per_block,
+                                    &use_sets_per_block, &cfg_map);
+    debug_assert!(livein_sets_per_block.len() == cfg.blocks.len());
+    debug_assert!(liveout_sets_per_block.len() == cfg.blocks.len());
+
+    n = 0;
+    println!("");
+    for (livein, liveout) in livein_sets_per_block.iter()
+                                                  .zip(&liveout_sets_per_block) {
+        println!("block {}:  livein {:<16}  liveout {:<16}",
+                 n, livein.show(), liveout.show());
+        n += 1;
+    }
+
+    println!("");
+    let (mlrf_sets_per_reg, frag_table) =
+        cfg.get_MFrags(&livein_sets_per_block, &liveout_sets_per_block);
+    for (reg, mlrf) in mlrf_sets_per_reg.iter() {
+        println!("mlrfs   for {}   {}", reg.show(), mlrf.show());
+    }
+
+    println!("");
+    n = 0;
+    for frag in &frag_table {
+        println!("frag {}  {}", n, frag.show());
+        n += 1;
+    }
+
+    println!("");
+    let live_ranges = merge_MFrags(&mlrf_sets_per_reg, &frag_table, &cfg_map);
+    n = 0;
+    for lr in &live_ranges {
+        println!("live range {}  {}", n, lr.show());
+        n += 1;
+    }
+
+    // Alloc main
+
+    // Partition LRs into ones for rregs vs for vregs
+    let mut rreg_lrs = Vec::<SortedLR<RReg>>::new();
+    let mut vreg_lrs = Vec::<SortedLR<VReg>>::new();
+    for LR { reg, frags } in live_ranges {
+        let smf = SortedMFrags::new(&frags, &frag_table);
+        match reg {
+            Reg::RReg(rreg) => {
+                rreg_lrs.push(SortedLR { reg: rreg, frags: smf });
+            }
+            Reg::VReg(vreg) => {
+                vreg_lrs.push(SortedLR { reg: vreg, frags: smf });
+            }
+        }
+    }
+/*    
+    println!("");
+    n = 0;
+    for rlr in &rreg_lrs {
+        println!("rreg LR {}  {}", n, rlr.show());
+        n += 1;
+    }
+    
+    println!("");
+    n = 0;
+    for vlr in &vreg_lrs {
+        println!("vreg LR {}  {}", n, vlr.show());
+        n += 1;
+    }
+
+    // Create the initial RReg commitment table, and install the RLRs in it
+    let mut commit_tab = Vec::<SortedMFrags>::new();
+    let smf_empty = SortedMFrags { vec: vec![] };
+    commit_tab.resize(nRRegs, smf_empty);
+
+    for rlr in &rreg_lrs {
+        let rreg = rlr.reg.getRReg();
+        if rreg.get() >= nRRegs { continue; } // Ignore RLRs for unallocable regs
+        commit_tab[rreg.get_usize()].add(.. well, what.  Convert all LRs to SortedLRs at the start.
+    }
+    
+    println!("");
+    println!("Initial Commit tab");
+    n = 0;
+    for cte in &commit_tab {
+        println!("ctab {}  {}", Reg_R(mkRReg(n)).show(), cte.show());
+        n += 1;
+    }
+
+    println!("");
+*/
+}
+
+
+//=============================================================================
+// Top level: the allocator's state
+
+/*
+struct RAState {
+    // Results of initial analysis:
+    preds_by_bix: Vec::</*BlockIx, */Set::<BlockIx>>,
+    succs_by_bix: Vec::</*BlockIx, */Set::<BlockIx>>,
+
+    defsets_by_bix: Vec::</*BlockIx, */Set::<Reg>>,
+    usesets_by_bix: Vec::</*BlockIx, */Set::<Reg>>,
+
+    liveins_by_bix:  Vec::</*BlockIx, */Set::<Reg>>,
+    liveouts_by_bix: Vec::</*BlockIx, */Set::<Reg>>,
+
+    frags_by_fix: Vec::</*FragIx */, Frag>,
+    live_ranges_by_lrix: Vec::</*LRIx, */, LR>,
+
+    // The running state of the core allocation algorithm
+
+    // The current commitment per-register
+
+    fixed_uses_by_rreg: Vec::</*RReg*/, Vec::<LRIx>>,
+    nonfixed_uses
+}
+
+The live ranges must contain a sequence of nonoverlapping MFrags, in
+increasing order.  So they form a total order.
+
+struct PerRReg {
+    committed: Vec::<Frag>,   // non overlapping, in order
+
+}
+
+Questions for committed vector:
+* does it have space for the LR (meaning, its Frags) ? (easy)
+* if so add it (easy)
+* and remove it (easy)
+* does it have space for this LR if we eject some other LR
+  (which it already has) ? (difficult)
+
+Edit List
+a vec of pairs (FragPoint, Insn) to be inserted there
+
+SortedMFragVec:
+   can another one be added?
+   add another one, must not overlap
+   remove one (must have been previously added)
+   can another one be added if we first remove some third one
+      (that was previously added?)
+
+A list of LRIxes that have been committed to, ordered by increasing
+  spill weight.  This is so that we can visit candidates to evict
+  (un-commit) in O(not very much) time.
+*/
+
+
+//=============================================================================
+// Top level
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 2 {
+        println!("usage: {} <name of CFG to use>", args[0]);
+        return;
+    }
+
+    let cfg = match find_CFG(&args[1]) {
+        Ok(cfg) => cfg,
+        Err(available_cfg_names) => {
+            println!("{}: can't find CFG with name '{}'", args[0], args[1]);
+            println!("{}: available CFG names are:", args[0]);
+            for name in available_cfg_names {
+                println!("{}:     {}", args[0], name);
+            }
+            return;
+        }
+    };
+
+    run_main(cfg, 4);
+}
+
+
+//=============================================================================
+// Test cases
 
 #[test]
 fn test_SortedMFrags() {
@@ -2041,104 +2225,4 @@ fn example_1<'a>() -> CFG<'a> {
 
     cfg.finish();
     cfg
-}
-
-
-//=============================================================================
-// Top level
-
-//zzfn read_file(filename: &String) -> Vec<String> {
-//zz    let f = fs::File::open(filename).expect("Can't open file");
-//zz    let f = io::BufReader::new(f);
-//zz    let mut v = vec![];
-//zz    for line in f.lines() {
-//zz        let line = line.expect("Unable to read line");
-//zz        v.push(line);
-//zz    }
-//zz    v
-//zz}
-
-fn main() {
-
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        println!("usage: {} <name of CFG to use>", args[0]);
-        return;
-    }
-
-    let cfg = match find_CFG(&args[1]) {
-        Ok(cfg) => cfg,
-        Err(available_cfg_names) => {
-            println!("{}: can't find CFG with name '{}'", args[0], args[1]);
-            println!("{}: available CFG names are:", args[0]);
-            for name in available_cfg_names {
-                println!("{}:     {}", args[0], name);
-            }
-            return;
-        }
-    };
-
-    cfg.print("Initial");
-
-    cfg.run("Before allocation");
-
-    let (def_sets_per_block, use_sets_per_block) = cfg.calc_def_and_use();
-    debug_assert!(def_sets_per_block.len() == cfg.blocks.len());
-    debug_assert!(use_sets_per_block.len() == cfg.blocks.len());
-
-    let mut n = 0;
-    println!("");
-    for (def, uce) in def_sets_per_block.iter().zip(&use_sets_per_block) {
-        println!("block {}:  def {:<16}  use {}", n, def.show(), uce.show());
-        n += 1;
-    }
-
-    let cfg_map = CFGMap::create(&cfg);
-
-    n = 0;
-    println!("");
-    for (preds, succs) in cfg_map.succ_map.iter().zip(&cfg_map.pred_map) {
-        println!("block {}:  preds {:<16}  succs {}",
-                 n, preds.show(), succs.show());
-        n += 1;
-    }
-
-    let (livein_sets_per_block, liveout_sets_per_block) =
-        cfg.calc_livein_and_liveout(&def_sets_per_block,
-                                    &use_sets_per_block, &cfg_map);
-    debug_assert!(livein_sets_per_block.len() == cfg.blocks.len());
-    debug_assert!(liveout_sets_per_block.len() == cfg.blocks.len());
-
-    n = 0;
-    println!("");
-    for (livein, liveout) in livein_sets_per_block.iter()
-                                                  .zip(&liveout_sets_per_block) {
-        println!("block {}:  livein {:<16}  liveout {:<16}",
-                 n, livein.show(), liveout.show());
-        n += 1;
-    }
-
-    println!("");
-    let (mlrf_sets_per_reg, frag_table) =
-        cfg.get_MFrags(&livein_sets_per_block, &liveout_sets_per_block);
-    for (reg, mlrf) in mlrf_sets_per_reg.iter() {
-        println!("mlrfs   for {}   {}", reg.show(), mlrf.show());
-    }
-
-    println!("");
-    n = 0;
-    for frag in &frag_table {
-        println!("frag {}  {}", n, frag.show());
-        n += 1;
-    }
-
-    println!("");
-    let live_ranges = merge_MFrags(&mlrf_sets_per_reg, &frag_table, &cfg_map);
-    n = 0;
-    for lr in live_ranges {
-        println!("live range {}  {}", n, lr.show());
-        n += 1;
-    }
-
-    println!("");
 }
