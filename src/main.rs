@@ -120,8 +120,16 @@ impl Reg {
 
 
 #[derive(Copy, Clone)]
-enum SlotIx {
+enum Slot {
     Slot(u32)
+}
+impl Slot {
+    fn get(self) -> u32 { match self { Slot::Slot(n) => n } }
+}
+impl Show for Slot {
+    fn show(&self) -> String {
+        "s".to_string() + &self.get().to_string()
+    }
 }
 
 
@@ -256,8 +264,8 @@ enum Insn<'a> {
     BinOp { op: BinOp, dst: Reg, srcL: Reg, srcR: RI },
     Load { dst: Reg, addr: Reg },
     Store { addr: Reg, src: Reg },
-    Spill { dst: SlotIx, src: Reg },
-    Reload { dst: Reg, src: SlotIx },
+    Spill { dst: Slot, src: Reg },
+    Reload { dst: Reg, src: Slot },
     Goto { target: Label<'a> },
     GotoCTF { cond: Reg, targetT: Label<'a>, targetF: Label<'a> },
     PrintS { str: &'a str },
@@ -329,6 +337,10 @@ impl<'a> Insn<'a> {
     // use'd (read) by the instruction, respectively.  Note that the vectors
     // may contain duplicates, particularly in the (fairly common) case where
     // an instruction reads the same register twice.
+    //
+    // FIXME for insns that modify a reg (a la Intel): add and return here a
+    // third vector for registers mentioned in a modify role.  Then fix up all
+    // users of this function accordingly.
     fn getRegUsage(&self) -> (Vec::<Reg>, Vec::<Reg>) {
         let mut def = Vec::<Reg>::new();
         let mut uce = Vec::<Reg>::new();
@@ -990,17 +1002,46 @@ impl<'a> CFG<'a> {
 // Representing and printing of live range fragments.
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Ord)]
-enum UorD { U, D }
-impl PartialOrd for UorD {
-    // In short .. U < D.  This is probably what would be #derive'd anyway,
-    // but we need to be sure.
+// There are four "positions" within an instruction that are of interest, and
+// these have a total ordering: R < U < D < S.  They are:
+//
+// * R(eload): this is where any reload insns for the insn itself are
+//   considered to live.
+//
+// * U(se): this is where the insn is considered to use values from those of
+//   its register operands that appear in a Read or Modify role.
+//
+// * D(ef): this is where the insn is considered to define new values for
+//   those of its register operands that appear in a Write or Modify role.
+//
+// * S(pill): this is where any spill insns for the insn itself are considered
+//   to live.
+//
+// Instructions in the incoming CFG are considered only to exist at the U and
+// D positions, and so their associated live range fragments will only mention
+// the U and D positions.  However, when adding spill code, we need a way to
+// represent live ranges involving the added spill and reload insns, in which
+// case R and S come into play:
+//
+// * A reload for instruction i is considered to be live from i.R to i.U.
+//
+// * A spill for instruction i is considered to be live from i.D to i.S.
+enum InsnPoint { R, U, D, S }
+impl PartialOrd for InsnPoint {
+    // In short .. R < U < D < S.  This is probably what would be #derive'd
+    // anyway, but we need to be sure.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (UorD::U, UorD::U) => Some(Ordering::Equal),
-            (UorD::U, UorD::D) => Some(Ordering::Less),
-            (UorD::D, UorD::U) => Some(Ordering::Greater),
-            (UorD::D, UorD::D) => Some(Ordering::Equal)
+        // This is a bit idiotic, but hey .. hopefully LLVM can turn it into a
+        // no-op.
+        fn convert(ipt: InsnPoint) -> u32 {
+            match ipt {
+                InsnPoint::R => 0,
+                InsnPoint::U => 1,
+                InsnPoint::D => 2,
+                InsnPoint::S => 3,
+            }
         }
+        convert(*self).partial_cmp(&convert(*other))
     }
 }
 
@@ -1008,33 +1049,41 @@ impl PartialOrd for UorD {
 // See comments below on |Frag| for the meaning of |FragPoint|.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Ord)]
 struct FragPoint {
-    iix:  InsnIx,
-    uord: UorD
+    iix: InsnIx,
+    ipt: InsnPoint
+}
+fn FragPoint_R(iix: InsnIx) -> FragPoint {
+    FragPoint { iix: iix, ipt: InsnPoint::R }
 }
 fn FragPoint_U(iix: InsnIx) -> FragPoint {
-    FragPoint { iix: iix, uord: UorD::U }
+    FragPoint { iix: iix, ipt: InsnPoint::U }
 }
 fn FragPoint_D(iix: InsnIx) -> FragPoint {
-    FragPoint { iix: iix, uord: UorD::D }
+    FragPoint { iix: iix, ipt: InsnPoint::D }
+}
+fn FragPoint_S(iix: InsnIx) -> FragPoint {
+    FragPoint { iix: iix, ipt: InsnPoint::S }
 }
 impl PartialOrd for FragPoint {
     // Again .. don't assume anything about the #derive'd version.  These have
-    // to be ordered using |iix| as the primary key and |uord| as the
+    // to be ordered using |iix| as the primary key and |ipt| as the
     // secondary.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.iix.partial_cmp(&other.iix) {
             Some(Ordering::Less)    => Some(Ordering::Less),
             Some(Ordering::Greater) => Some(Ordering::Greater),
-            Some(Ordering::Equal)   => self.uord.partial_cmp(&other.uord),
+            Some(Ordering::Equal)   => self.ipt.partial_cmp(&other.ipt),
             None => panic!("FragPoint::partial_cmp: fail #1"),
         }
     }
 }
 impl Show for FragPoint {
     fn show(&self) -> String {
-        match self.uord {
-            UorD::U => self.iix.get().show() + &".u".to_string(),
-            UorD::D => self.iix.get().show() + &".d".to_string()
+        match self.ipt {
+            InsnPoint::R => self.iix.get().show() + &".r".to_string(),
+            InsnPoint::U => self.iix.get().show() + &".u".to_string(),
+            InsnPoint::D => self.iix.get().show() + &".d".to_string(),
+            InsnPoint::S => self.iix.get().show() + &".s".to_string()
         }
     }
 }
@@ -1746,11 +1795,12 @@ fn set_LR_metrics<R>(lrs: &mut Vec::<LR<R>>,
 fn cost_is_less(cost1: Option<f32>, cost2: Option<f32>) -> bool {
     // None denotes "infinity", while Some(_) is some number less than
     // infinity.  No matter that the enclosed f32 can denote its own infinity
-    // :-/
+    // :-/ (they never actually should be infinity, nor negative, nor any
+    // denormal either).
     match (cost1, cost2) {
-        (None,    None) => false,
-        (Some(_),  None) => true,
-        (None,     Some(_)) => false,
+        (None,     None)     => false,
+        (Some(_),  None)     => true,
+        (None,     Some(_))  => false,
         (Some(f1), Some(f2)) => f1 < f2
     }
 }
@@ -1936,6 +1986,7 @@ impl VLRPrioQ {
         for vlrix in self.unallocated.iter() {
             if !first { res += &"\n".to_string(); }
             first = false;
+            res += &"TODO  ".to_string();
             res += &vlr_env[vlrix.get_usize()].show();
         }
         res
@@ -2069,23 +2120,51 @@ impl PerRReg {
 
 
 //=============================================================================
+// Edit list items
+
+struct EditListItem {
+    // Where should this instruction be added?  Note that if the edit list as
+    // a whole specifies multiple items for the same location, then it is
+    // assumed that the order in which they execute isn't important.
+    whereto: FragPoint,
+    // And what's the instruction?  This can only be a spill or a reload.  We
+    // store the actual components here so as to avoid hassle with lifetime
+    // vars on Insn.
+    slot:      Slot,
+    vreg:      VReg,
+    is_reload: bool
+}
+impl Show for EditListItem {
+    fn show(&self) -> String {
+        "eli: at ".to_string() + &self.whereto.show() + &" add ".to_string()
+            + &(if self.is_reload { "reload" } else { "spill " }).to_string()
+            + &self.slot.show() + &" ".to_string() + &self.vreg.show()
+    }
+}
+
+
+//=============================================================================
 // Printing the allocator's top level state
 
 fn print_RA_state(who: &str,
                   // State components
                   prioQ: &VLRPrioQ, perRReg: &Vec::<PerRReg>,
+                  editList: &Vec::<EditListItem>,
                   // The context (environment)
                   vlr_env: &Vec::<LR<VReg>>, frag_env: &Vec::<Frag>)
 {
-    println!("-------- RA state at '{}' --------", who);
+    println!("<<<<====---- RA state at '{}' ----====", who);
     for ix in 0 .. perRReg.len() {
-        println!("\n{:<3} {}\n    {}",
+        println!("\n{:<3}   {}\n      {}",
                  mkRReg(ix as u32).show(),
                  &perRReg[ix].show1_with_envs(&frag_env),
                  &perRReg[ix].show2_with_envs(&frag_env));
     }
     print!("\n{}\n", prioQ.show_with_envs(&vlr_env));
-    println!("");
+    for eli in editList {
+        println!("{}", eli.show());
+    }
+    println!(">>>>");
 }
 
 
@@ -2225,9 +2304,9 @@ fn run_main(cfg: CFG, nRRegs: usize) {
         perRReg[rregNo].add_RLR(&rlr, &frag_env);
     }
 
-    // let mut editList = Vec::<EditListElem>::new();
+    let mut editList = Vec::<EditListItem>::new();
     println!("");
-    print_RA_state("Initial", &prioQ, &perRReg, &vlr_env, &frag_env);
+    print_RA_state("Initial", &prioQ, &perRReg, &editList, &vlr_env, &frag_env);
 
     // Main allocation loop.  Each time round, pull out the longest
     // unallocated VLR, and do one of three things:
@@ -2243,7 +2322,7 @@ fn run_main(cfg: CFG, nRRegs: usize) {
     while let Some(curr_vlrix) = prioQ.get_longest_VLR(&vlr_env) {
         let curr_vlr: &LR<VReg> = &vlr_env[curr_vlrix.get_usize()];
 
-        println!("-- considering      {}", curr_vlr.show());
+        println!("-- considering        {}", curr_vlr.show());
 
         // See if we can find a RReg to which we can assign this VLR without
         // evicting any previous assignment.
@@ -2256,7 +2335,7 @@ fn run_main(cfg: CFG, nRRegs: usize) {
         }
         if let Some(rregNo) = rreg_to_use {
             // Yay!
-            println!("-- direct alloc to  {}", mkRReg(rregNo as u32).show());
+            println!("--   direct alloc to  {}", mkRReg(rregNo as u32).show());
             perRReg[rregNo].add_VLR(curr_vlrix, &vlr_env, &frag_env);
             continue;
         }
@@ -2298,20 +2377,45 @@ fn run_main(cfg: CFG, nRRegs: usize) {
             }
         }
         if let Some((rregNo, vlrix_to_evict, _)) = best_so_far {
-            println!("-- evict            {}",
+            println!("--   evict            {}",
                      &vlr_env[vlrix_to_evict.get_usize()].show());
             perRReg[rregNo].del_VLR(vlrix_to_evict, &vlr_env, &frag_env);
             prioQ.add_VLR(vlrix_to_evict);
-            println!("-- then alloc to    {}", mkRReg(rregNo as u32).show());
+            println!("--   then alloc to    {}", mkRReg(rregNo as u32).show());
             perRReg[rregNo].add_VLR(curr_vlrix, &vlr_env, &frag_env);
             continue;
         }
 
-        print_RA_state("At fail", &prioQ, &perRReg, &vlr_env, &frag_env);
+        // Still no luck.  We can't find a register to put it in, so we'll
+        // have to spill it, since splitting it isn't yet implemented.
+        println!(" --   spill");
+        // Generate a new spill slot number, Slot
+        /* Spilling vreg V with LR to slot S:
+              for each frag F in LR {
+                 for each insn I in F.first.iix .. F.last.iix {
+                    if I does not mention V
+                       continue
+                    if I.use is in F and I mentions V in a Read or Mod role {
+                       add new LR I.reload -> I.use, vreg V, spillcost Inf
+                       add eli @ I.reload V Slot
+                    }
+                    if I.def is in F and I mentions V in a Write or Mod role {
+                       add new LR I.def -> I.spill, vreg V, spillcost Inf
+                       add eli @ I.spill V Slot
+                    }
+                 }
+              }
+        */
+        /* We will be spilling vreg |curr_vlr.reg| with LR |curr_vlr| to ..
+           well, we better invent a new spill slot number.  Just hand them out
+           sequentially for now. */
+
+        print_RA_state("At fail", &prioQ,
+                                  &perRReg, &editList, &vlr_env, &frag_env);
         panic!("No clear reg");
     }
 
-    print_RA_state("Final", &prioQ, &perRReg, &vlr_env, &frag_env);
+    print_RA_state("Final", &prioQ, &perRReg, &editList, &vlr_env, &frag_env);
 
     println!("");
 }
