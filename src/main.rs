@@ -2014,7 +2014,49 @@ impl PerRReg {
                            vlr_env: &Vec::<LR<VReg>>,
                            frag_env: &Vec::<Frag>)
                            -> Option<(LRIx, f32)> {
-        None
+        // |would_like_to_add| presumably doesn't fit here.  See if eviction
+        // of any of the existing LRs would make it allocable, and if so
+        // return that LR and its cost.  Valid candidates VLRs must meet
+        // the following criteria:
+        // - must be assigned to this register (obviously)
+        // - must have a non-infinite spill cost
+        //   (since we don't want to eject spill/reload LRs)
+        // - must have a spill cost less than that of |would_like_to_add|
+        //   (so as to guarantee forward progress)
+        // - removal of it must actually make |would_like_to_add| allocable
+        //   (otherwise all this is pointless)
+        let mut best_so_far: Option<(LRIx, f32)> = None;
+        for cand_vlrix in &self.vlrs_assigned {
+            let cand_vlr = &vlr_env[cand_vlrix.get_usize()];
+            if cand_vlr.cost.is_none() {
+                continue;
+            }
+            let cand_cost = cand_vlr.cost.unwrap();
+            if !cost_is_less(Some(cand_cost), would_like_to_add.cost) {
+                continue;
+            }
+            if !self.frags_in_use
+                    .can_add_if_we_first_del(&cand_vlr.sfrags,
+                                             &would_like_to_add.sfrags,
+                                             frag_env) {
+                continue;
+            }
+            // Ok, it's at least a valid candidate.  But is it better than
+            // any candidate we might already have?
+            let mut cand_is_better = true;
+            if let Some((_, best_cost)) = best_so_far {
+                if cost_is_less(Some(best_cost), Some(cand_cost)) {
+                    cand_is_better = false;
+                }
+            }
+            if cand_is_better {
+                // Either, this is the first possible candidate we've
+                // seen, or it's better than any previous one.  In either
+                // case, make note of it.
+                best_so_far = Some((*cand_vlrix, cand_cost));
+            }
+        }
+        best_so_far
     }
 
     fn show1_with_envs(&self, fenv: &Vec::<Frag>) -> String {
@@ -2194,14 +2236,14 @@ fn run_main(cfg: CFG, nRRegs: usize) {
     //   but only one with a lower spill cost than this one, or
     //
     // * spill it.  This causes the VLR to disappear.  It is replaced by a set
-    //   of very short VLRs to carry the spill and reload values.
+    //   of very short VLRs to carry the spill and reload values.  Or,
     //
     // * split it.  This causes it to disappear but be replaced by two VLRs
     //   which together constitute the original.
     while let Some(curr_vlrix) = prioQ.get_longest_VLR(&vlr_env) {
         let curr_vlr: &LR<VReg> = &vlr_env[curr_vlrix.get_usize()];
 
-        println!("-- considering     {}", curr_vlr.show());
+        println!("-- considering      {}", curr_vlr.show());
 
         // See if we can find a RReg to which we can assign this VLR without
         // evicting any previous assignment.
@@ -2243,7 +2285,7 @@ fn run_main(cfg: CFG, nRRegs: usize) {
                 debug_assert!(cost_is_less(Some(cand_cost), curr_vlr.cost));
                 let mut cand_is_better = true;
                 if let Some((_, _, best_cost)) = best_so_far {
-                    if cand_cost >= best_cost {
+                    if cost_is_less(Some(best_cost), Some(cand_cost)) {
                         cand_is_better = false;
                     }
                 }
@@ -2256,11 +2298,11 @@ fn run_main(cfg: CFG, nRRegs: usize) {
             }
         }
         if let Some((rregNo, vlrix_to_evict, _)) = best_so_far {
-            println!("-- evict           {}",
+            println!("-- evict            {}",
                      &vlr_env[vlrix_to_evict.get_usize()].show());
             perRReg[rregNo].del_VLR(vlrix_to_evict, &vlr_env, &frag_env);
             prioQ.add_VLR(vlrix_to_evict);
-            println!("-- then alloc to   {}", mkRReg(rregNo as u32).show());
+            println!("-- then alloc to    {}", mkRReg(rregNo as u32).show());
             perRReg[rregNo].add_VLR(curr_vlrix, &vlr_env, &frag_env);
             continue;
         }
