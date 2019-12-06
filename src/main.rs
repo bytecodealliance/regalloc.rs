@@ -123,6 +123,7 @@ impl Reg {
 enum Slot {
     Slot(u32)
 }
+fn mkSlot(n: u32) -> Slot { Slot::Slot(n) }
 impl Slot {
     fn get(self) -> u32 { match self { Slot::Slot(n) => n } }
 }
@@ -226,9 +227,9 @@ impl Show for RI {
     }
 }
 impl RI {
-    fn addRegReadsTo(&self, uce: &mut Vec::<Reg>) {
+    fn addRegReadsTo(&self, uce: &mut Set::<Reg>) {
         match self {
-            RI::Reg { reg } => uce.push(*reg),
+            RI::Reg { reg } => uce.insert(*reg),
             RI::Imm { ..  } => { }
         }
     }
@@ -333,41 +334,39 @@ impl<'a> Insn<'a> {
         }
     }
 
-    // Returns a pair of vectors of regs, being those def'd (written) and
-    // use'd (read) by the instruction, respectively.  Note that the vectors
-    // may contain duplicates, particularly in the (fairly common) case where
-    // an instruction reads the same register twice.
+    // Returns a pair of sets of regs, being those def'd (written) and use'd
+    // (read) by the instruction, respectively.
     //
     // FIXME for insns that modify a reg (a la Intel): add and return here a
-    // third vector for registers mentioned in a modify role.  Then fix up all
+    // third set for registers mentioned in a modify role.  Then fix up all
     // users of this function accordingly.
-    fn getRegUsage(&self) -> (Vec::<Reg>, Vec::<Reg>) {
-        let mut def = Vec::<Reg>::new();
-        let mut uce = Vec::<Reg>::new();
+    fn getRegUsage(&self) -> (Set::<Reg>, Set::<Reg>) {
+        let mut def = Set::<Reg>::empty();
+        let mut uce = Set::<Reg>::empty();
         match self {
             Insn::Imm { dst, imm:_ } => {
-                def.push(*dst);
+                def.insert(*dst);
             },
             Insn::BinOp { op:_, dst, srcL, srcR } => {
-                def.push(*dst);
-                uce.push(*srcL);
+                def.insert(*dst);
+                uce.insert(*srcL);
                 srcR.addRegReadsTo(&mut uce);
             },
             Insn::Store { addr, src } => {
-                uce.push(*addr);
-                uce.push(*src);
+                uce.insert(*addr);
+                uce.insert(*src);
             },
             Insn::Load { dst, addr } => {
-                def.push(*dst);
-                uce.push(*addr);
+                def.insert(*dst);
+                uce.insert(*addr);
             },
             Insn::Goto { .. } => { },
             Insn::GotoCTF { cond, targetT:_, targetF:_ } => {
-                uce.push(*cond);
+                uce.insert(*cond);
             },
             Insn::PrintS { .. } => { },
             Insn::PrintI { reg } => {
-                uce.push(*reg);
+                uce.insert(*reg);
             },
             Insn::Finish { } => { },
             _other => panic!("Insn::getRegUsage: unhandled: {}", self.show())
@@ -906,7 +905,7 @@ impl<'a> CFG<'a> {
                                               + b.len as usize {
                 let insn = &self.insns[iix];
                 let (regs_d, regs_u) = insn.getRegUsage();
-                for u in regs_u.iter() {
+                for u in regs_u.to_vec().iter() {
                     // |u| is used (read) by the instruction.  Whether or not
                     // we should consider it live-in for the block depends on
                     // whether it was been written earlier in the block.  We
@@ -916,7 +915,8 @@ impl<'a> CFG<'a> {
                         uce.insert(*u);
                     }
                 }
-                for d in regs_d.iter() {
+                // FIXME: isn't this just: defs union= regs_d?
+                for d in regs_d.to_vec().iter() {
                     def.insert(*d);
                 }
             }
@@ -1234,6 +1234,11 @@ fn cmpFrags(f1: &Frag, f2: &Frag) -> FCR {
     if f1.first == f2.first && f1.last == f2.last { return FCR::EQ; }
     FCR::UN
 }
+impl Frag {
+    fn contains(&self, fpt: &FragPoint) -> bool {
+        self.first <= *fpt && *fpt <= self.last
+    }
+}
 
 
 //=============================================================================
@@ -1315,7 +1320,7 @@ impl<'a> CFG<'a> {
 
             // Examine reads.  This is pretty simple.  They simply extend
             // existing fragments.
-            for r in regs_u.iter() {
+            for r in regs_u.to_vec().iter() {
                 let new_sme: Frag_SME;
                 match state.get(r) {
                     // First event for |r| is a read, but it's not listed
@@ -1346,7 +1351,7 @@ impl<'a> CFG<'a> {
             // terminate the existing frag, if any, add it to |tmpResultVec|,
             // and start a new frag.  But we have to be careful to deal
             // correctly with dead writes.
-            for r in regs_d.iter() {
+            for r in regs_d.to_vec().iter() {
                 let new_sme: Frag_SME;
                 match state.get(r) {
                     // First mention of a Reg we've never heard of before.
@@ -1542,6 +1547,13 @@ impl SortedFragIxs {
         res.check(fenv);
         res
     }
+
+    fn unit(fix: FragIx, fenv: &Vec::<Frag>) -> Self {
+        let mut res = SortedFragIxs { fragIxs: Vec::<FragIx>::new() };
+        res.fragIxs.push(fix);
+        res.check(fenv);
+        res
+    }
 }
 
 
@@ -1582,7 +1594,7 @@ impl<R: Show> Show for LR<R> {
         let cost_str: String;
         match self.cost {
             None => {
-                cost_str = "*INF*".to_string();
+                cost_str = "INFIN".to_string();
             },
             Some(c) => {
                 cost_str = format!("{:<5.2}", c);
@@ -2136,8 +2148,8 @@ struct EditListItem {
 }
 impl Show for EditListItem {
     fn show(&self) -> String {
-        "eli: at ".to_string() + &self.whereto.show() + &" add ".to_string()
-            + &(if self.is_reload { "reload" } else { "spill " }).to_string()
+        "eli   at ".to_string() + &self.whereto.show() + &" add ".to_string()
+            + &(if self.is_reload { "reload " } else { "spill  " }).to_string()
             + &self.slot.show() + &" ".to_string() + &self.vreg.show()
     }
 }
@@ -2246,7 +2258,7 @@ fn run_main(cfg: CFG, nRRegs: usize) {
         n += 1;
     }
 
-    let (fragIxs_per_reg, frag_env) =
+    let (fragIxs_per_reg, mut frag_env) =
         cfg.get_Frags(&livein_sets_per_block, &liveout_sets_per_block);
 
     println!("");
@@ -2308,6 +2320,9 @@ fn run_main(cfg: CFG, nRRegs: usize) {
     println!("");
     print_RA_state("Initial", &prioQ, &perRReg, &editList, &vlr_env, &frag_env);
 
+    // This is technically part of the running state, at least for now.
+    let mut spillSlotCtr: u32 = 0;
+
     // Main allocation loop.  Each time round, pull out the longest
     // unallocated VLR, and do one of three things:
     //
@@ -2348,7 +2363,7 @@ fn run_main(cfg: CFG, nRRegs: usize) {
         // (rregNo for best cand, its LRIx, and its spill cost)
         let mut best_so_far: Option<(usize, LRIx, f32)> = None;
         for i in 0 .. nRRegs {
-            let mut mb_better_cand: Option<(LRIx, f32)>;
+            let mb_better_cand: Option<(LRIx, f32)>;
             mb_better_cand =
                 perRReg[i].find_best_evict_VLR(&curr_vlr, &vlr_env, &frag_env);
             if let Some((cand_vlrix, cand_cost)) = mb_better_cand {
@@ -2388,7 +2403,7 @@ fn run_main(cfg: CFG, nRRegs: usize) {
 
         // Still no luck.  We can't find a register to put it in, so we'll
         // have to spill it, since splitting it isn't yet implemented.
-        println!(" --   spill");
+        println!("--   spill");
         // Generate a new spill slot number, Slot
         /* Spilling vreg V with LR to slot S:
               for each frag F in LR {
@@ -2410,9 +2425,82 @@ fn run_main(cfg: CFG, nRRegs: usize) {
            well, we better invent a new spill slot number.  Just hand them out
            sequentially for now. */
 
-        print_RA_state("At fail", &prioQ,
-                                  &perRReg, &editList, &vlr_env, &frag_env);
-        panic!("No clear reg");
+        struct SpillOrReloadInfo {
+            is_reload: bool,
+            iix: InsnIx,
+            bix: BlockIx
+        }
+        let mut sri_vec = Vec::<SpillOrReloadInfo>::new();
+        let curr_vlr_reg = curr_vlr.reg;
+
+        for fix in &curr_vlr.sfrags.fragIxs {
+            let frag: &Frag = &frag_env[fix.get_usize()];
+            for iixNo in frag.first.iix.get()
+                         .. frag.last.iix.get() + 1/*CHECK THIS*/ {
+                let insn: &Insn = &cfg.insns[iixNo as usize];
+                let (uce, def) = insn.getRegUsage();
+                if !uce.contains(Reg_V(curr_vlr.reg))
+                   && !def.contains(Reg_V(curr_vlr.reg)) {
+                    continue;
+                }
+                let iix = mkInsnIx(iixNo);
+                if frag.contains(&FragPoint_U(iix))
+                   && uce.contains(Reg_V(curr_vlr.reg)) { // FIXME: uce or mod
+                    // Stash enough info that we can create a new VLR
+                    // and a new edit list entry for the reload.
+                    let new_sri = SpillOrReloadInfo { is_reload: true,
+                                                      iix: iix,
+                                                      bix: frag.bix };
+                    sri_vec.push(new_sri);
+                }
+                if frag.contains(&FragPoint_D(iix))
+                   && def.contains(Reg_V(curr_vlr.reg)) { // FIXME: def or mod
+                    // Stash enough info that we can create a new VLR
+                    // and a new edit list entry for the spill.
+                    let new_sri = SpillOrReloadInfo { is_reload: false,
+                                                      iix: iix,
+                                                      bix: frag.bix };
+                    sri_vec.push(new_sri);
+                }
+            }
+        }
+
+        // Now that we no longer need to access |frag_env| or |vlr_env| for
+        // the remainder of this iteration of the main allocation loop, we can
+        // actually generate the required spill/reload artefacts.
+        for sri in sri_vec {
+            let new_vlr_frag
+                = Frag { bix: sri.bix,
+                         kind:  FragKind::Local,
+                         first: if sri.is_reload { FragPoint_R(sri.iix) }
+                                            else { FragPoint_D(sri.iix) },
+                         last:  if sri.is_reload { FragPoint_U(sri.iix) }
+                                            else { FragPoint_S(sri.iix) },
+                         count: 2 };
+            frag_env.push(new_vlr_frag);
+            let new_vlr_fix = mkFragIx(frag_env.len() as u32 - 1);
+            println!("--     new Frag       {} {}",
+                     &new_vlr_fix.show(), &new_vlr_frag.show());
+            let new_vlr_sfixs = SortedFragIxs::unit(new_vlr_fix, &frag_env);
+            let new_vlr = LR { reg: curr_vlr_reg, sfrags: new_vlr_sfixs,
+                               size: 1, cost: None/*infinity*/ };
+            println!("--     new VLR        {}", &new_vlr.show());
+            vlr_env.push(new_vlr);
+            let new_vlrix = mkLRIx(vlr_env.len() as u32 - 1);
+            prioQ.add_VLR(new_vlrix);
+
+            let new_eli
+                = EditListItem { whereto:
+                                     if sri.is_reload { FragPoint_R(sri.iix) }
+                                                 else { FragPoint_S(sri.iix) },
+                                 slot: mkSlot(spillSlotCtr),
+                                 vreg: curr_vlr_reg,
+                                 is_reload: sri.is_reload };
+            println!("--     new eli        {}", &new_eli.show());
+            editList.push(new_eli);
+        }
+
+        spillSlotCtr += 1;
     }
 
     print_RA_state("Final", &prioQ, &perRReg, &editList, &vlr_env, &frag_env);
