@@ -1473,7 +1473,7 @@ impl SortedFragIxs {
             }
         }
         if !ok {
-            panic!("SortedMFrags::check: vector not ok");
+            panic!("SortedFragIxs::check: vector not ok");
         }
     }
 
@@ -1497,7 +1497,8 @@ impl SortedFragIxs {
 
 
 //=============================================================================
-// Representing and printing live ranges.  This is for both R and V regs.
+// Representing and printing live ranges.  This is parameterised over the reg
+// type, since we don't care what it is.
 
 // Finally, a live range.  This is the fundamental unit of allocation.  This
 // pairs a Reg with a vector of FragIxs in which it is live.  The FragIxs are
@@ -1507,7 +1508,8 @@ impl SortedFragIxs {
 //
 // Live ranges may contain metrics.  Not all are initially filled in:
 //
-// * |size| is the number of instructions in total spanned by the LR
+// * |size| is the number of instructions in total spanned by the LR.  It must
+//   not be zero.
 //
 // * |cost| is an abstractified measure of the cost of spilling the LR.  The
 //   only constraint (w.r.t. correctness) is that normal LRs have a |Some|
@@ -1520,13 +1522,13 @@ impl SortedFragIxs {
 // class".  That is, if you rename |reg| at some point inside |sfrags|, then
 // you must rename *all* occurrences of |reg| inside |sfrags|, since otherwise
 // the program will no longer work.
-struct LR {
-    reg:    Reg,
+struct LR<R> {
+    reg:    R,
     sfrags: SortedFragIxs,
     size:   u16,
     cost:   Option<f32>,
 }
-impl Show for LR {
+impl<R: Show> Show for LR<R> {
     fn show(&self) -> String {
         let cost_str: String;
         match self.cost {
@@ -1566,9 +1568,11 @@ impl Show for LRIx {
 
 fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
                frag_env: &Vec::</*FragIx, */Frag>,
-               cfg_map: &CFGMap) -> Vec::<LR>
+               cfg_map: &CFGMap)
+               -> (Vec::<LR<RReg>>, Vec::<LR<VReg>>)
 {
-    let mut res = Vec::<LR>::new();
+    let mut resR = Vec::<LR<RReg>>::new();
+    let mut resV = Vec::<LR<VReg>>::new();
     for (reg, all_fragIxs_for_reg) in fragIx_vecs_per_reg.iter() {
 
         // BEGIN merge |all_fragIxs_for_reg| entries as much as possible.
@@ -1658,20 +1662,29 @@ fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
             }
         }
 
-        // Harvest the merged MFrag sets from |state|, and turn them into LRs.
+        // Harvest the merged Frag sets from |state|, and turn them into LRs
+        // of the appropriate flavour.
         for MergeGroup { valid, fragIxs, .. } in state {
-            if valid {
-                let lr = LR { reg: *reg,
-                              sfrags: SortedFragIxs::new(&fragIxs, &frag_env),
-                              size: 0, cost: Some(0.0) };
-                res.push(lr);
+            if !valid {
+                continue;
+            }
+            let sfrags = SortedFragIxs::new(&fragIxs, &frag_env);
+            let size = 0;
+            let cost = Some(0.0);
+            match *reg {
+                Reg::RReg(rreg) => {
+                    resR.push(LR { reg: rreg, sfrags, size, cost });
+                }
+                Reg::VReg(vreg) => {
+                    resV.push(LR { reg: vreg, sfrags, size, cost });
+                }
             }
         }
 
-        // END merge |all_mfrags_for_reg| entries as much as possible
+        // END merge |all_fragIxs_for_reg| entries as much as possible
     }
 
-    res
+    (resR, resV)
 }
 
 
@@ -1690,9 +1703,8 @@ fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
 //        the estimated execution count of the containing block
 //
 // all the while being very careful to avoid overflow.
-
-fn set_LR_metrics(lrs: &mut Vec::<LR>,
-                  fenv: &Vec::<Frag>, blocks: &Vec::<Block>)
+fn set_LR_metrics<R>(lrs: &mut Vec::<LR<R>>,
+                     fenv: &Vec::<Frag>, blocks: &Vec::<Block>)
 {
     for lr in lrs {
         debug_assert!(lr.size == 0 && lr.cost == Some(0.0));
@@ -1852,6 +1864,86 @@ impl SortedFragIxs {
 
 
 //=============================================================================
+// The as-yet-unallocated VReg LR prio queue
+
+struct VLRPrioQ<'a> {
+    // Virtual reg LRs only.  LRs are only ever added here.
+    lr_env: &'a mut Vec::<LR<VReg>>,
+
+    // The actual set of as-yet unallocated LRs.  These are indexes into
+    // |lr_env|.  These can come and go.
+    unallocated: Vec::<LRIx>
+}
+impl<'a> VLRPrioQ<'a> {
+    // Create a new one.  We take a mutable ref to the incoming env.  We may
+    // have to add entries to it since spilling and splitting produce new LRs.
+    // Existing entries won't be removed or modified, though.
+    fn new(lr_env: &'a mut Vec::<LR<VReg>>) -> Self {
+        let mut res = Self { lr_env: lr_env, unallocated: Vec::new() };
+        for i in 0 .. res.lr_env.len() {
+            assert!(res.lr_env[i].size > 0);
+            res.unallocated.push(mkLRIx(i as u32));
+        }
+        res
+    }
+
+    // Add a VLR.  We take ownership of the new VLR.
+    fn add_VLR(&'a mut self, vlr: LR<VReg>) -> LRIx {
+        self.lr_env.push(vlr);
+        let res = mkLRIx(self.lr_env.len() as u32 - 1);
+        self.unallocated.push(res);
+        res
+    }
+
+    // Look in |unallocated| to locate the entry referencing the LR with the
+    // largest |size| value.  Remove the ref from |unallocated| and return a
+    // ref to the LR itself.
+    fn get_longest(&'a mut self) -> Option<&'a LR<VReg>> {
+        if self.unallocated.len() == 0 {
+            return None;
+        }
+        let mut largestIx   = self.unallocated.len(); /*INVALID*/
+        let mut largestSize = 0; /*INVALID*/
+        for i in 0 .. self.unallocated.len() {
+            let cand_lrix = self.unallocated[i];
+            let cand_lr = &self.lr_env[cand_lrix.get_usize()];
+            if cand_lr.size > largestSize {
+                largestSize = cand_lr.size;
+                largestIx   = i;
+            }
+        }
+        // We must have found *something* since there was at least one
+        // unallocated LR still available.
+        debug_assert!(largestIx < self.unallocated.len());
+        debug_assert!(largestSize > 0);
+        // What we will return
+        let res = &self.lr_env[ self.unallocated[largestIx].get_usize() ];
+        // Remove the selected |unallocated| entry in constant time.
+        self.unallocated[largestIx] =
+            self.unallocated[self.unallocated.len() - 1];
+        self.unallocated.remove(self.unallocated.len() - 1);
+        Some(res)
+    }
+}
+
+
+//=============================================================================
+// The per-real-register state
+
+struct PerRReg {
+    // The current committed fragments for this RReg.
+    frags_in_use: SortedFragIxs,
+    // The VLRs which have been assigned to this reg, in no particular order.
+    // The union of their frags will be equal to |frags_in_use| only if no
+    // RLRs have been assigned to this RReg.  If RLRs have been assigned to
+    // this RReg then that union will be exactly the subset of |frags_in_use|
+    // not used by the assigned RLRs.
+    vlrs_assigned: Vec::<LRIx>
+}
+
+
+
+//=============================================================================
 // Allocator top level
 
 /* (more or less const) For each virtual live range
@@ -1860,7 +1952,7 @@ impl SortedFragIxs {
    - its spill cost
 
    (mut) For each real register
-   - the sorted MFrags assigned to it (todo: rm the M)
+   - the sorted Frags assigned to it (todo: rm the M)
    - the virtual LR indices assigned to it.  This is so we can eject
      a VLR from the commitment, as needed
 
@@ -1945,24 +2037,40 @@ fn run_main(cfg: CFG, nRRegs: usize) {
     }
 
     println!("");
-    let mut live_ranges = merge_Frags(&fragIxs_per_reg, &frag_env, &cfg_map);
+    let (mut rreg_lr_env, mut vreg_lr_env)
+        = merge_Frags(&fragIxs_per_reg, &frag_env, &cfg_map);
+    set_LR_metrics(&mut rreg_lr_env, &frag_env, &cfg.blocks); // Pointless!
+    set_LR_metrics(&mut vreg_lr_env, &frag_env, &cfg.blocks); // Pointful!
+
     n = 0;
-    for lr in &live_ranges {
-        println!("live range {}   {}", n, lr.show());
+    for lr in &rreg_lr_env {
+        println!("rreg live range {}   {}", n, lr.show());
+        n += 1;
+    }
+    n = 0;
+    for lr in &vreg_lr_env {
+        println!("vreg live range {}   {}", n, lr.show());
         n += 1;
     }
 
-    println!("");
-    set_LR_metrics(&mut live_ranges, &frag_env, &cfg.blocks);
-    n = 0;
-    for lr in &live_ranges {
-        println!("live range {}   {}", n, lr.show());
-        n += 1;
-    }
-    /*
 
     // Alloc main
 
+    // This references:
+    // * frag_env   which is fixed
+    // * lr_env     which may be added to due to spilling
+
+    // This is just a wrapper around a LRIx.  It exists only so we can
+    // implement Ord on the underlying LR as we require.
+    struct PerLR {
+        lrix: LRIx
+    }
+
+    // Go through the LRs and use this to create the initial state:
+    // - rreg LRs will be pushed into the commitment map
+    // - vreg LRs will be put into the prio q
+
+    /*
     // Partition LRs into ones for rregs vs for vregs
     let mut rreg_lrs = Vec::<SortedLR<RReg>>::new();
     let mut vreg_lrs = Vec::<SortedLR<VReg>>::new();
@@ -2053,7 +2161,7 @@ struct RAState {
     nonfixed_uses
 }
 
-The live ranges must contain a sequence of nonoverlapping MFrags, in
+The live ranges must contain a sequence of nonoverlapping Frags, in
 increasing order.  So they form a total order.
 
 struct PerRReg {
@@ -2203,8 +2311,6 @@ fn test_SortedFragIxs() {
 
     // Create a SortedFragIxs from a bunch of Frag indices
     fn genSMF(fenv: &Vec::<Frag>, frags: &Vec::<FragIx>) -> SortedFragIxs {
-        //let mfrags = frags.iter().map(|fix| MFrag { fix: *fix, count: 0 })
-        //                  .collect();
         SortedFragIxs::new(&frags, fenv)
     }
 
