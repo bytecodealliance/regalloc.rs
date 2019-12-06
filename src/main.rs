@@ -1165,7 +1165,7 @@ fn mk_Frag_LiveOut(blocks: &Vec::<Block>,
            count: count }
 }
 fn mk_Frag_Thru(blocks: &Vec::<Block>, bix: BlockIx, count: u16) -> Frag {
-    debug_assert!(count >= 0);
+    // Count can be any value, zero or more.
     let block = &blocks[bix.get_usize()];
     Frag { bix:   bix,
            kind:  FragKind::Thru,
@@ -1547,7 +1547,7 @@ impl<R: Show> Show for LR<R> {
 
 
 // Indices into vectors of LRs.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum LRIx {
     LRIx(u32)
 }
@@ -1743,6 +1743,18 @@ fn set_LR_metrics<R>(lrs: &mut Vec::<LR<R>>,
     }
 }
 
+fn cost_is_less(cost1: Option<f32>, cost2: Option<f32>) -> bool {
+    // None denotes "infinity", while Some(_) is some number less than
+    // infinity.  No matter that the enclosed f32 can denote its own infinity
+    // :-/
+    match (cost1, cost2) {
+        (None,    None) => false,
+        (Some(_),  None) => true,
+        (None,     Some(_)) => false,
+        (Some(f1), Some(f2)) => f1 < f2
+    }
+}
+
 
 //=============================================================================
 // Further methods on SortedFragIxs.  These are needed by the core algorithm.
@@ -1865,40 +1877,33 @@ impl SortedFragIxs {
 
 //=============================================================================
 // The as-yet-unallocated VReg LR prio queue
+//
+// Relevant methods are parameterised by a VLR env.
 
-struct VLRPrioQ<'a> {
-    // Virtual reg LRs only.  LRs are only ever added here.
-    lr_env: &'a mut Vec::<LR<VReg>>,
-
-    // The actual set of as-yet unallocated LRs.  These are indexes into
-    // |lr_env|.  These can come and go.
+struct VLRPrioQ {
+    // The set of as-yet unallocated VLRs.  These are indexes into a VLR env
+    // that is not stored here.  These indices can come and go.
     unallocated: Vec::<LRIx>
 }
-impl<'a> VLRPrioQ<'a> {
-    // Create a new one.  We take a mutable ref to the incoming env.  We may
-    // have to add entries to it since spilling and splitting produce new LRs.
-    // Existing entries won't be removed or modified, though.
-    fn new(lr_env: &'a mut Vec::<LR<VReg>>) -> Self {
-        let mut res = Self { lr_env: lr_env, unallocated: Vec::new() };
-        for i in 0 .. res.lr_env.len() {
-            assert!(res.lr_env[i].size > 0);
-            res.unallocated.push(mkLRIx(i as u32));
+impl VLRPrioQ {
+    fn new(vlr_env: &Vec::<LR<VReg>>) -> Self {
+        let mut res = Self { unallocated: Vec::new() };
+        for ix in 0 .. vlr_env.len() {
+            assert!(vlr_env[ix].size > 0);
+            res.unallocated.push(mkLRIx(ix as u32));
         }
         res
     }
 
-    // Add a VLR.  We take ownership of the new VLR.
-    fn add_VLR(&'a mut self, vlr: LR<VReg>) -> LRIx {
-        self.lr_env.push(vlr);
-        let res = mkLRIx(self.lr_env.len() as u32 - 1);
-        self.unallocated.push(res);
-        res
+    // Add a VLR index.
+    fn add_VLR(&mut self, vlr_ix: LRIx) {
+        self.unallocated.push(vlr_ix);
     }
 
-    // Look in |unallocated| to locate the entry referencing the LR with the
-    // largest |size| value.  Remove the ref from |unallocated| and return a
-    // ref to the LR itself.
-    fn get_longest(&'a mut self) -> Option<&'a LR<VReg>> {
+    // Look in |unallocated| to locate the entry referencing the VLR with the
+    // largest |size| value.  Remove the ref from |unallocated| and return the
+    // LRIx for said entry.
+    fn get_longest_VLR(&mut self, vlr_env: &Vec::<LR<VReg>>) -> Option<LRIx> {
         if self.unallocated.len() == 0 {
             return None;
         }
@@ -1906,7 +1911,7 @@ impl<'a> VLRPrioQ<'a> {
         let mut largestSize = 0; /*INVALID*/
         for i in 0 .. self.unallocated.len() {
             let cand_lrix = self.unallocated[i];
-            let cand_lr = &self.lr_env[cand_lrix.get_usize()];
+            let cand_lr = &vlr_env[cand_lrix.get_usize()];
             if cand_lr.size > largestSize {
                 largestSize = cand_lr.size;
                 largestIx   = i;
@@ -1917,30 +1922,129 @@ impl<'a> VLRPrioQ<'a> {
         debug_assert!(largestIx < self.unallocated.len());
         debug_assert!(largestSize > 0);
         // What we will return
-        let res = &self.lr_env[ self.unallocated[largestIx].get_usize() ];
+        let res = self.unallocated[largestIx];
         // Remove the selected |unallocated| entry in constant time.
         self.unallocated[largestIx] =
             self.unallocated[self.unallocated.len() - 1];
         self.unallocated.remove(self.unallocated.len() - 1);
         Some(res)
     }
+
+    fn show_with_envs(&self, vlr_env: &Vec::<LR<VReg>>) -> String {
+        let mut res = "".to_string();
+        let mut first = true;
+        for vlrix in self.unallocated.iter() {
+            if !first { res += &"\n".to_string(); }
+            first = false;
+            res += &vlr_env[vlrix.get_usize()].show();
+        }
+        res
+    }
 }
 
 
 //=============================================================================
 // The per-real-register state
+//
+// Relevant methods are expected to be parameterised by the same VLR env as
+// used in calls to |VLRPrioQ|.
 
 struct PerRReg {
     // The current committed fragments for this RReg.
     frags_in_use: SortedFragIxs,
-    // The VLRs which have been assigned to this reg, in no particular order.
+
+    // The VLRs which have been assigned to this RReg, in no particular order.
     // The union of their frags will be equal to |frags_in_use| only if no
     // RLRs have been assigned to this RReg.  If RLRs have been assigned to
     // this RReg then that union will be exactly the subset of |frags_in_use|
     // not used by the assigned RLRs.
     vlrs_assigned: Vec::<LRIx>
 }
+impl PerRReg {
+    fn new(fenv: &Vec::<Frag>) -> Self {
+        Self {
+            frags_in_use: SortedFragIxs::new(&vec![], fenv),
+            vlrs_assigned: Vec::<LRIx>::new()
+        }
+    }
 
+    fn add_RLR(&mut self, to_add: &LR<RReg>, fenv: &Vec::<Frag>) {
+        // Commit this register to |to_add|, irrevocably.  Don't add it to
+        // |vlrs_assigned| since we will never want to later evict the
+        // assignment.
+        self.frags_in_use.add(&to_add.sfrags, fenv);
+    }
+
+    fn can_add_VLR_without_eviction(&self, to_add: &LR<VReg>,
+                                    fenv: &Vec::<Frag>) -> bool {
+        self.frags_in_use.can_add(&to_add.sfrags, fenv)
+    }
+
+    fn add_VLR(&mut self, to_add_vlrix: LRIx,
+               vlr_env: &Vec::<LR<VReg>>, fenv: &Vec::<Frag>) {
+        let vlr = &vlr_env[to_add_vlrix.get_usize()];
+        self.frags_in_use.add(&vlr.sfrags, fenv);
+        self.vlrs_assigned.push(to_add_vlrix);
+    }
+
+    fn del_VLR(&mut self, to_del_vlrix: LRIx,
+               vlr_env: &Vec::<LR<VReg>>, fenv: &Vec::<Frag>) {
+        debug_assert!(self.vlrs_assigned.len() > 0);
+        // Remove it from |vlrs_assigned|
+        let mut found = None;
+        for i in 0 .. self.vlrs_assigned.len() {
+            if self.vlrs_assigned[i] == to_del_vlrix {
+                found = Some(i);
+                break;
+            }
+        }
+        if let Some(i) = found {
+            self.vlrs_assigned[i]
+                = self.vlrs_assigned[self.vlrs_assigned.len() - 1];
+            self.vlrs_assigned.remove(self.vlrs_assigned.len() - 1);
+        } else {
+            panic!("PerRReg: del_VLR on VLR that isn't in vlrs_assigned");
+        }
+        // Remove it from |frags_in_use|
+        let vlr = &vlr_env[to_del_vlrix.get_usize()];
+        self.frags_in_use.del(&vlr.sfrags, fenv);
+    }
+
+    fn find_best_evict_VLR(&self, would_like_to_add: &LR<VReg>,
+                           vlr_env: &Vec::<LR<VReg>>,
+                           frag_env: &Vec::<Frag>)
+                           -> Option<(LRIx, f32)> {
+        None
+    }
+
+    fn show1_with_envs(&self, fenv: &Vec::<Frag>) -> String {
+        "in_use:   ".to_string() + &self.frags_in_use.show_with_fenv(&fenv)
+    }
+    fn show2_with_envs(&self, fenv: &Vec::<Frag>) -> String {
+        "assigned: ".to_string() + &self.vlrs_assigned.show()
+    }
+}
+
+
+//=============================================================================
+// Printing the allocator's top level state
+
+fn print_RA_state(who: &str,
+                  // State components
+                  prioQ: &VLRPrioQ, perRReg: &Vec::<PerRReg>,
+                  // The context (environment)
+                  vlr_env: &Vec::<LR<VReg>>, frag_env: &Vec::<Frag>)
+{
+    println!("-------- RA state at '{}' --------", who);
+    for ix in 0 .. perRReg.len() {
+        println!("\n{:<3} {}\n    {}",
+                 mkRReg(ix as u32).show(),
+                 &perRReg[ix].show1_with_envs(&frag_env),
+                 &perRReg[ix].show2_with_envs(&frag_env));
+    }
+    print!("\n{}\n", prioQ.show_with_envs(&vlr_env));
+    println!("");
+}
 
 
 //=============================================================================
@@ -1977,7 +2081,7 @@ fn show_commit_tab(commit_tab: &Vec::<SortedFragIxs>,
     }
     res
 }
- */
+*/
 
 fn run_main(cfg: CFG, nRRegs: usize) {
     cfg.print("Initial");
@@ -2036,101 +2140,137 @@ fn run_main(cfg: CFG, nRRegs: usize) {
         println!("frags for {}   {}", reg.show(), fragIxs.show());
     }
 
-    println!("");
-    let (mut rreg_lr_env, mut vreg_lr_env)
+    let (mut rlr_env, mut vlr_env)
         = merge_Frags(&fragIxs_per_reg, &frag_env, &cfg_map);
-    set_LR_metrics(&mut rreg_lr_env, &frag_env, &cfg.blocks); // Pointless!
-    set_LR_metrics(&mut vreg_lr_env, &frag_env, &cfg.blocks); // Pointful!
+    set_LR_metrics(&mut rlr_env, &frag_env, &cfg.blocks); // Pointless!
+    set_LR_metrics(&mut vlr_env, &frag_env, &cfg.blocks); // Pointful!
 
+    println!("");
     n = 0;
-    for lr in &rreg_lr_env {
+    for lr in &rlr_env {
         println!("rreg live range {}   {}", n, lr.show());
         n += 1;
     }
+
+    println!("");
     n = 0;
-    for lr in &vreg_lr_env {
+    for lr in &vlr_env {
         println!("vreg live range {}   {}", n, lr.show());
         n += 1;
     }
 
 
-    // Alloc main
+    // -------- Alloc main --------
 
-    // This references:
-    // * frag_env   which is fixed
-    // * lr_env     which may be added to due to spilling
+    // Create initial state
 
-    // This is just a wrapper around a LRIx.  It exists only so we can
-    // implement Ord on the underlying LR as we require.
-    struct PerLR {
-        lrix: LRIx
+    // This is fully populated by the ::new call.
+    let mut prioQ = VLRPrioQ::new(&vlr_env);
+
+    // Whereas this is empty.  We have to populate it "by hand".
+    let mut perRReg = Vec::<PerRReg>::new();
+    for _ in 0 .. nRRegs {
+        // Doing this instead of simply .resize avoids needing Clone for PerRReg
+        perRReg.push(PerRReg::new(&frag_env));
     }
-
-    // Go through the LRs and use this to create the initial state:
-    // - rreg LRs will be pushed into the commitment map
-    // - vreg LRs will be put into the prio q
-
-    /*
-    // Partition LRs into ones for rregs vs for vregs
-    let mut rreg_lrs = Vec::<SortedLR<RReg>>::new();
-    let mut vreg_lrs = Vec::<SortedLR<VReg>>::new();
-    for LR { reg, frags } in live_ranges {
-        let smf = SortedFragIxs::new(&frags, &frag_table);
-        match reg {
-            Reg::RReg(rreg) => {
-                rreg_lrs.push(SortedLR { reg: rreg, mfrags: smf });
-            }
-            Reg::VReg(vreg) => {
-                vreg_lrs.push(SortedLR { reg: vreg, mfrags: smf });
-            }
-        }
-    }
-
-    println!("");
-    n = 0;
-    for rlr in &rreg_lrs {
-        println!("rreg LR {}  {}", n, rlr.show());
-        println!("        {}  {}", n, rlr.show_with_fenv(&frag_table));
-        n += 1;
-    }
-
-    println!("");
-    n = 0;
-    for vlr in &vreg_lrs {
-        println!("vreg LR {}  {}", n, vlr.show());
-        println!("        {}  {}", n, vlr.show_with_fenv(&frag_table));
-        n += 1;
-    }
-
-    // Create the initial RReg commitment table, and install the RLRs in it
-    let mut commit_tab = Vec::<SortedFragIxs>::new();
-    let smf_empty = SortedFragIxs { vec: vec![] };
-    commit_tab.resize(nRRegs, smf_empty);
-    for rlr in &rreg_lrs {
+    for rlr in &rlr_env {
         let rregNo = rlr.reg.get_usize();
-        // Ignore RLRs for unallocable rregs.  As far as the allocator is
-        // concerned, any mentions of unallocable rregs simply don't exist.
+        // Ignore RLRs for RRegs outside its allocation domain.  As far as the
+        // allocator is concerned, such RRegs simply don't exist.
         if rregNo >= nRRegs {
             continue;
         }
-        commit_tab[rregNo].add(&rlr.mfrags, &frag_table);
+        perRReg[rregNo].add_RLR(&rlr, &frag_env);
     }
-    println!("");
-    println!("{}", show_commit_tab(&commit_tab, "Initial", &frag_table));
-*/
-    /*
 
-    for rlr in &rreg_lrs {
-    }
-    
+    // let mut editList = Vec::<EditListElem>::new();
     println!("");
-    println!("Initial Commit tab");
-    n = 0;
-    for cte in &commit_tab {
-        println!("ctab {}  {}", Reg_R(mkRReg(n)).show(), cte.show());
-        n += 1;
+    print_RA_state("Initial", &prioQ, &perRReg, &vlr_env, &frag_env);
+
+    // Main allocation loop.  Each time round, pull out the longest
+    // unallocated VLR, and do one of three things:
+    //
+    // * allocate it to a RReg, possibly by ejecting some existing allocation,
+    //   but only one with a lower spill cost than this one, or
+    //
+    // * spill it.  This causes the VLR to disappear.  It is replaced by a set
+    //   of very short VLRs to carry the spill and reload values.
+    //
+    // * split it.  This causes it to disappear but be replaced by two VLRs
+    //   which together constitute the original.
+    while let Some(curr_vlrix) = prioQ.get_longest_VLR(&vlr_env) {
+        let curr_vlr: &LR<VReg> = &vlr_env[curr_vlrix.get_usize()];
+
+        println!("-- considering     {}", curr_vlr.show());
+
+        // See if we can find a RReg to which we can assign this VLR without
+        // evicting any previous assignment.
+        let mut rreg_to_use = None;
+        for i in 0 .. nRRegs {
+            if perRReg[i].can_add_VLR_without_eviction(curr_vlr, &frag_env) {
+                rreg_to_use = Some(i);
+                break;
+            }
+        }
+        if let Some(rregNo) = rreg_to_use {
+            // Yay!
+            println!("-- direct alloc to  {}", mkRReg(rregNo as u32).show());
+            perRReg[rregNo].add_VLR(curr_vlrix, &vlr_env, &frag_env);
+            continue;
+        }
+
+        // That didn't work out.  Next, try to see if we can allocate it by
+        // evicting some existing allocation that has a lower spill weight.
+        // Search all RRegs to find the candidate with the lowest spill
+        // weight.  This could be expensive.
+
+        // (rregNo for best cand, its LRIx, and its spill cost)
+        let mut best_so_far: Option<(usize, LRIx, f32)> = None;
+        for i in 0 .. nRRegs {
+            let mut mb_better_cand: Option<(LRIx, f32)>;
+            mb_better_cand =
+                perRReg[i].find_best_evict_VLR(&curr_vlr, &vlr_env, &frag_env);
+            if let Some((cand_vlrix, cand_cost)) = mb_better_cand {
+                // See if this is better than the best so far, and if so take
+                // it.  First some sanity checks:
+                //
+                // If the cand to be evicted is the current one,
+                // something's seriously wrong.
+                debug_assert!(cand_vlrix != curr_vlrix);
+                // We can only evict a LR with lower spill cost than the LR
+                // we're trying to allocate.  This is really important, if only
+                // to show that the algorithm will actually terminate.
+                debug_assert!(cost_is_less(Some(cand_cost), curr_vlr.cost));
+                let mut cand_is_better = true;
+                if let Some((_, _, best_cost)) = best_so_far {
+                    if cand_cost >= best_cost {
+                        cand_is_better = false;
+                    }
+                }
+                if cand_is_better {
+                    // Either, this is the first possible candidate we've
+                    // seen, or it's better than any previous one.  In either
+                    // case, make note of it.
+                    best_so_far = Some((i, cand_vlrix, cand_cost));
+                }
+            }
+        }
+        if let Some((rregNo, vlrix_to_evict, _)) = best_so_far {
+            println!("-- evict           {}",
+                     &vlr_env[vlrix_to_evict.get_usize()].show());
+            perRReg[rregNo].del_VLR(vlrix_to_evict, &vlr_env, &frag_env);
+            prioQ.add_VLR(vlrix_to_evict);
+            println!("-- then alloc to   {}", mkRReg(rregNo as u32).show());
+            perRReg[rregNo].add_VLR(curr_vlrix, &vlr_env, &frag_env);
+            continue;
+        }
+
+        print_RA_state("At fail", &prioQ, &perRReg, &vlr_env, &frag_env);
+        panic!("No clear reg");
     }
-*/
+
+    print_RA_state("Final", &prioQ, &perRReg, &vlr_env, &frag_env);
+
     println!("");
 }
 
@@ -2214,7 +2354,7 @@ fn main() {
         }
     };
 
-    run_main(cfg, 4);
+    run_main(cfg, /*nRRegs=*/3);
 }
 
 
