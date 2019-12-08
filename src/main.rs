@@ -238,14 +238,16 @@ impl RI {
 
 #[derive(Copy, Clone)]
 enum BinOp {
-    Add,
-    CmpLT
+    Add, Sub, CmpLT, CmpLE, CmpGT
 }
 impl Show for BinOp {
     fn show(&self) -> String {
         match self {
             BinOp::Add   => "add   ".to_string(),
-            BinOp::CmpLT => "cmplt ".to_string()
+            BinOp::Sub   => "sub   ".to_string(),
+            BinOp::CmpLT => "cmplt ".to_string(),
+            BinOp::CmpLE => "cmple ".to_string(),
+            BinOp::CmpGT => "cmpgt ".to_string()
         }
     }
 }
@@ -253,7 +255,10 @@ impl BinOp {
     fn calc(self, argL: u32, argR: u32) -> u32 {
         match self {
             BinOp::Add   => argL + argR,
-            BinOp::CmpLT => if argL < argR { 1 } else { 0 }
+            BinOp::Sub   => argL - argR,
+            BinOp::CmpLT => if argL <  argR { 1 } else { 0 },
+            BinOp::CmpLE => if argL <= argR { 1 } else { 0 },
+            BinOp::CmpGT => if argL >  argR { 1 } else { 0 }
         }
     }
 }
@@ -263,8 +268,8 @@ impl BinOp {
 enum Insn<'a> {
     Imm { dst: Reg, imm: u32 },
     BinOp { op: BinOp, dst: Reg, srcL: Reg, srcR: RI },
-    Load { dst: Reg, addr: Reg },
-    Store { addr: Reg, src: Reg },
+    Load { dst: Reg, addr: Reg, aoff: u32 },
+    Store { addr: Reg, aoff: u32, src: Reg },
     Spill { dst: Slot, src: Reg },
     Reload { dst: Reg, src: Slot },
     Goto { target: Label<'a> },
@@ -284,11 +289,14 @@ impl<'a> Show for Insn<'a> {
                 op.show() + &" ".to_string() + &dst.show()
                 + &", ".to_string() + &srcL.show() + &", ".to_string()
                 + &srcR.show(),
-            Insn::Load { dst, addr } =>
+            Insn::Load { dst, addr, aoff } =>
                 "load   ".to_string() + &dst.show() + &", [".to_string()
-                + &addr.show() + &"]".to_string(),
-            Insn::Store { addr, src } =>
-                "store  [".to_string() + &addr.show() + &"], ".to_string()
+                + &addr.show() + &" + ".to_string() + &aoff.to_string()
+                + &"]".to_string(),
+            Insn::Store { addr, aoff, src } =>
+                "store  [".to_string() + &addr.show()
+                + &" + ".to_string() + &aoff.to_string()
+                + &"], ".to_string()
                 + &src.show(),
             Insn::Goto { target } =>
                 "goto   ".to_string()
@@ -352,11 +360,11 @@ impl<'a> Insn<'a> {
                 uce.insert(*srcL);
                 srcR.addRegReadsTo(&mut uce);
             },
-            Insn::Store { addr, src } => {
+            Insn::Store { addr, aoff, src } => {
                 uce.insert(*addr);
                 uce.insert(*src);
             },
-            Insn::Load { dst, addr } => {
+            Insn::Load { dst, addr, aoff } => {
                 def.insert(*dst);
                 uce.insert(*addr);
             },
@@ -377,8 +385,12 @@ impl<'a> Insn<'a> {
 
 fn i_imm<'a>(dst: Reg, imm: u32) -> Insn<'a> { Insn::Imm { dst, imm } }
 // For BinOp variants see below
-fn i_load<'a>(dst: Reg, addr: Reg) -> Insn<'a> { Insn::Load { dst, addr } }
-fn i_store<'a>(addr: Reg, src: Reg) -> Insn<'a> { Insn::Store { addr, src } }
+fn i_load<'a>(dst: Reg, addr: Reg, aoff: u32) -> Insn<'a> {
+    Insn::Load { dst, addr, aoff }
+}
+fn i_store<'a>(addr: Reg, aoff: u32, src: Reg) -> Insn<'a> {
+    Insn::Store { addr, aoff, src }
+}
 fn i_goto<'a>(target: &'a str) -> Insn<'a> {
     Insn::Goto { target: mkUnresolved(target) }
 }
@@ -393,8 +405,17 @@ fn i_finish<'a>() -> Insn<'a> { Insn::Finish { } }
 fn i_add<'a>(dst: Reg, srcL: Reg, srcR: RI) -> Insn<'a> {
     Insn::BinOp { op: BinOp::Add, dst, srcL, srcR }
 }
+fn i_sub<'a>(dst: Reg, srcL: Reg, srcR: RI) -> Insn<'a> {
+    Insn::BinOp { op: BinOp::Sub, dst, srcL, srcR }
+}
 fn i_cmp_lt<'a>(dst: Reg, srcL: Reg, srcR: RI) -> Insn<'a> {
     Insn::BinOp { op: BinOp::CmpLT, dst, srcL, srcR }
+}
+fn i_cmp_le<'a>(dst: Reg, srcL: Reg, srcR: RI) -> Insn<'a> {
+    Insn::BinOp { op: BinOp::CmpLE, dst, srcL, srcR }
+}
+fn i_cmp_gt<'a>(dst: Reg, srcL: Reg, srcR: RI) -> Insn<'a> {
+    Insn::BinOp { op: BinOp::CmpGT, dst, srcL, srcR }
 }
 
 fn is_control_flow_insn<'a>(insn: &Insn<'a>) -> bool {
@@ -696,15 +717,15 @@ impl<'a> IState<'a> {
                 let dst_v = op.calc(srcL_v, srcR_v);
                 self.setReg(*dst, dst_v);
             },
-            Insn::Load { dst, addr } => {
+            Insn::Load { dst, addr, aoff } => {
                 let addr_v = self.getReg(*addr);
-                let dst_v = self.getMem(addr_v);
+                let dst_v = self.getMem(addr_v + aoff);
                 self.setReg(*dst, dst_v);
             },
-            Insn::Store { addr, src } => {
+            Insn::Store { addr, aoff, src } => {
                 let addr_v = self.getReg(*addr);
                 let src_v  = self.getReg(*src);
-                self.setMem(addr_v, src_v);
+                self.setMem(addr_v + aoff, src_v);
             },
             Insn::Goto { target } =>
                 self.nia = self.cfg.blocks[target.getBlockIx().get_usize()]
@@ -2781,8 +2802,9 @@ fn test_SortedFragIxs() {
 fn find_CFG<'a>(name: &String) -> Result::<CFG<'a>, Vec::<&str>> {
     // This is really stupid.  Fortunately it's not performance critical :)
     let all_CFGs = vec![
-        example_0(),
-        example_1(),
+        example_0(), // straight_line
+        example_1(), // fill_then_sum
+        example_2(), // shellsort
     ];
 
     let mut all_names = Vec::new();
@@ -2842,7 +2864,7 @@ fn example_1<'a>() -> CFG<'a> {
 
     // Filling loop
     cfg.block("set-loop", vec![
-        i_store   (vI,   vI),
+        i_store   (vI,0, vI),
         i_add     (vI,   vI, RI_I(1)),
         i_cmp_lt  (rTMP, vI, RI_R(vNENT)),
         i_goto_ctf(rTMP, "set-loop", "sum-loop-pre")
@@ -2857,7 +2879,7 @@ fn example_1<'a>() -> CFG<'a> {
 
     // Summing loop
     cfg.block("sum-loop", vec![
-        i_load  (rTMP,  vI),
+        i_load  (rTMP,  vI,0),
         i_add   (vSUM,  vSUM, RI_R(rTMP)),
         i_add   (vI,    vI,   RI_I(1)),
         i_cmp_lt(vTMP2, vI,   RI_R(vNENT)),
@@ -2868,6 +2890,158 @@ fn example_1<'a>() -> CFG<'a> {
     cfg.block("print-result", vec![
         i_print_s("Sum = "),
         i_print_i(vSUM),
+        i_print_s("\n"),
+        i_finish()
+    ]);
+
+    cfg.finish();
+    cfg
+}
+
+fn example_2<'a>() -> CFG<'a> {
+    let mut cfg = CFG::new("shellsort", "Lstart");
+
+    // This is a simple "shellsort" test.  An array of numbers to sort is
+    // placed in mem[5..24] and an increment table is placed in mem[0..4].
+    // mem[5..24] is then sorted and the result is printed.
+    //
+    // This test features 15 basic blocks, 10 virtual registers, at least one
+    // of which has multiple independent live ranges, a 3-deep loop nest, and
+    // some live ranges which span parts of the loop nest.  So it's an
+    // interesting test case.
+
+    let lo = cfg.vreg();
+    let hi = cfg.vreg();
+    let i = cfg.vreg();
+    let j = cfg.vreg();
+    let h = cfg.vreg();
+    let bigN = cfg.vreg();
+    let v = cfg.vreg();
+    let hp = cfg.vreg();
+    let t0 = cfg.vreg();
+    let zero = cfg.vreg();
+
+    cfg.block("Lstart", vec![
+        i_imm(zero, 0),
+        // Store the increment table
+        i_imm(t0,   1),        i_store(zero,0,  t0),
+        i_imm(t0,   4),        i_store(zero,1,  t0),
+        i_imm(t0,  13),        i_store(zero,2,  t0),
+        i_imm(t0,  40),        i_store(zero,3,  t0),
+        i_imm(t0, 121),        i_store(zero,4,  t0),
+        // Store the numbers to be sorted
+        i_imm(t0,  30),        i_store(zero,5,  t0),
+        i_imm(t0,  29),        i_store(zero,6,  t0),
+        i_imm(t0,  31),        i_store(zero,7,  t0),
+        i_imm(t0,  29),        i_store(zero,8,  t0),
+        i_imm(t0,  32),        i_store(zero,9,  t0),
+        i_imm(t0,  66),        i_store(zero,10, t0),
+        i_imm(t0,  77),        i_store(zero,11, t0),
+        i_imm(t0,  44),        i_store(zero,12, t0),
+        i_imm(t0,  22),        i_store(zero,13, t0),
+        i_imm(t0,  11),        i_store(zero,14, t0),
+        i_imm(t0,  99),        i_store(zero,15, t0),
+        i_imm(t0,  11),        i_store(zero,16, t0),
+        i_imm(t0,  12),        i_store(zero,17, t0),
+        i_imm(t0,   7),        i_store(zero,18, t0),
+        i_imm(t0,   9),        i_store(zero,19, t0),
+        i_imm(t0,   2),        i_store(zero,20, t0),
+        i_imm(t0,  32),        i_store(zero,21, t0),
+        i_imm(t0,  23),        i_store(zero,22, t0),
+        i_imm(t0,  41),        i_store(zero,23, t0),
+        i_imm(t0,  14),        i_store(zero,24, t0),
+        // The real computation begins here
+        i_imm(lo, 5),  // Lowest address of the range to sort
+        i_imm(hi, 24), // Highest address of the range to sort
+        i_sub(t0, hi, RI_R(lo)),
+        i_add(bigN, t0, RI_I(1)),
+        i_imm(hp , 0),
+        i_goto("L11")
+    ]);
+
+    cfg.block("L11", vec![
+        i_load(t0, hp,0),
+        i_cmp_gt(t0, t0, RI_R(bigN)),
+        i_goto_ctf(t0, "L20", "L11a")
+    ]);
+
+    cfg.block("L11a", vec![
+        i_add(hp, hp, RI_I(1)),
+        i_goto("L11")
+    ]);
+
+    cfg.block("L20", vec![
+        i_cmp_lt(t0, hp, RI_I(1)),
+        i_goto_ctf(t0, "L60", "L21a"),
+    ]);
+
+    cfg.block("L21a", vec![
+        i_sub(t0, hp, RI_I(1)),
+        i_load(h, t0, 0),
+        //printf("h = %u\n", h),
+        i_add(i, lo, RI_R(h)),
+        i_goto("L30"),
+    ]);
+
+    cfg.block("L30", vec![
+        i_cmp_gt(t0, i, RI_R(hi)),
+        i_goto_ctf(t0, "L50", "L30a"),
+    ]);
+
+    cfg.block("L30a", vec![
+        i_load(v, i,0),
+        i_add(j, i, RI_I(0)),  // FIXME: is this a coalescable copy?
+        i_goto("L40"),
+    ]);
+
+    cfg.block("L40", vec![
+        i_sub(t0, j, RI_R(h)),
+        i_load(t0, t0,0),
+        i_cmp_le(t0, t0, RI_R(v)),
+        i_goto_ctf(t0, "L45", "L40a"),
+    ]);
+
+    cfg.block("L40a", vec![
+        i_sub(t0, j, RI_R(h)),
+        i_load(t0, t0,0),
+        i_store(j,0, t0),
+        i_sub(j, j, RI_R(h)),
+        i_add(t0, lo, RI_R(h)),
+        i_sub(t0, t0, RI_I(1)),
+        i_cmp_le(t0, j, RI_R(t0)),
+        i_goto_ctf(t0, "L45", "L40"),
+    ]);
+
+    cfg.block("L45", vec![
+        i_store(j, 0, v),
+        i_add(i, i, RI_I(1)),
+        i_goto("L30"),
+    ]);
+
+    cfg.block("L50", vec![
+        i_sub(hp, hp, RI_I(1)),
+        i_goto("L20"),
+    ]);
+
+    cfg.block("L60", vec![
+        i_add(i, lo, RI_I(0)), // FIXME: ditto
+        i_goto("L61")
+    ]);
+
+    cfg.block("L61", vec![
+        i_cmp_gt(t0, i, RI_R(hi)),
+        i_goto_ctf(t0, "L62", "L61a"),
+    ]);
+
+    cfg.block("L61a", vec![
+        i_load(t0, i,0),
+        i_print_i(t0),
+        i_print_s(" "),
+        i_add(i, i, RI_I(1)),
+        i_goto("L61"),
+    ]);
+
+    cfg.block("L62", vec![
         i_print_s("\n"),
         i_finish()
     ]);
