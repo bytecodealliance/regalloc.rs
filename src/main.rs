@@ -1038,8 +1038,8 @@ impl<'a> CFG<'a> {
 // * S(pill): this is where any spill insns for the insn itself are considered
 //   to live.
 //
-// Instructions in the incoming CFG are considered only to exist at the U and
-// D positions, and so their associated live range fragments will only mention
+// Instructions in the incoming CFG may only to exist at the U and D
+// positions, and so their associated live range fragments will only mention
 // the U and D positions.  However, when adding spill code, we need a way to
 // represent live ranges involving the added spill and reload insns, in which
 // case R and S come into play:
@@ -1054,7 +1054,7 @@ impl PartialOrd for InsnPoint {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         // This is a bit idiotic, but hey .. hopefully LLVM can turn it into a
         // no-op.
-        fn convert(ipt: InsnPoint) -> u32 {
+        fn convert(ipt: &InsnPoint) -> u32 {
             match ipt {
                 InsnPoint::R => 0,
                 InsnPoint::U => 1,
@@ -1062,7 +1062,7 @@ impl PartialOrd for InsnPoint {
                 InsnPoint::S => 3,
             }
         }
-        convert(*self).partial_cmp(&convert(*other))
+        convert(self).partial_cmp(&convert(other))
     }
 }
 
@@ -1660,7 +1660,7 @@ fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
         // BEGIN merge |all_fragIxs_for_reg| entries as much as possible.
         // Each |state| entry has four components:
         //    (1) An is-this-entry-still-valid flag
-        //    (2) A vec of FragIxs.  These should refer to disjoint Frags.
+        //    (2) A set of FragIxs.  These should refer to disjoint Frags.
         //    (3) A set of blocks, which are those corresponding to (2)
         //        that are LiveIn or Thru (== have an inbound value)
         //    (4) A set of blocks, which are the union of the successors of
@@ -1668,7 +1668,7 @@ fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
         //        (== have an outbound value)
         struct MergeGroup {
             valid: bool,
-            fragIxs: Vec::<FragIx>,
+            fragIxs: Set::<FragIx>,
             live_in_blocks: Set::<BlockIx>,
             succs_of_live_out_blocks: Set::<BlockIx>
         }
@@ -1699,7 +1699,7 @@ fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
             }
 
             let valid = true;
-            let fragIxs = vec![*fix];
+            let fragIxs = Set::unit(*fix);
             let mg = MergeGroup { valid, fragIxs,
                                   live_in_blocks, succs_of_live_out_blocks };
             state.push(mg);
@@ -1727,7 +1727,7 @@ fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
                                 .intersects(&state[i].live_in_blocks);
                     if do_merge {
                         let mut tmp_fragIxs = state[i].fragIxs.clone();
-                        state[j].fragIxs.append(&mut tmp_fragIxs);
+                        state[j].fragIxs.union(&mut tmp_fragIxs);
                         let tmp_libs = state[i].live_in_blocks.clone();
                         state[j].live_in_blocks.union(&tmp_libs);
                         let tmp_solobs
@@ -1750,7 +1750,7 @@ fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
             if !valid {
                 continue;
             }
-            let sfrags = SortedFragIxs::new(&fragIxs, &frag_env);
+            let sfrags = SortedFragIxs::new(&fragIxs.to_vec(), &frag_env);
             let size = 0;
             let cost = Some(0.0);
             match *reg {
@@ -2134,9 +2134,9 @@ impl PerRReg {
                 }
             }
             if cand_is_better {
-                // Either, this is the first possible candidate we've
-                // seen, or it's better than any previous one.  In either
-                // case, make note of it.
+                // Either this is the first possible candidate we've seen, or
+                // it's better than any previous one.  In either case, make
+                // note of it.
                 best_so_far = Some((*cand_vlrix, cand_cost));
             }
         }
@@ -2258,7 +2258,7 @@ fn run_main(cfg: CFG, nRRegs: usize) {
 
     n = 0;
     println!("");
-    for (preds, succs) in cfg_map.succ_map.iter().zip(&cfg_map.pred_map) {
+    for (preds, succs) in cfg_map.pred_map.iter().zip(&cfg_map.succ_map) {
         println!("{:<3}   preds {:<16}  succs {}",
                  mkBlockIx(n).show(), preds.show(), succs.show());
         n += 1;
@@ -2405,9 +2405,9 @@ fn run_main(cfg: CFG, nRRegs: usize) {
                     }
                 }
                 if cand_is_better {
-                    // Either, this is the first possible candidate we've
-                    // seen, or it's better than any previous one.  In either
-                    // case, make note of it.
+                    // Either this is the first possible candidate we've seen,
+                    // or it's better than any previous one.  In either case,
+                    // make note of it.
                     best_so_far = Some((i, cand_vlrix, cand_cost));
                 }
             }
@@ -2805,6 +2805,7 @@ fn find_CFG<'a>(name: &String) -> Result::<CFG<'a>, Vec::<&str>> {
         example_0(), // straight_line
         example_1(), // fill_then_sum
         example_2(), // shellsort
+        badness()
     ];
 
     let mut all_names = Vec::new();
@@ -2955,7 +2956,7 @@ fn example_2<'a>() -> CFG<'a> {
         i_imm(hi, 24), // Highest address of the range to sort
         i_sub(t0, hi, RI_R(lo)),
         i_add(bigN, t0, RI_I(1)),
-        i_imm(hp , 0),
+        i_imm(hp, 0),
         i_goto("L11")
     ]);
 
@@ -3043,6 +3044,48 @@ fn example_2<'a>() -> CFG<'a> {
 
     cfg.block("L62", vec![
         i_print_s("\n"),
+        i_finish()
+    ]);
+
+    cfg.finish();
+    cfg
+}
+
+// Whatever the current badness is
+fn badness<'a>() -> CFG<'a> {
+    let mut cfg = CFG::new("badness", "Lstart");
+
+    let lo = cfg.vreg();
+    let hi = cfg.vreg();
+    let bigN = cfg.vreg();
+    let hp = cfg.vreg();
+    let t0 = cfg.vreg();
+    let zero = cfg.vreg();
+
+    cfg.block("Lstart", vec![
+        i_imm(zero, 0),
+        i_imm(t0,   1),        i_store(zero,0,  t0),
+        i_imm(t0,   100),      i_store(zero,1,  t0),
+        i_imm(lo, 5),
+        i_imm(hi, 24),
+        i_sub(t0, hi, RI_R(lo)),
+        i_add(bigN, t0, RI_I(1)),
+        i_imm(hp, 0),
+        i_goto("L11")
+    ]);
+
+    cfg.block("L11", vec![
+        i_load(t0, hp,0),
+        i_cmp_gt(t0, t0, RI_R(bigN)),
+        i_goto_ctf(t0, "L20", "L11a")
+    ]);
+
+    cfg.block("L11a", vec![
+        i_add(hp, hp, RI_I(1)),
+        i_goto("L11")
+    ]);
+
+    cfg.block("L20", vec![
         i_finish()
     ]);
 
