@@ -1023,7 +1023,7 @@ impl<'a> CFG<'a> {
 // Representing and printing of live range fragments.
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Ord)]
-// There are four "positions" within an instruction that are of interest, and
+// There are four "points" within an instruction that are of interest, and
 // these have a total ordering: R < U < D < S.  They are:
 //
 // * R(eload): this is where any reload insns for the insn itself are
@@ -1038,28 +1038,28 @@ impl<'a> CFG<'a> {
 // * S(pill): this is where any spill insns for the insn itself are considered
 //   to live.
 //
-// Instructions in the incoming CFG may only to exist at the U and D
-// positions, and so their associated live range fragments will only mention
-// the U and D positions.  However, when adding spill code, we need a way to
-// represent live ranges involving the added spill and reload insns, in which
-// case R and S come into play:
+// Instructions in the incoming CFG may only to exist at the U and D points,
+// and so their associated live range fragments will only mention the U and D
+// points.  However, when adding spill code, we need a way to represent live
+// ranges involving the added spill and reload insns, in which case R and S
+// come into play:
 //
 // * A reload for instruction i is considered to be live from i.R to i.U.
 //
 // * A spill for instruction i is considered to be live from i.D to i.S.
-enum InsnPoint { R, U, D, S }
-impl PartialOrd for InsnPoint {
+enum Point { R, U, D, S }
+impl PartialOrd for Point {
     // In short .. R < U < D < S.  This is probably what would be #derive'd
     // anyway, but we need to be sure.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         // This is a bit idiotic, but hey .. hopefully LLVM can turn it into a
         // no-op.
-        fn convert(ipt: &InsnPoint) -> u32 {
-            match ipt {
-                InsnPoint::R => 0,
-                InsnPoint::U => 1,
-                InsnPoint::D => 2,
-                InsnPoint::S => 3,
+        fn convert(pt: &Point) -> u32 {
+            match pt {
+                Point::R => 0,
+                Point::U => 1,
+                Point::D => 2,
+                Point::S => 3,
             }
         }
         convert(self).partial_cmp(&convert(other))
@@ -1067,44 +1067,44 @@ impl PartialOrd for InsnPoint {
 }
 
 
-// See comments below on |Frag| for the meaning of |FragPoint|.
+// See comments below on |Frag| for the meaning of |InsnPoint|.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Ord)]
-struct FragPoint {
+struct InsnPoint {
     iix: InsnIx,
-    ipt: InsnPoint
+    pt: Point
 }
-fn FragPoint_R(iix: InsnIx) -> FragPoint {
-    FragPoint { iix: iix, ipt: InsnPoint::R }
+fn InsnPoint_R(iix: InsnIx) -> InsnPoint {
+    InsnPoint { iix: iix, pt: Point::R }
 }
-fn FragPoint_U(iix: InsnIx) -> FragPoint {
-    FragPoint { iix: iix, ipt: InsnPoint::U }
+fn InsnPoint_U(iix: InsnIx) -> InsnPoint {
+    InsnPoint { iix: iix, pt: Point::U }
 }
-fn FragPoint_D(iix: InsnIx) -> FragPoint {
-    FragPoint { iix: iix, ipt: InsnPoint::D }
+fn InsnPoint_D(iix: InsnIx) -> InsnPoint {
+    InsnPoint { iix: iix, pt: Point::D }
 }
-fn FragPoint_S(iix: InsnIx) -> FragPoint {
-    FragPoint { iix: iix, ipt: InsnPoint::S }
+fn InsnPoint_S(iix: InsnIx) -> InsnPoint {
+    InsnPoint { iix: iix, pt: Point::S }
 }
-impl PartialOrd for FragPoint {
+impl PartialOrd for InsnPoint {
     // Again .. don't assume anything about the #derive'd version.  These have
-    // to be ordered using |iix| as the primary key and |ipt| as the
+    // to be ordered using |iix| as the primary key and |pt| as the
     // secondary.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.iix.partial_cmp(&other.iix) {
             Some(Ordering::Less)    => Some(Ordering::Less),
             Some(Ordering::Greater) => Some(Ordering::Greater),
-            Some(Ordering::Equal)   => self.ipt.partial_cmp(&other.ipt),
-            None => panic!("FragPoint::partial_cmp: fail #1"),
+            Some(Ordering::Equal)   => self.pt.partial_cmp(&other.pt),
+            None => panic!("InsnPoint::partial_cmp: fail #1"),
         }
     }
 }
-impl Show for FragPoint {
+impl Show for InsnPoint {
     fn show(&self) -> String {
-        match self.ipt {
-            InsnPoint::R => self.iix.get().show() + &".r".to_string(),
-            InsnPoint::U => self.iix.get().show() + &".u".to_string(),
-            InsnPoint::D => self.iix.get().show() + &".d".to_string(),
-            InsnPoint::S => self.iix.get().show() + &".s".to_string()
+        match self.pt {
+            Point::R => self.iix.get().show() + &".r".to_string(),
+            Point::U => self.iix.get().show() + &".u".to_string(),
+            Point::D => self.iix.get().show() + &".d".to_string(),
+            Point::S => self.iix.get().show() + &".s".to_string()
         }
     }
 }
@@ -1153,17 +1153,24 @@ impl Show for FragIx {
 //
 // However, merely indicating the start and end instruction numbers isn't
 // enough: we must also include a "Use or Def" indication.  These indicate two
-// different "positions" for each instruction: the Use position, where
+// different "points" within each instruction: the Use position, where
 // incoming registers are read, and the Def position, where outgoing registers
 // are written.  The Use position is considered to come before the Def
-// position.
+// position, as described for |Point| above.
 //
-// The set of positions indicated by {0 .. #insns-1} x {Use point, Def point}
+// When we come to generate spill/restore live ranges, Point::S and Point::R
+// also come into play.  Live ranges (and hence, Frags) that do not perform
+// spills or restores should not use either of Point::S or Point::R.
+//
+// The set of positions denoted by
+//
+//    {0 .. #insns-1} x {Reload point, Use point, Def point, Spill point}
+//
 // is exactly the set of positions that we need to keep track of when mapping
-// live ranges to registers.  This the reason for the type FragPoint.  Note
-// that FragPoint values have a total ordering, at least within a single basic
-// block: the insn number is used as the primary key, and the Use/Def part is
-// the secondary key, with Use < Def.
+// live ranges to registers.  This the reason for the type InsnPoint.  Note
+// that InsnPoint values have a total ordering, at least within a single basic
+// block: the insn number is used as the primary key, and the Point part is
+// the secondary key, with Reload < Def < Use < Spill.
 //
 // Finally, a Frag has a |count| field, which is a u16 indicating how often
 // the associated storage unit (Reg) is mentioned inside the Frag.  It is
@@ -1177,8 +1184,8 @@ impl Show for FragIx {
 struct Frag {
     bix:   BlockIx,
     kind:  FragKind,
-    first: FragPoint,
-    last:  FragPoint,
+    first: InsnPoint,
+    last:  InsnPoint,
     count: u16
 }
 impl Show for Frag {
@@ -1200,15 +1207,15 @@ fn mk_Frag_Local(blocks: &Vec::<Block>, bix: BlockIx,
         debug_assert!(count == 1);
         Frag { bix:   bix,
                kind:  FragKind::Local,
-               first: FragPoint_D(live_after),
-               last:  FragPoint_D(live_after),
+               first: InsnPoint_D(live_after),
+               last:  InsnPoint_D(live_after),
                count: count }
     } else {
         debug_assert!(count >= 2);
         Frag { bix:   bix,
                kind:  FragKind::Local,
-               first: FragPoint_D(live_after),
-               last:  FragPoint_U(dead_after),
+               first: InsnPoint_D(live_after),
+               last:  InsnPoint_U(dead_after),
                count: count }
     }
 }
@@ -1219,8 +1226,8 @@ fn mk_Frag_LiveIn(blocks: &Vec::<Block>,
     debug_assert!(block.containsInsnIx(dead_after));
     Frag { bix:   bix,
            kind:  FragKind::LiveIn,
-           first: FragPoint_U(block.start),
-           last:  FragPoint_U(dead_after),
+           first: InsnPoint_U(block.start),
+           last:  InsnPoint_U(dead_after),
            count: count }
 }
 fn mk_Frag_LiveOut(blocks: &Vec::<Block>,
@@ -1230,8 +1237,8 @@ fn mk_Frag_LiveOut(blocks: &Vec::<Block>,
     debug_assert!(block.containsInsnIx(live_after));
     Frag { bix:   bix,
            kind:  FragKind::LiveOut,
-           first: FragPoint_D(live_after),
-           last:  FragPoint_D(block.start.plus(block.len - 1)),
+           first: InsnPoint_D(live_after),
+           last:  InsnPoint_D(block.start.plus(block.len - 1)),
            count: count }
 }
 fn mk_Frag_Thru(blocks: &Vec::<Block>, bix: BlockIx, count: u16) -> Frag {
@@ -1239,8 +1246,8 @@ fn mk_Frag_Thru(blocks: &Vec::<Block>, bix: BlockIx, count: u16) -> Frag {
     let block = &blocks[bix.get_usize()];
     Frag { bix:   bix,
            kind:  FragKind::Thru,
-           first: FragPoint_U(block.start),
-           last:  FragPoint_D(block.start.plus(block.len - 1)),
+           first: InsnPoint_U(block.start),
+           last:  InsnPoint_D(block.start.plus(block.len - 1)),
            count: count }
 }
 
@@ -1256,8 +1263,8 @@ fn cmpFrags(f1: &Frag, f2: &Frag) -> FCR {
     FCR::UN
 }
 impl Frag {
-    fn contains(&self, fpt: &FragPoint) -> bool {
-        self.first <= *fpt && *fpt <= self.last
+    fn contains(&self, ipt: &InsnPoint) -> bool {
+        self.first <= *ipt && *ipt <= self.last
     }
 }
 
@@ -1515,7 +1522,7 @@ impl<'a> CFG<'a> {
 
 //=============================================================================
 // Vectors of FragIxs, sorted so that the associated Frags are in ascending
-// order (per their FragPoint fields).  
+// order (per their InsnPoint fields).
 
 // The "fragment environment" (sometimes called 'fenv') to which the FragIxs
 // refer, is not stored here.
@@ -2159,7 +2166,7 @@ struct EditListItem {
     // Where should this instruction be added?  Note that if the edit list as
     // a whole specifies multiple items for the same location, then it is
     // assumed that the order in which they execute isn't important.
-    whereto: FragPoint,
+    whereto: InsnPoint,
     // And what's the instruction?  This can only be a spill or a reload.  We
     // store the actual components here so as to avoid hassle with lifetime
     // vars on Insn.
@@ -2465,7 +2472,7 @@ fn run_main(cfg: CFG, nRRegs: usize) {
                     continue;
                 }
                 let iix = mkInsnIx(iixNo);
-                if frag.contains(&FragPoint_U(iix))
+                if frag.contains(&InsnPoint_U(iix))
                    && uce.contains(Reg_V(curr_vlr.reg)) { // FIXME: uce or mod
                     // Stash enough info that we can create a new VLR
                     // and a new edit list entry for the reload.
@@ -2474,7 +2481,7 @@ fn run_main(cfg: CFG, nRRegs: usize) {
                                                       bix: frag.bix };
                     sri_vec.push(new_sri);
                 }
-                if frag.contains(&FragPoint_D(iix))
+                if frag.contains(&InsnPoint_D(iix))
                    && def.contains(Reg_V(curr_vlr.reg)) { // FIXME: def or mod
                     // Stash enough info that we can create a new VLR
                     // and a new edit list entry for the spill.
@@ -2493,10 +2500,10 @@ fn run_main(cfg: CFG, nRRegs: usize) {
             let new_vlr_frag
                 = Frag { bix: sri.bix,
                          kind:  FragKind::Local,
-                         first: if sri.is_reload { FragPoint_R(sri.iix) }
-                                            else { FragPoint_D(sri.iix) },
-                         last:  if sri.is_reload { FragPoint_U(sri.iix) }
-                                            else { FragPoint_S(sri.iix) },
+                         first: if sri.is_reload { InsnPoint_R(sri.iix) }
+                                            else { InsnPoint_D(sri.iix) },
+                         last:  if sri.is_reload { InsnPoint_U(sri.iix) }
+                                            else { InsnPoint_S(sri.iix) },
                          count: 2 };
             frag_env.push(new_vlr_frag);
             let new_vlr_fix = mkFragIx(frag_env.len() as u32 - 1);
@@ -2512,8 +2519,8 @@ fn run_main(cfg: CFG, nRRegs: usize) {
 
             let new_eli
                 = EditListItem { whereto:
-                                     if sri.is_reload { FragPoint_R(sri.iix) }
-                                                 else { FragPoint_S(sri.iix) },
+                                     if sri.is_reload { InsnPoint_R(sri.iix) }
+                                                 else { InsnPoint_S(sri.iix) },
                                  slot: mkSlot(spillSlotCtr),
                                  vreg: curr_vlr_reg,
                                  is_reload: sri.is_reload };
@@ -2572,7 +2579,7 @@ Questions for committed vector:
   (which it already has) ? (difficult)
 
 Edit List
-a vec of pairs (FragPoint, Insn) to be inserted there
+a vec of pairs (InsnPoint, Insn) to be inserted there
 
 SortedMFragVec:
    can another one be added?
@@ -2619,9 +2626,9 @@ fn main() {
 #[test]
 fn test_SortedFragIxs() {
 
-    // Create a Frag and FragIx from two FragPoints.
+    // Create a Frag and FragIx from two InsnPoints.
     fn gen_fix(fenv: &mut Vec::<Frag>,
-               first: FragPoint, last: FragPoint) -> FragIx {
+               first: InsnPoint, last: InsnPoint) -> FragIx {
         assert!(first <= last);
         let res = mkFragIx(fenv.len() as u32);
         let frag = Frag { bix: mkBlockIx(123),
@@ -2643,23 +2650,23 @@ fn test_SortedFragIxs() {
     let iix12 = mkInsnIx(12);
     let iix15 = mkInsnIx(15);
 
-    let fp_3u = FragPoint_U(iix3);
-    let fp_3d = FragPoint_D(iix3);
+    let fp_3u = InsnPoint_U(iix3);
+    let fp_3d = InsnPoint_D(iix3);
 
-    let fp_4u = FragPoint_U(iix4);
+    let fp_4u = InsnPoint_U(iix4);
 
-    let fp_5u = FragPoint_U(iix5);
-    let fp_5d = FragPoint_D(iix5);
+    let fp_5u = InsnPoint_U(iix5);
+    let fp_5d = InsnPoint_D(iix5);
 
-    let fp_6u = FragPoint_U(iix6);
-    let fp_6d = FragPoint_D(iix6);
+    let fp_6u = InsnPoint_U(iix6);
+    let fp_6d = InsnPoint_D(iix6);
 
-    let fp_7u = FragPoint_U(iix7);
-    let fp_7d = FragPoint_D(iix7);
+    let fp_7u = InsnPoint_U(iix7);
+    let fp_7d = InsnPoint_D(iix7);
 
-    let fp_10u = FragPoint_U(iix10);
-    let fp_12u = FragPoint_U(iix12);
-    let fp_15u = FragPoint_U(iix15);
+    let fp_10u = InsnPoint_U(iix10);
+    let fp_12u = InsnPoint_U(iix12);
+    let fp_15u = InsnPoint_U(iix15);
 
     let mut fenv = Vec::<Frag>::new();
 
