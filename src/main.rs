@@ -342,8 +342,9 @@ impl<'a> Insn<'a> {
         }
     }
 
-    // Returns a pair of sets of regs, being those def'd (written) and use'd
-    // (read) by the instruction, respectively.
+    // Returns a pair of sets of regs, (def, use), being those def'd (written)
+    // and use'd (read) by the instruction, respectively.  Note "use" is often
+    // written "uce" since "use" is a Rust reserved word.
     //
     // FIXME for insns that modify a reg (a la Intel): add and return here a
     // third set for registers mentioned in a modify role.  Then fix up all
@@ -2438,11 +2439,11 @@ fn run_main(cfg: CFG, nRRegs: usize) {
                  for each insn I in F.first.iix .. F.last.iix {
                     if I does not mention V
                        continue
-                    if I.use is in F and I mentions V in a Read or Mod role {
+                    if I mentions V in a Read or Mod role {
                        add new LR I.reload -> I.use, vreg V, spillcost Inf
                        add eli @ I.reload V Slot
                     }
-                    if I.def is in F and I mentions V in a Write or Mod role {
+                    if I mentions V in a Write or Mod role {
                        add new LR I.def -> I.spill, vreg V, spillcost Inf
                        add eli @ I.spill V Slot
                     }
@@ -2466,14 +2467,13 @@ fn run_main(cfg: CFG, nRRegs: usize) {
             for iixNo in frag.first.iix.get()
                          .. frag.last.iix.get() + 1/*CHECK THIS*/ {
                 let insn: &Insn = &cfg.insns[iixNo as usize];
-                let (uce, def) = insn.getRegUsage();
-                if !uce.contains(Reg_V(curr_vlr.reg))
-                   && !def.contains(Reg_V(curr_vlr.reg)) {
+                let (regs_d, regs_u) = insn.getRegUsage();
+                if !regs_u.contains(Reg_V(curr_vlr.reg))
+                   && !regs_d.contains(Reg_V(curr_vlr.reg)) {
                     continue;
                 }
                 let iix = mkInsnIx(iixNo);
-                if frag.contains(&InsnPoint_U(iix))
-                   && uce.contains(Reg_V(curr_vlr.reg)) { // FIXME: uce or mod
+                if regs_u.contains(Reg_V(curr_vlr.reg)) { // FIXME: also MOD
                     // Stash enough info that we can create a new VLR
                     // and a new edit list entry for the reload.
                     let new_sri = SpillOrReloadInfo { is_reload: true,
@@ -2481,8 +2481,7 @@ fn run_main(cfg: CFG, nRRegs: usize) {
                                                       bix: frag.bix };
                     sri_vec.push(new_sri);
                 }
-                if frag.contains(&InsnPoint_D(iix))
-                   && def.contains(Reg_V(curr_vlr.reg)) { // FIXME: def or mod
+                if regs_d.contains(Reg_V(curr_vlr.reg)) { // FIXME: also MOD
                     // Stash enough info that we can create a new VLR
                     // and a new edit list entry for the spill.
                     let new_sri = SpillOrReloadInfo { is_reload: false,
