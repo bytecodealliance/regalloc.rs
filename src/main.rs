@@ -299,8 +299,8 @@ enum Insn<'a> {
     BinOp { op: BinOp, dst: Reg, srcL: Reg, srcR: RI },
     Load { dst: Reg, addr: Reg, aoff: u32 },
     Store { addr: Reg, aoff: u32, src: Reg },
-    Spill { dst: Slot, src: Reg },
-    Reload { dst: Reg, src: Slot },
+    Spill { dst: Slot, src: RReg },
+    Reload { dst: RReg, src: Slot },
     Goto { target: Label<'a> },
     GotoCTF { cond: Reg, targetT: Label<'a>, targetF: Label<'a> },
     PrintS { str: &'a str },
@@ -463,6 +463,12 @@ fn i_load<'a>(dst: Reg, addr: Reg, aoff: u32) -> Insn<'a> {
 }
 fn i_store<'a>(addr: Reg, aoff: u32, src: Reg) -> Insn<'a> {
     Insn::Store { addr, aoff, src }
+}
+fn i_spill<'a>(dst: Slot, src: RReg) -> Insn<'a> {
+    Insn::Spill { dst, src }
+}
+fn i_reload<'a>(dst: RReg, src: Slot) -> Insn<'a> {
+    Insn::Reload { dst, src }
 }
 fn i_goto<'a>(target: &'a str) -> Insn<'a> {
     Insn::Goto { target: mkUnresolved(target) }
@@ -1691,13 +1697,34 @@ impl SortedFragIxs {
 // class".  That is, if you rename |reg| at some point inside |sfrags|, then
 // you must rename *all* occurrences of |reg| inside |sfrags|, since otherwise
 // the program will no longer work.
-struct LR<R> {
-    reg:    R,
+
+// RLRs are live ranges for real regs (RRegs).  These don't carry any metrics
+// info since we are not trying to allocate them.  We merely need to work
+// around them.
+
+struct RLR {
+    rreg:   RReg,
+    sfrags: SortedFragIxs
+}
+impl Show for RLR {
+    fn show(&self) -> String {
+        self.rreg.show()
+            + &" ".to_string() + &self.sfrags.show()
+    }
+}
+
+
+// VLRs are live ranges for virtual regs (VRegs).  These do carry metrics info
+// and also the identity of the RReg to which they eventually got allocated.
+
+struct VLR {
+    vreg:   VReg,
+    rreg:   Option<RReg>,
     sfrags: SortedFragIxs,
     size:   u16,
     cost:   Option<f32>,
 }
-impl<R: Show> Show for LR<R> {
+impl Show for VLR {
     fn show(&self) -> String {
         let cost_str: String;
         match self.cost {
@@ -1708,26 +1735,48 @@ impl<R: Show> Show for LR<R> {
                 cost_str = format!("{:<5.2}", c);
             }
         }
-        self.reg.show() + &" s=".to_string() + &self.size.to_string()
+        let mut res = self.vreg.show();
+        if self.rreg.is_some() {
+            res += &"->".to_string();
+            res += &self.rreg.unwrap().show();
+        }
+        res + &" s=".to_string() + &self.size.to_string()
             + &",c=".to_string() + &cost_str
             + &" ".to_string() + &self.sfrags.show()
     }
 }
 
 
-// Indices into vectors of LRs.
+// Indices into vectors of RLRs.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum LRIx {
-    LRIx(u32)
+enum RLRIx {
+    RLRIx(u32)
 }
-fn mkLRIx(n: u32) -> LRIx { LRIx::LRIx(n) }
-impl LRIx {
-    fn get(self) -> u32 { match self { LRIx::LRIx(n) => n } }
+fn mkRLRIx(n: u32) -> RLRIx { RLRIx::RLRIx(n) }
+impl RLRIx {
+    fn get(self) -> u32 { match self { RLRIx::RLRIx(n) => n } }
     fn get_usize(self) -> usize { self.get() as usize }
 }
-impl Show for LRIx {
+impl Show for RLRIx {
     fn show(&self) -> String {
-        "lr".to_string() + &self.get().to_string()
+        "rlr".to_string() + &self.get().to_string()
+    }
+}
+
+
+// Indices into vectors of VLRs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VLRIx {
+    VLRIx(u32)
+}
+fn mkVLRIx(n: u32) -> VLRIx { VLRIx::VLRIx(n) }
+impl VLRIx {
+    fn get(self) -> u32 { match self { VLRIx::VLRIx(n) => n } }
+    fn get_usize(self) -> usize { self.get() as usize }
+}
+impl Show for VLRIx {
+    fn show(&self) -> String {
+        "vlr".to_string() + &self.get().to_string()
     }
 }
 
@@ -1738,10 +1787,10 @@ impl Show for LRIx {
 fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
                frag_env: &Vec::</*FragIx, */Frag>,
                cfg_map: &CFGMap)
-               -> (Vec::<LR<RReg>>, Vec::<LR<VReg>>)
+               -> (Vec::<RLR>, Vec::<VLR>)
 {
-    let mut resR = Vec::<LR<RReg>>::new();
-    let mut resV = Vec::<LR<VReg>>::new();
+    let mut resR = Vec::<RLR>::new();
+    let mut resV = Vec::<VLR>::new();
     for (reg, all_fragIxs_for_reg) in fragIx_vecs_per_reg.iter() {
 
         // BEGIN merge |all_fragIxs_for_reg| entries as much as possible.
@@ -1842,10 +1891,11 @@ fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
             let cost = Some(0.0);
             match *reg {
                 Reg::RReg(rreg) => {
-                    resR.push(LR { reg: rreg, sfrags, size, cost });
+                    resR.push(RLR { rreg: rreg, sfrags });
                 }
                 Reg::VReg(vreg) => {
-                    resV.push(LR { reg: vreg, sfrags, size, cost });
+                    resV.push(VLR { vreg: vreg, rreg: None,
+                                    sfrags, size, cost });
                 }
             }
         }
@@ -1858,29 +1908,30 @@ fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
 
 
 //=============================================================================
-// Finalising of LRs, by setting the |size| and |cost| metrics.
+// Finalising of VLRs, by setting the |size| and |cost| metrics.
 
 // |size|: this is simple.  Simply sum the size of the individual fragments.
 // Note that this must produce a value > 0 for a dead write, hence the "+1".
 //
 // |cost|: try to estimate the number of spills and reloads that would result
-// from spilling the LR, thusly:
+// from spilling the VLR, thusly:
 //    sum, for each frag
-//        # mentions of the Reg in the frag
+//        # mentions of the VReg in the frag
 //            (that's the per-frag, per pass spill cost)
 //        *
 //        the estimated execution count of the containing block
 //
 // all the while being very careful to avoid overflow.
-fn set_LR_metrics<R>(lrs: &mut Vec::<LR<R>>,
-                     fenv: &Vec::<Frag>, blocks: &Vec::<Block>)
+fn set_VLR_metrics(vlrs: &mut Vec::<VLR>,
+                   fenv: &Vec::<Frag>, blocks: &Vec::<Block>)
 {
-    for lr in lrs {
-        debug_assert!(lr.size == 0 && lr.cost == Some(0.0));
+    for vlr in vlrs {
+        debug_assert!(vlr.size == 0 && vlr.cost == Some(0.0));
+        debug_assert!(vlr.rreg.is_none());
         let mut tot_size: u32 = 0;
         let mut tot_cost: f32 = 0.0;
 
-        for fix in &lr.sfrags.fragIxs {
+        for fix in &vlr.sfrags.fragIxs {
             let frag = &fenv[fix.get_usize()];
 
             // Add on the size of this fragment, but make sure we can't
@@ -1900,7 +1951,7 @@ fn set_LR_metrics<R>(lrs: &mut Vec::<LR<R>>,
 
         debug_assert!(tot_cost >= 0.0);
         debug_assert!(tot_size >= 1 && tot_size <= 0xFFFF);
-        lr.size = tot_size as u16;
+        vlr.size = tot_size as u16;
 
         // Divide tot_cost by the total length, so as to increase the apparent
         // spill cost of short LRs.  This is so as to give the advantage to
@@ -1908,7 +1959,7 @@ fn set_LR_metrics<R>(lrs: &mut Vec::<LR<R>>,
         // to me, but hey ..
         tot_cost /= tot_size as f32;
         tot_cost *= 10.0; // Just to make the numbers look a bit nicer
-        lr.cost = Some(tot_cost);
+        vlr.cost = Some(tot_cost);
     }
 }
 
@@ -2053,42 +2104,42 @@ impl SortedFragIxs {
 struct VLRPrioQ {
     // The set of as-yet unallocated VLRs.  These are indexes into a VLR env
     // that is not stored here.  These indices can come and go.
-    unallocated: Vec::<LRIx>
+    unallocated: Vec::<VLRIx>
 }
 impl VLRPrioQ {
-    fn new(vlr_env: &Vec::<LR<VReg>>) -> Self {
+    fn new(vlr_env: &Vec::<VLR>) -> Self {
         let mut res = Self { unallocated: Vec::new() };
         for ix in 0 .. vlr_env.len() {
             assert!(vlr_env[ix].size > 0);
-            res.unallocated.push(mkLRIx(ix as u32));
+            res.unallocated.push(mkVLRIx(ix as u32));
         }
         res
     }
 
     // Add a VLR index.
-    fn add_VLR(&mut self, vlr_ix: LRIx) {
+    fn add_VLR(&mut self, vlr_ix: VLRIx) {
         self.unallocated.push(vlr_ix);
     }
 
     // Look in |unallocated| to locate the entry referencing the VLR with the
     // largest |size| value.  Remove the ref from |unallocated| and return the
     // LRIx for said entry.
-    fn get_longest_VLR(&mut self, vlr_env: &Vec::<LR<VReg>>) -> Option<LRIx> {
+    fn get_longest_VLR(&mut self, vlr_env: &Vec::<VLR>) -> Option<VLRIx> {
         if self.unallocated.len() == 0 {
             return None;
         }
         let mut largestIx   = self.unallocated.len(); /*INVALID*/
         let mut largestSize = 0; /*INVALID*/
         for i in 0 .. self.unallocated.len() {
-            let cand_lrix = self.unallocated[i];
-            let cand_lr = &vlr_env[cand_lrix.get_usize()];
-            if cand_lr.size > largestSize {
-                largestSize = cand_lr.size;
+            let cand_vlrix = self.unallocated[i];
+            let cand_vlr = &vlr_env[cand_vlrix.get_usize()];
+            if cand_vlr.size > largestSize {
+                largestSize = cand_vlr.size;
                 largestIx   = i;
             }
         }
         // We must have found *something* since there was at least one
-        // unallocated LR still available.
+        // unallocated VLR still available.
         debug_assert!(largestIx < self.unallocated.len());
         debug_assert!(largestSize > 0);
         // What we will return
@@ -2100,7 +2151,7 @@ impl VLRPrioQ {
         Some(res)
     }
 
-    fn show_with_envs(&self, vlr_env: &Vec::<LR<VReg>>) -> String {
+    fn show_with_envs(&self, vlr_env: &Vec::<VLR>) -> String {
         let mut res = "".to_string();
         let mut first = true;
         for vlrix in self.unallocated.iter() {
@@ -2125,66 +2176,65 @@ struct PerRReg {
     frags_in_use: SortedFragIxs,
 
     // The VLRs which have been assigned to this RReg, in no particular order.
-    // The union of their frags will be equal to |frags_in_use| only if no
-    // RLRs have been assigned to this RReg.  If RLRs have been assigned to
-    // this RReg then that union will be exactly the subset of |frags_in_use|
-    // not used by the assigned RLRs.
-    vlrs_assigned: Vec::<LRIx>
+    // The union of their frags will be equal to |frags_in_use| only if this
+    // RReg has no RLRs.  If this RReg does have RLRs the aforementioned union
+    // will be exactly the subset of |frags_in_use| not used by the RLRs.
+    vlrixs_assigned: Vec::<VLRIx>
 }
 impl PerRReg {
     fn new(fenv: &Vec::<Frag>) -> Self {
         Self {
             frags_in_use: SortedFragIxs::new(&vec![], fenv),
-            vlrs_assigned: Vec::<LRIx>::new()
+            vlrixs_assigned: Vec::<VLRIx>::new()
         }
     }
 
-    fn add_RLR(&mut self, to_add: &LR<RReg>, fenv: &Vec::<Frag>) {
+    fn add_RLR(&mut self, to_add: &RLR, fenv: &Vec::<Frag>) {
         // Commit this register to |to_add|, irrevocably.  Don't add it to
-        // |vlrs_assigned| since we will never want to later evict the
+        // |vlrixs_assigned| since we will never want to later evict the
         // assignment.
         self.frags_in_use.add(&to_add.sfrags, fenv);
     }
 
-    fn can_add_VLR_without_eviction(&self, to_add: &LR<VReg>,
+    fn can_add_VLR_without_eviction(&self, to_add: &VLR,
                                     fenv: &Vec::<Frag>) -> bool {
         self.frags_in_use.can_add(&to_add.sfrags, fenv)
     }
 
-    fn add_VLR(&mut self, to_add_vlrix: LRIx,
-               vlr_env: &Vec::<LR<VReg>>, fenv: &Vec::<Frag>) {
+    fn add_VLR(&mut self, to_add_vlrix: VLRIx,
+               vlr_env: &Vec::<VLR>, fenv: &Vec::<Frag>) {
         let vlr = &vlr_env[to_add_vlrix.get_usize()];
         self.frags_in_use.add(&vlr.sfrags, fenv);
-        self.vlrs_assigned.push(to_add_vlrix);
+        self.vlrixs_assigned.push(to_add_vlrix);
     }
 
-    fn del_VLR(&mut self, to_del_vlrix: LRIx,
-               vlr_env: &Vec::<LR<VReg>>, fenv: &Vec::<Frag>) {
-        debug_assert!(self.vlrs_assigned.len() > 0);
-        // Remove it from |vlrs_assigned|
+    fn del_VLR(&mut self, to_del_vlrix: VLRIx,
+               vlr_env: &Vec::<VLR>, fenv: &Vec::<Frag>) {
+        debug_assert!(self.vlrixs_assigned.len() > 0);
+        // Remove it from |vlrixs_assigned|
         let mut found = None;
-        for i in 0 .. self.vlrs_assigned.len() {
-            if self.vlrs_assigned[i] == to_del_vlrix {
+        for i in 0 .. self.vlrixs_assigned.len() {
+            if self.vlrixs_assigned[i] == to_del_vlrix {
                 found = Some(i);
                 break;
             }
         }
         if let Some(i) = found {
-            self.vlrs_assigned[i]
-                = self.vlrs_assigned[self.vlrs_assigned.len() - 1];
-            self.vlrs_assigned.remove(self.vlrs_assigned.len() - 1);
+            self.vlrixs_assigned[i]
+                = self.vlrixs_assigned[self.vlrixs_assigned.len() - 1];
+            self.vlrixs_assigned.remove(self.vlrixs_assigned.len() - 1);
         } else {
-            panic!("PerRReg: del_VLR on VLR that isn't in vlrs_assigned");
+            panic!("PerRReg: del_VLR on VLR that isn't in vlrixs_assigned");
         }
         // Remove it from |frags_in_use|
         let vlr = &vlr_env[to_del_vlrix.get_usize()];
         self.frags_in_use.del(&vlr.sfrags, fenv);
     }
 
-    fn find_best_evict_VLR(&self, would_like_to_add: &LR<VReg>,
-                           vlr_env: &Vec::<LR<VReg>>,
+    fn find_best_evict_VLR(&self, would_like_to_add: &VLR,
+                           vlr_env: &Vec::<VLR>,
                            frag_env: &Vec::<Frag>)
-                           -> Option<(LRIx, f32)> {
+                           -> Option<(VLRIx, f32)> {
         // |would_like_to_add| presumably doesn't fit here.  See if eviction
         // of any of the existing LRs would make it allocable, and if so
         // return that LR and its cost.  Valid candidates VLRs must meet
@@ -2196,8 +2246,8 @@ impl PerRReg {
         //   (so as to guarantee forward progress)
         // - removal of it must actually make |would_like_to_add| allocable
         //   (otherwise all this is pointless)
-        let mut best_so_far: Option<(LRIx, f32)> = None;
-        for cand_vlrix in &self.vlrs_assigned {
+        let mut best_so_far: Option<(VLRIx, f32)> = None;
+        for cand_vlrix in &self.vlrixs_assigned {
             let cand_vlr = &vlr_env[cand_vlrix.get_usize()];
             if cand_vlr.cost.is_none() {
                 continue;
@@ -2234,7 +2284,7 @@ impl PerRReg {
         "in_use:   ".to_string() + &self.frags_in_use.show_with_fenv(&fenv)
     }
     fn show2_with_envs(&self, fenv: &Vec::<Frag>) -> String {
-        "assigned: ".to_string() + &self.vlrs_assigned.show()
+        "assigned: ".to_string() + &self.vlrixs_assigned.show()
     }
 }
 
@@ -2243,23 +2293,25 @@ impl PerRReg {
 // Edit list items
 
 struct EditListItem {
-    // Where should this instruction be added?  Note that if the edit list as
-    // a whole specifies multiple items for the same location, then it is
-    // assumed that the order in which they execute isn't important.
-    whereto: InsnPoint,
-    // And what's the instruction?  This can only be a spill or a reload.  We
-    // store the actual components here so as to avoid hassle with lifetime
-    // vars on Insn.
+    // This holds enough information to create a spill or reload instruction,
+    // and also specifies where in the instruction stream it should be added.
+    // Note that if the edit list as a whole specifies multiple items for the
+    // same location, then it is assumed that the order in which they execute
+    // isn't important.
+    //
+    // Some of the relevant info can be found via the VLR link:
+    // * the real reg involved
+    // * the place where the insn should go, since the VLR should only have
+    //   one Frag, and we can deduce the correct location from that.
     slot:      Slot,
-    vreg:      VReg,
+    vlrix:     VLRIx,
     is_reload: bool
 }
 impl Show for EditListItem {
     fn show(&self) -> String {
-        "at ".to_string() + &self.whereto.show() + &" add '".to_string()
+        "for ".to_string() + &self.vlrix.show() + &" add '".to_string()
             + &(if self.is_reload { "reload " } else { "spill " }).to_string()
-            + &self.slot.show() + &" ".to_string() + &self.vreg.show()
-            + &"'".to_string()
+            + &self.slot.show() + &"'".to_string()
     }
 }
 
@@ -2272,7 +2324,7 @@ fn print_RA_state(who: &str,
                   prioQ: &VLRPrioQ, perRReg: &Vec::<PerRReg>,
                   editList: &Vec::<EditListItem>,
                   // The context (environment)
-                  vlr_env: &Vec::<LR<VReg>>, frag_env: &Vec::<Frag>)
+                  vlr_env: &Vec::<VLR>, frag_env: &Vec::<Frag>)
 {
     println!("<<<<====---- RA state at '{}' ----====", who);
     for ix in 0 .. perRReg.len() {
@@ -2382,10 +2434,9 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         println!("frags for {}   {}", reg.show(), fragIxs.show());
     }
 
-    let (mut rlr_env, mut vlr_env)
+    let (rlr_env, mut vlr_env)
         = merge_Frags(&fragIxs_per_reg, &frag_env, &cfg_map);
-    set_LR_metrics(&mut rlr_env, &frag_env, &cfg.blocks); // Pointless!
-    set_LR_metrics(&mut vlr_env, &frag_env, &cfg.blocks); // Pointful!
+    set_VLR_metrics(&mut vlr_env, &frag_env, &cfg.blocks);
 
     println!("");
     n = 0;
@@ -2416,7 +2467,7 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         perRReg.push(PerRReg::new(&frag_env));
     }
     for rlr in &rlr_env {
-        let rregNo = rlr.reg.get_usize();
+        let rregNo = rlr.rreg.get_usize();
         // Ignore RLRs for RRegs outside its allocation domain.  As far as the
         // allocator is concerned, such RRegs simply don't exist.
         if rregNo >= nRRegs {
@@ -2444,7 +2495,7 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     // * split it.  This causes it to disappear but be replaced by two VLRs
     //   which together constitute the original.
     while let Some(curr_vlrix) = prioQ.get_longest_VLR(&vlr_env) {
-        let curr_vlr: &LR<VReg> = &vlr_env[curr_vlrix.get_usize()];
+        let curr_vlr = &vlr_env[curr_vlrix.get_usize()];
 
         println!("-- considering        {}:  {}",
                  curr_vlrix.show(), curr_vlr.show());
@@ -2460,8 +2511,14 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         }
         if let Some(rregNo) = rreg_to_use {
             // Yay!
-            println!("--   direct alloc to  {}", mkRReg(rregNo as u32).show());
+            let rreg = mkRReg(rregNo as u32);
+            println!("--   direct alloc to  {}", rreg.show());
             perRReg[rregNo].add_VLR(curr_vlrix, &vlr_env, &frag_env);
+            debug_assert!(curr_vlr.rreg.is_none());
+            // Directly modify bits of vlr_env.  This means we have to abandon
+            // the immutable borrow for curr_vlr, but that's OK -- we won't
+            // need it again (in this loop iteration).
+            vlr_env[curr_vlrix.get_usize()].rreg = Some(rreg);
             continue;
         }
 
@@ -2470,10 +2527,10 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         // Search all RRegs to find the candidate with the lowest spill
         // weight.  This could be expensive.
 
-        // (rregNo for best cand, its LRIx, and its spill cost)
-        let mut best_so_far: Option<(usize, LRIx, f32)> = None;
+        // (rregNo for best cand, its VLRIx, and its spill cost)
+        let mut best_so_far: Option<(usize, VLRIx, f32)> = None;
         for i in 0 .. nRRegs {
-            let mb_better_cand: Option<(LRIx, f32)>;
+            let mb_better_cand: Option<(VLRIx, f32)>;
             mb_better_cand =
                 perRReg[i].find_best_evict_VLR(&curr_vlr, &vlr_env, &frag_env);
             if let Some((cand_vlrix, cand_cost)) = mb_better_cand {
@@ -2502,13 +2559,24 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
             }
         }
         if let Some((rregNo, vlrix_to_evict, _)) = best_so_far {
+            // Evict ..
             println!("--   evict            {}:  {}",
                      vlrix_to_evict.show(),
                      &vlr_env[vlrix_to_evict.get_usize()].show());
+            debug_assert!(vlrix_to_evict != curr_vlrix);
             perRReg[rregNo].del_VLR(vlrix_to_evict, &vlr_env, &frag_env);
             prioQ.add_VLR(vlrix_to_evict);
-            println!("--   then alloc to    {}", mkRReg(rregNo as u32).show());
+            debug_assert!(vlr_env[vlrix_to_evict.get_usize()].rreg.is_some());
+            // .. and reassign.
+            let rreg = mkRReg(rregNo as u32);
+            println!("--   then alloc to    {}", rreg.show());
             perRReg[rregNo].add_VLR(curr_vlrix, &vlr_env, &frag_env);
+            debug_assert!(curr_vlr.rreg.is_none());
+            // Directly modify bits of vlr_env.  This means we have to abandon
+            // the immutable borrow for curr_vlr, but that's OK -- we won't
+            // need it again again (in this loop iteration).
+            vlr_env[curr_vlrix.get_usize()].rreg = Some(rreg);
+            vlr_env[vlrix_to_evict.get_usize()].rreg = None;
             continue;
         }
 
@@ -2542,7 +2610,7 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
             bix: BlockIx
         }
         let mut sri_vec = Vec::<SpillOrReloadInfo>::new();
-        let curr_vlr_reg = curr_vlr.reg;
+        let curr_vlr_reg = curr_vlr.vreg;
 
         for fix in &curr_vlr.sfrags.fragIxs {
             let frag: &Frag = &frag_env[fix.get_usize()];
@@ -2550,12 +2618,12 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
                          .. frag.last.iix.get() + 1/*CHECK THIS*/ {
                 let insn: &Insn = &cfg.insns[iixNo as usize];
                 let (regs_d, regs_u) = insn.getRegUsage();
-                if !regs_u.contains(Reg_V(curr_vlr.reg))
-                   && !regs_d.contains(Reg_V(curr_vlr.reg)) {
+                if !regs_u.contains(Reg_V(curr_vlr.vreg))
+                   && !regs_d.contains(Reg_V(curr_vlr.vreg)) {
                     continue;
                 }
                 let iix = mkInsnIx(iixNo);
-                if regs_u.contains(Reg_V(curr_vlr.reg)) { // FIXME: also MOD
+                if regs_u.contains(Reg_V(curr_vlr.vreg)) { // FIXME: also MOD
                     // Stash enough info that we can create a new VLR
                     // and a new edit list entry for the reload.
                     let new_sri = SpillOrReloadInfo { is_reload: true,
@@ -2563,7 +2631,7 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
                                                       bix: frag.bix };
                     sri_vec.push(new_sri);
                 }
-                if regs_d.contains(Reg_V(curr_vlr.reg)) { // FIXME: also MOD
+                if regs_d.contains(Reg_V(curr_vlr.vreg)) { // FIXME: also MOD
                     // Stash enough info that we can create a new VLR
                     // and a new edit list entry for the spill.
                     let new_sri = SpillOrReloadInfo { is_reload: false,
@@ -2591,20 +2659,18 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
             println!("--     new Frag       {}  :=  {}",
                      &new_vlr_fix.show(), &new_vlr_frag.show());
             let new_vlr_sfixs = SortedFragIxs::unit(new_vlr_fix, &frag_env);
-            let new_vlr = LR { reg: curr_vlr_reg, sfrags: new_vlr_sfixs,
-                               size: 1, cost: None/*infinity*/ };
-            let new_vlrix = mkLRIx(vlr_env.len() as u32);
+            let new_vlr = VLR { vreg: curr_vlr_reg, rreg: None,
+                                sfrags: new_vlr_sfixs,
+                                size: 1, cost: None/*infinity*/ };
+            let new_vlrix = mkVLRIx(vlr_env.len() as u32);
             println!("--     new VLR        {}  :=  {}",
                      new_vlrix.show(), &new_vlr.show());
             vlr_env.push(new_vlr);
             prioQ.add_VLR(new_vlrix);
 
             let new_eli
-                = EditListItem { whereto:
-                                     if sri.is_reload { InsnPoint_R(sri.iix) }
-                                                 else { InsnPoint_S(sri.iix) },
-                                 slot: mkSlot(spillSlotCtr),
-                                 vreg: curr_vlr_reg,
+                = EditListItem { slot: mkSlot(spillSlotCtr),
+                                 vlrix: new_vlrix,
                                  is_reload: sri.is_reload };
             println!("--     new ELI        {}", &new_eli.show());
             editList.push(new_eli);
@@ -2633,11 +2699,11 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     for i in 0 .. nRRegs {
         let rreg = mkRReg(i as u32);
         // .. look at all the VLRs assigned to it.  And for each such VLR ..
-        for vlrix_assigned in &perRReg[i].vlrs_assigned {
-            let vlr_assigned: &LR<VReg> = &vlr_env[vlrix_assigned.get_usize()];
+        for vlrix_assigned in &perRReg[i].vlrixs_assigned {
+            let vlr_assigned = &vlr_env[vlrix_assigned.get_usize()];
             // All the Frags in |vlr_assigned| require |vlr_assigned.reg| to
             // be mapped to the real reg |i|
-            let vreg = vlr_assigned.reg;
+            let vreg = vlr_assigned.vreg;
             // .. collect up all its constituent Frags.
             for fix in &vlr_assigned.sfrags.fragIxs {
                 let frag = &frag_env[fix.get_usize()];
@@ -2848,15 +2914,43 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         }
     }
 
+    debug_assert!(map.is_empty());
+
     // At this point, we've successfully pushed the vreg->rreg assignments
     // into the original instructions.  But the reload and spill instructions
     // are missing.  To generate them, go through the "edit list", which
     // contains info on both how to generate the instructions, and where to
     // insert them.
-    //for eli in &editList {
-    //}
+    let mut spillsAndReloads = Vec::<(InsnPoint, Insn)>::new();
+    for eli in &editList {
+        let vlr = &vlr_env[eli.vlrix.get_usize()];
+        let vlr_sfrags = &vlr.sfrags;
+        debug_assert!(vlr.sfrags.fragIxs.len() == 1);
+        let vlr_frag = frag_env[ vlr_sfrags.fragIxs[0].get_usize() ];
+        let rreg = vlr.rreg.expect("Gen of spill/reload: reg not assigned?!");
 
-    debug_assert!(map.is_empty());
+        let insn;
+        let whereTo;
+        if eli.is_reload {
+            debug_assert!(vlr_frag.first.pt.isR());
+            debug_assert!(vlr_frag.last.pt.isU());
+            debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
+            insn = i_reload(rreg, eli.slot);
+            whereTo = vlr_frag.first;
+        } else {
+            debug_assert!(vlr_frag.first.pt.isD());
+            debug_assert!(vlr_frag.last.pt.isS());
+            debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
+            insn = i_spill(eli.slot, rreg);
+            whereTo = vlr_frag.last;
+        }
+
+        spillsAndReloads.push((whereTo, insn));
+    }
+
+    for pair in &spillsAndReloads {
+        println!("spill/reload: {}", pair.show());
+    }
 
     cfg.print("After mapping");
     cfg.run("After allocation", nRRegs);
@@ -2944,7 +3038,7 @@ fn main() {
         }
     };
 
-    run_main(cfg, /*nRRegs=*/3+5);
+    run_main(cfg, /*nRRegs=*/3+5-5);
 }
 
 
