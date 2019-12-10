@@ -825,12 +825,12 @@ impl<'a> IState<'a> {
 }
 
 impl<'a> CFG<'a> {
-    fn run(&self, who: &str) {
+    fn run(&self, who: &str, nRRegs: usize) {
         println!("");
         println!("Running stage '{}': CFG: name='{}' entry='{}'",
                  who, self.name, self.entry.show());
 
-        let mut istate = IState::new(&self, /*maxRRegs=*/4, /*maxMem=*/64);
+        let mut istate = IState::new(&self, nRRegs, /*maxMem=*/64);
         let mut done = false;
         while !done {
             done = istate.step();
@@ -2328,7 +2328,7 @@ fn show_commit_tab(commit_tab: &Vec::<SortedFragIxs>,
 fn run_main(mut cfg: CFG, nRRegs: usize) {
     cfg.print("Initial");
 
-    cfg.run("Before allocation");
+    cfg.run("Before allocation", nRRegs);
 
     let (def_sets_per_block, use_sets_per_block) = cfg.calc_def_and_use();
     debug_assert!(def_sets_per_block.len() == cfg.blocks.len());
@@ -2638,13 +2638,9 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
             // All the Frags in |vlr_assigned| require |vlr_assigned.reg| to
             // be mapped to the real reg |i|
             let vreg = vlr_assigned.reg;
-            // .. collect up all its constituent Frags ..
+            // .. collect up all its constituent Frags.
             for fix in &vlr_assigned.sfrags.fragIxs {
-                // .. except not spill or reload ones.
                 let frag = &frag_env[fix.get_usize()];
-                if !frag.first.pt.isUorD() || !frag.last.pt.isUorD() {
-                    continue;
-                }
                 fragMapsByStart.push((*fix, vreg, rreg));
                 fragMapsByEnd.push((*fix, vreg, rreg));
             }
@@ -2671,20 +2667,35 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     let mut cursorEnds = 0;
     let mut numEnds = 0;
 
-    let mut mapD = HashMap::<VReg, RReg>::new();
-    let mut mapU = HashMap::<VReg, RReg>::new();
+    let mut map = HashMap::<VReg, RReg>::new();
 
-    fn showMap(m: & HashMap::<VReg, RReg>) -> String {
+    fn showMap(m: &HashMap::<VReg, RReg>) -> String {
         let mut vec: Vec::<(&VReg, &RReg)> = m.iter().collect();
         vec.sort_by(|p1, p2| p1.0.partial_cmp(p2.0).unwrap());
         vec.show()
     }
 
+    fn is_sane(frag: &Frag) -> bool {
+        if frag.first.pt.isR() {
+            // Reload frag: if the frag starts at some I.r then it must
+            // run to I.u.
+            frag.last.pt.isU() && frag.last.iix == frag.first.iix
+        } else if frag.last.pt.isS() {
+            // Spill frag: if the frag ends at some I.s then it must have
+            // started at I.d.
+            frag.first.pt.isD() && frag.first.iix == frag.last.iix
+        } else {
+            // "Normal" (non-reload) frag.  No normal frag may start at a
+            // .s or a .r point.
+            frag.first.pt.isUorD() && frag.last.pt.isUorD()
+                && frag.first.iix <= frag.last.iix
+        }
+    }
+
     for insnNo in 0u32 .. cfg.insns.len() as u32 {
         println!("");
         println!("QQQQ insn {}: {}", insnNo, cfg.insns[insnNo as usize].show());
-        println!("QQQQ init mapU {}", showMap(&mapU));
-        println!("QQQQ init mapD {}", showMap(&mapD));
+        println!("QQQQ init map {}", showMap(&map));
         // advance [cursorStarts, +numStarts) to the group for insnNo
         while cursorStarts < fragMapsByStart.len()
               && frag_env[ fragMapsByStart[cursorStarts].0.get_usize() ]
@@ -2718,7 +2729,6 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         // order.  And fragMapsByEnd[cursorEnd, +numEnd) are the FragIxs for
         // fragments that end at this instruction.
 
-        // Use cursorStart, numStart
         println!("insn no {}:", insnNo);
         for j in cursorStarts .. cursorStarts + numStarts {
             println!("   s: {} {}",
@@ -2733,81 +2743,100 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
                      .show());
         }
 
-        // Update the U and D maps prior to processing this instruction.
-        for j in cursorEnds .. cursorEnds + numEnds {
-            let frag: &Frag = &frag_env[ fragMapsByEnd[j].0.get_usize() ];
-            // "This frag is not a spill or reload frag"
-            debug_assert!(frag.first.pt.isUorD() && frag.last.pt.isUorD());
-            // "It really ends here, as claimed"
-            debug_assert!(frag.last.iix.get() == insnNo);
-            let vreg: VReg = fragMapsByEnd[j].1;
-            let rreg: RReg = fragMapsByEnd[j].2;
-            if frag.first.pt.isU() { //////// ENDS at U
-                mapD.remove(&vreg);
-            } else { //////// ENDS at D
-                assert!(frag.first.pt.isD());
-                // No change in mapU/mapD
-            }
-        }
+        // Sanity check all frags.  In particular, reload and spill frags are
+        // heavily constrained.  No functional effect.
         for j in cursorStarts .. cursorStarts + numStarts {
-            let frag: &Frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
-            // "This frag is not a spill or reload frag"
-            debug_assert!(frag.first.pt.isUorD() && frag.last.pt.isUorD());
-            // "It really starts here, as claimed"
+            let frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
+            // "It really starts here, as claimed."
             debug_assert!(frag.first.iix.get() == insnNo);
-            let vreg: VReg = fragMapsByStart[j].1;
-            let rreg: RReg = fragMapsByStart[j].2;
-            if frag.first.pt.isU() { //////// STARTS at U
-                mapU.insert(vreg, rreg);
-                mapD.insert(vreg, rreg);
-            } else { //////// STARTS at D
-                assert!(frag.first.pt.isD());
-                mapD.insert(vreg, rreg);
+            debug_assert!(is_sane(&frag));
+        }
+        for j in cursorEnds .. cursorEnds + numEnds {
+            let frag = &frag_env[ fragMapsByEnd[j].0.get_usize() ];
+            // "It really ends here, as claimed."
+            debug_assert!(frag.last.iix.get() == insnNo);
+            debug_assert!(is_sane(frag));
+        }
+
+        // Plan:
+        // Update map for I.r:
+        //   add frags starting at I.r
+        //   no frags should end at I.r (it's a reload insn)
+        // Update map for I.u:
+        //   add frags starting at I.u
+        //   mapU := map
+        //   remove frags ending at I.u
+        // Update map for I.d:
+        //   add frags starting at I.d
+        //   mapD := map
+        //   remove frags ending at I.d
+        // Update map for I.s:
+        //   no frags should start at I.s (it's a spill insn)
+        //   remove frags ending at I.s
+        // apply mapU/mapD to I
+
+        // Update map for I.r:
+        //   add frags starting at I.r
+        //   no frags should end at I.r (it's a reload insn)
+        for j in cursorStarts .. cursorStarts + numStarts {
+            let frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
+            if frag.first.pt.isR() { //////// STARTS at I.r
+                map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
             }
         }
 
-        println!("QQQQ preI mapU {}", showMap(&mapU));
-        println!("QQQQ preI mapD {}", showMap(&mapD));
+        // Update map for I.u:
+        //   add frags starting at I.u
+        //   mapU := map
+        //   remove frags ending at I.u
+        for j in cursorStarts .. cursorStarts + numStarts {
+            let frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
+            if frag.first.pt.isU() { //////// STARTS at I.u
+                map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
+            }
+        }
+        let mapU = map.clone();
+        for j in cursorEnds .. cursorEnds + numEnds {
+            let frag = &frag_env[ fragMapsByEnd[j].0.get_usize() ];
+            if frag.last.pt.isU() { //////// ENDS at I.U
+                map.remove(&fragMapsByEnd[j].1);
+            }
+        }
+
+        // Update map for I.d:
+        //   add frags starting at I.d
+        //   mapD := map
+        //   remove frags ending at I.d
+        for j in cursorStarts .. cursorStarts + numStarts {
+            let frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
+            if frag.first.pt.isD() { //////// STARTS at I.d
+                map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
+            }
+        }
+        let mapD = map.clone();
+        for j in cursorEnds .. cursorEnds + numEnds {
+            let frag = &frag_env[ fragMapsByEnd[j].0.get_usize() ];
+            if frag.last.pt.isD() { //////// ENDS at I.d
+                map.remove(&fragMapsByEnd[j].1);
+            }
+        }
+
+        // Update map for I.s:
+        //   no frags should start at I.s (it's a spill insn)
+        //   remove frags ending at I.s
+        for j in cursorEnds .. cursorEnds + numEnds {
+            let frag = &frag_env[ fragMapsByEnd[j].0.get_usize() ];
+            if frag.last.pt.isS() { //////// ENDS at I.s
+                map.remove(&fragMapsByEnd[j].1);
+            }
+        }
+
+        println!("QQQQ mapU {}", showMap(&mapU));
+        println!("QQQQ mapD {}", showMap(&mapD));
 
         // Finally, we have mapU/mapD set correctly for this instruction.
         // Apply it.
         cfg.insns[insnNo as usize].mapRegs_D_U(&mapD, &mapU);
-
-        // Update the U and D maps after processing this instruction.
-        for j in cursorEnds .. cursorEnds + numEnds {
-            let frag: &Frag = &frag_env[ fragMapsByEnd[j].0.get_usize() ];
-            // "This frag is not a spill or reload frag"
-            debug_assert!(frag.first.pt.isUorD() && frag.last.pt.isUorD());
-            // "It really ends here, as claimed"
-            debug_assert!(frag.last.iix.get() == insnNo);
-            let vreg: VReg = fragMapsByEnd[j].1;
-            let rreg: RReg = fragMapsByEnd[j].2;
-            if frag.first.pt.isU() { //////// ENDS at U
-                mapU.remove(&vreg);
-            } else { //////// ENDS at D
-                assert!(frag.first.pt.isD());
-                mapU.remove(&vreg);
-                mapD.remove(&vreg);
-            }
-        }
-        for j in cursorStarts .. cursorStarts + numStarts {
-            let frag: &Frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
-            // "This frag is not a spill or reload frag"
-            debug_assert!(frag.first.pt.isUorD() && frag.last.pt.isUorD());
-            // "It really starts here, as claimed"
-            debug_assert!(frag.first.iix.get() == insnNo);
-            let vreg: VReg = fragMapsByStart[j].1;
-            let rreg: RReg = fragMapsByStart[j].2;
-            if frag.first.pt.isU() { //////// STARTS at U
-                // No change in mapU/mapD
-            } else { //////// STARTS at D
-                assert!(frag.first.pt.isD());
-                mapU.insert(vreg, rreg);
-            }
-        }
-
-        println!("QQQQ post mapU {}", showMap(&mapU));
-        println!("QQQQ post mapD {}", showMap(&mapD));
 
         // Update cursorStarts and cursorEnds for the next iteration
         cursorStarts += numStarts;
@@ -2815,15 +2844,22 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
 
         if cfg.blocks.iter().any(|b| b.start.get() + b.len - 1 == insnNo) {
             println!("Block end");
-            debug_assert!(mapU.is_empty());
-            debug_assert!(mapD.is_empty());
+            debug_assert!(map.is_empty());
         }
     }
 
-    debug_assert!(mapU.is_empty());
-    debug_assert!(mapD.is_empty());
+    // At this point, we've successfully pushed the vreg->rreg assignments
+    // into the original instructions.  But the reload and spill instructions
+    // are missing.  To generate them, go through the "edit list", which
+    // contains info on both how to generate the instructions, and where to
+    // insert them.
+    //for eli in &editList {
+    //}
+
+    debug_assert!(map.is_empty());
 
     cfg.print("After mapping");
+    cfg.run("After allocation", nRRegs);
 
     println!("");
 }
