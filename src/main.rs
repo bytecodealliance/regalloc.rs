@@ -2177,9 +2177,10 @@ struct EditListItem {
 }
 impl Show for EditListItem {
     fn show(&self) -> String {
-        "eli   at ".to_string() + &self.whereto.show() + &" add ".to_string()
-            + &(if self.is_reload { "reload " } else { "spill  " }).to_string()
+        "at ".to_string() + &self.whereto.show() + &" add '".to_string()
+            + &(if self.is_reload { "reload " } else { "spill " }).to_string()
             + &self.slot.show() + &" ".to_string() + &self.vreg.show()
+            + &"'".to_string()
     }
 }
 
@@ -2366,7 +2367,8 @@ fn run_main(cfg: CFG, nRRegs: usize) {
     while let Some(curr_vlrix) = prioQ.get_longest_VLR(&vlr_env) {
         let curr_vlr: &LR<VReg> = &vlr_env[curr_vlrix.get_usize()];
 
-        println!("-- considering        {}", curr_vlr.show());
+        println!("-- considering        {}:  {}",
+                 curr_vlrix.show(), curr_vlr.show());
 
         // See if we can find a RReg to which we can assign this VLR without
         // evicting any previous assignment.
@@ -2421,7 +2423,8 @@ fn run_main(cfg: CFG, nRRegs: usize) {
             }
         }
         if let Some((rregNo, vlrix_to_evict, _)) = best_so_far {
-            println!("--   evict            {}",
+            println!("--   evict            {}:  {}",
+                     vlrix_to_evict.show(),
                      &vlr_env[vlrix_to_evict.get_usize()].show());
             perRReg[rregNo].del_VLR(vlrix_to_evict, &vlr_env, &frag_env);
             prioQ.add_VLR(vlrix_to_evict);
@@ -2504,16 +2507,17 @@ fn run_main(cfg: CFG, nRRegs: usize) {
                          last:  if sri.is_reload { InsnPoint_U(sri.iix) }
                                             else { InsnPoint_S(sri.iix) },
                          count: 2 };
+            let new_vlr_fix = mkFragIx(frag_env.len() as u32);
             frag_env.push(new_vlr_frag);
-            let new_vlr_fix = mkFragIx(frag_env.len() as u32 - 1);
-            println!("--     new Frag       {} {}",
+            println!("--     new Frag       {}  :=  {}",
                      &new_vlr_fix.show(), &new_vlr_frag.show());
             let new_vlr_sfixs = SortedFragIxs::unit(new_vlr_fix, &frag_env);
             let new_vlr = LR { reg: curr_vlr_reg, sfrags: new_vlr_sfixs,
                                size: 1, cost: None/*infinity*/ };
-            println!("--     new VLR        {}", &new_vlr.show());
+            let new_vlrix = mkLRIx(vlr_env.len() as u32);
+            println!("--     new VLR        {}  :=  {}",
+                     new_vlrix.show(), &new_vlr.show());
             vlr_env.push(new_vlr);
-            let new_vlrix = mkLRIx(vlr_env.len() as u32 - 1);
             prioQ.add_VLR(new_vlrix);
 
             let new_eli
@@ -2523,7 +2527,7 @@ fn run_main(cfg: CFG, nRRegs: usize) {
                                  slot: mkSlot(spillSlotCtr),
                                  vreg: curr_vlr_reg,
                                  is_reload: sri.is_reload };
-            println!("--     new eli        {}", &new_eli.show());
+            println!("--     new ELI        {}", &new_eli.show());
             editList.push(new_eli);
         }
 
