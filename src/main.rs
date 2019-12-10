@@ -20,6 +20,21 @@ use std::cmp::Ordering;
 trait Show {
     fn show(&self) -> String;
 }
+impl Show for bool {
+    fn show(&self) -> String {
+        (if *self { "True" } else { "False" }).to_string()
+    }
+}
+impl Show for u32 {
+    fn show(&self) -> String {
+        self.to_string()
+    }
+}
+impl<T: Show> Show for &T {
+    fn show(&self) -> String {
+        (*self).show()
+    }
+}
 impl<T: Show> Show for Vec<T> {
     fn show(&self) -> String {
         let mut first = true;
@@ -34,14 +49,10 @@ impl<T: Show> Show for Vec<T> {
         res + &"]".to_string()
     }
 }
-impl Show for u32 {
+impl<A: Show, B: Show> Show for (A, B) {
     fn show(&self) -> String {
-        self.to_string()
-    }
-}
-impl Show for bool {
-    fn show(&self) -> String {
-        (if *self { "True" } else { "False" }).to_string()
+        "(".to_string() + &self.0.show() + &",".to_string() + &self.1.show()
+            + &")".to_string()
     }
 }
 impl<A: Show, B: Show, C: Show> Show for (A, B, C) {
@@ -2663,7 +2674,17 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     let mut mapD = HashMap::<VReg, RReg>::new();
     let mut mapU = HashMap::<VReg, RReg>::new();
 
+    fn showMap(m: & HashMap::<VReg, RReg>) -> String {
+        let mut vec: Vec::<(&VReg, &RReg)> = m.iter().collect();
+        vec.sort_by(|p1, p2| p1.0.partial_cmp(p2.0).unwrap());
+        vec.show()
+    }
+
     for insnNo in 0u32 .. cfg.insns.len() as u32 {
+        println!("");
+        println!("QQQQ insn {}: {}", insnNo, cfg.insns[insnNo as usize].show());
+        println!("QQQQ init mapU {}", showMap(&mapU));
+        println!("QQQQ init mapD {}", showMap(&mapD));
         // advance [cursorStarts, +numStarts) to the group for insnNo
         while cursorStarts < fragMapsByStart.len()
               && frag_env[ fragMapsByStart[cursorStarts].0.get_usize() ]
@@ -2700,33 +2721,19 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         // Use cursorStart, numStart
         println!("insn no {}:", insnNo);
         for j in cursorStarts .. cursorStarts + numStarts {
-            println!("   s: {}",
+            println!("   s: {} {}",
+                     (fragMapsByStart[j].1, fragMapsByStart[j].2).show(),
                      frag_env[ fragMapsByStart[j].0.get_usize() ]
                      .show());
         }
         for j in cursorEnds .. cursorEnds + numEnds {
-            println!("   e: {}",
+            println!("   e: {} {}",
+                     (fragMapsByEnd[j].1, fragMapsByEnd[j].2).show(),
                      frag_env[ fragMapsByEnd[j].0.get_usize() ]
                      .show());
         }
 
         // Update the U and D maps prior to processing this instruction.
-        for j in cursorStarts .. cursorStarts + numStarts {
-            let frag: &Frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
-            // "This frag is not a spill or reload frag"
-            debug_assert!(frag.first.pt.isUorD() && frag.last.pt.isUorD());
-            // "It really starts here, as claimed"
-            debug_assert!(frag.first.iix.get() == insnNo);
-            let vreg: VReg = fragMapsByStart[j].1;
-            let rreg: RReg = fragMapsByStart[j].2;
-            if frag.first.pt.isU() {
-                mapU.insert(vreg, rreg);
-                mapD.insert(vreg, rreg);
-            } else {
-                assert!(frag.first.pt.isD());
-                mapD.insert(vreg, rreg);
-            }
-        }
         for j in cursorEnds .. cursorEnds + numEnds {
             let frag: &Frag = &frag_env[ fragMapsByEnd[j].0.get_usize() ];
             // "This frag is not a spill or reload frag"
@@ -2735,34 +2742,38 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
             debug_assert!(frag.last.iix.get() == insnNo);
             let vreg: VReg = fragMapsByEnd[j].1;
             let rreg: RReg = fragMapsByEnd[j].2;
-            if frag.first.pt.isU() {
+            if frag.first.pt.isU() { //////// ENDS at U
                 mapD.remove(&vreg);
-            } else {
+            } else { //////// ENDS at D
                 assert!(frag.first.pt.isD());
                 // No change in mapU/mapD
             }
         }
+        for j in cursorStarts .. cursorStarts + numStarts {
+            let frag: &Frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
+            // "This frag is not a spill or reload frag"
+            debug_assert!(frag.first.pt.isUorD() && frag.last.pt.isUorD());
+            // "It really starts here, as claimed"
+            debug_assert!(frag.first.iix.get() == insnNo);
+            let vreg: VReg = fragMapsByStart[j].1;
+            let rreg: RReg = fragMapsByStart[j].2;
+            if frag.first.pt.isU() { //////// STARTS at U
+                mapU.insert(vreg, rreg);
+                mapD.insert(vreg, rreg);
+            } else { //////// STARTS at D
+                assert!(frag.first.pt.isD());
+                mapD.insert(vreg, rreg);
+            }
+        }
+
+        println!("QQQQ preI mapU {}", showMap(&mapU));
+        println!("QQQQ preI mapD {}", showMap(&mapD));
 
         // Finally, we have mapU/mapD set correctly for this instruction.
         // Apply it.
         cfg.insns[insnNo as usize].mapRegs_D_U(&mapD, &mapU);
 
         // Update the U and D maps after processing this instruction.
-        for j in cursorStarts .. cursorStarts + numStarts {
-            let frag: &Frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
-            // "This frag is not a spill or reload frag"
-            debug_assert!(frag.first.pt.isUorD() && frag.last.pt.isUorD());
-            // "It really starts here, as claimed"
-            debug_assert!(frag.first.iix.get() == insnNo);
-            let vreg: VReg = fragMapsByStart[j].1;
-            let rreg: RReg = fragMapsByStart[j].2;
-            if frag.first.pt.isU() {
-                // No change in mapU/mapD
-            } else {
-                assert!(frag.first.pt.isD());
-                mapU.insert(vreg, rreg);
-            }
-        }
         for j in cursorEnds .. cursorEnds + numEnds {
             let frag: &Frag = &frag_env[ fragMapsByEnd[j].0.get_usize() ];
             // "This frag is not a spill or reload frag"
@@ -2771,18 +2782,42 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
             debug_assert!(frag.last.iix.get() == insnNo);
             let vreg: VReg = fragMapsByEnd[j].1;
             let rreg: RReg = fragMapsByEnd[j].2;
-            if frag.first.pt.isU() {
+            if frag.first.pt.isU() { //////// ENDS at U
                 mapU.remove(&vreg);
-            } else {
+            } else { //////// ENDS at D
                 assert!(frag.first.pt.isD());
                 mapU.remove(&vreg);
                 mapD.remove(&vreg);
             }
         }
+        for j in cursorStarts .. cursorStarts + numStarts {
+            let frag: &Frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
+            // "This frag is not a spill or reload frag"
+            debug_assert!(frag.first.pt.isUorD() && frag.last.pt.isUorD());
+            // "It really starts here, as claimed"
+            debug_assert!(frag.first.iix.get() == insnNo);
+            let vreg: VReg = fragMapsByStart[j].1;
+            let rreg: RReg = fragMapsByStart[j].2;
+            if frag.first.pt.isU() { //////// STARTS at U
+                // No change in mapU/mapD
+            } else { //////// STARTS at D
+                assert!(frag.first.pt.isD());
+                mapU.insert(vreg, rreg);
+            }
+        }
+
+        println!("QQQQ post mapU {}", showMap(&mapU));
+        println!("QQQQ post mapD {}", showMap(&mapD));
 
         // Update cursorStarts and cursorEnds for the next iteration
         cursorStarts += numStarts;
         cursorEnds += numEnds;
+
+        if cfg.blocks.iter().any(|b| b.start.get() + b.len - 1 == insnNo) {
+            println!("Block end");
+            debug_assert!(mapU.is_empty());
+            debug_assert!(mapD.is_empty());
+        }
     }
 
     debug_assert!(mapU.is_empty());
@@ -2873,7 +2908,7 @@ fn main() {
         }
     };
 
-    run_main(cfg, /*nRRegs=*/3);
+    run_main(cfg, /*nRRegs=*/3+5);
 }
 
 
