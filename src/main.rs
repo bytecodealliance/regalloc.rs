@@ -557,13 +557,22 @@ fn resolveInsn<'a, F>(insn: &mut Insn<'a>, lookup: F)
 // Definition of Block and CFG, and printing thereof.
 
 struct Block<'a> {
-    name: &'a str,
+    name:  &'a str,
     start: InsnIx,
-    len: u32,
-    eef: u16
+    len:   u32,
+    eef:   u16
 }
 fn mkBlock<'a>(name: &'a str, start: InsnIx, len: u32) -> Block<'a> {
     Block { name: name, start: start, len: len, eef: 1 }
+}
+impl<'a> Clone for Block<'a> {
+    // This is only needed for debug printing.
+    fn clone(&self) -> Self {
+        Block { name:  self.name.clone(),
+                start: self.start,
+                len:   self.len,
+                eef:   self.eef }
+    }
 }
 impl<'a> Block<'a> {
     fn containsInsnIx(&self, iix: InsnIx) -> bool {
@@ -583,6 +592,16 @@ struct CFG<'a> {
     // fields.  Code that wants to traverse the blocks in some other order
     // must represent the ordering some other way; rearranging CFG::blocks is
     // not allowed.
+}
+impl<'a> Clone for CFG<'a> {
+    // This is only needed for debug printing.
+    fn clone(&self) -> Self {
+        CFG { name:   self.name.clone(),
+              entry:  self.entry.clone(),
+              nVRegs: self.nVRegs,
+              insns:  self.insns.clone(),
+              blocks: self.blocks.clone() }
+    }
 }
 
 // Find a block Ix for a block name
@@ -689,24 +708,30 @@ impl<'a> CFG<'a> {
 // The interpreter
 
 struct IState<'a> {
-    cfg:   &'a CFG<'a>,
-    nia:   InsnIx, // Program counter
-    vregs: Vec::<Option::<u32>>, // unlimited
-    rregs: Vec::<Option::<u32>>, // [0 .. maxRRegs)
-    mem:   Vec::<Option::<u32>>, // [0 .. maxMem)
-    slots: Vec::<Option::<u32>>  // [0..] Spill slots, no upper limit
+    cfg:       &'a CFG<'a>,
+    nia:       InsnIx, // Program counter ("next instruction address")
+    vregs:     Vec::<Option::<u32>>, // unlimited
+    rregs:     Vec::<Option::<u32>>, // [0 .. maxRRegs)
+    mem:       Vec::<Option::<u32>>, // [0 .. maxMem)
+    slots:     Vec::<Option::<u32>>, // [0..] Spill slots, no upper limit
+    n_insns:   usize,  // Stats: number of insns executed
+    n_spills:  usize,  // Stats: .. of which are spills
+    n_reloads: usize   // Stats: .. of which are reloads
 }
 
 impl<'a> IState<'a> {
     fn new(cfg: &'a CFG<'a>, maxRRegs: usize, maxMem: usize) -> Self {
         let mut state =
             IState {
-                cfg:      cfg,
-                nia:      cfg.blocks[cfg.entry.getBlockIx().get_usize()].start,
-                vregs:    Vec::new(),
-                rregs:    Vec::new(),
-                mem:      Vec::new(),
-                slots:    Vec::new()
+                cfg:       cfg,
+                nia:       cfg.blocks[cfg.entry.getBlockIx().get_usize()].start,
+                vregs:     Vec::new(),
+                rregs:     Vec::new(),
+                mem:       Vec::new(),
+                slots:     Vec::new(),
+                n_insns:   0,
+                n_spills:  0,
+                n_reloads: 0
             };
         state.rregs.resize(maxRRegs, None);
         state.mem.resize(maxMem, None);
@@ -828,6 +853,7 @@ impl<'a> IState<'a> {
 
         let iix = self.nia.get();
         self.nia = mkInsnIx(iix + 1);
+        self.n_insns += 1;
 
         let insn = &self.cfg.insns[iix as usize];
         match insn {
@@ -852,10 +878,12 @@ impl<'a> IState<'a> {
             Insn::Spill { dst, src } => {
                 let src_v = self.getRReg(*src);
                 self.setSlot(*dst, src_v);
+                self.n_spills += 1;
             },
             Insn::Reload { dst, src } => {
                 let src_v = self.getSlot(*src);
                 self.setRReg(*dst, src_v);
+                self.n_reloads += 1;
             },
             Insn::Goto { target } =>
                 self.nia = self.cfg.blocks[target.getBlockIx().get_usize()]
@@ -893,7 +921,8 @@ impl<'a> CFG<'a> {
             done = istate.step();
         }
 
-        println!("Running stage '{}': done.", who);
+        println!("Running stage '{}': done.  {} insns, {} spills, {} reloads",
+                 who, istate.n_insns, istate.n_spills, istate.n_reloads);
     }
 }
 
@@ -2171,6 +2200,10 @@ impl VLRPrioQ {
         res
     }
 
+    fn is_empty(&self) -> bool {
+        self.unallocated.is_empty()
+    }
+    
     // Add a VLR index.
     fn add_VLR(&mut self, vlr_ix: VLRIx) {
         self.unallocated.push(vlr_ix);
@@ -2383,12 +2416,15 @@ fn print_RA_state(who: &str,
 {
     println!("<<<<====---- RA state at '{}' ----====", who);
     for ix in 0 .. perRReg.len() {
-        println!("\n{:<3}   {}\n      {}",
+        println!("{:<3}   {}\n      {}",
                  mkRReg(ix as u32).show(),
                  &perRReg[ix].show1_with_envs(&frag_env),
                  &perRReg[ix].show2_with_envs(&frag_env));
+        println!("");
     }
-    print!("\n{}\n", prioQ.show_with_envs(&vlr_env));
+    if !prioQ.is_empty() {
+        println!("{}", prioQ.show_with_envs(&vlr_env));
+    }
     for eli in editList {
         println!("{}", eli.show());
     }
@@ -2433,6 +2469,10 @@ fn show_commit_tab(commit_tab: &Vec::<SortedFragIxs>,
 */
 
 fn run_main(mut cfg: CFG, nRRegs: usize) {
+
+    // Just so we can run it later.  Not needed for actual allocation.
+    let original_cfg = cfg.clone();
+
     cfg.print("Initial");
 
     cfg.run("Before allocation", nRRegs);
@@ -2496,14 +2536,14 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     println!("");
     n = 0;
     for lr in &rlr_env {
-        println!("rreg live range {}   {}", n, lr.show());
+        println!("{:<4}   {}", mkRLRIx(n).show(), lr.show());
         n += 1;
     }
 
     println!("");
     n = 0;
     for lr in &vlr_env {
-        println!("vreg live range {}   {}", n, lr.show());
+        println!("{:<4}   {}", mkVLRIx(n).show(), lr.show());
         n += 1;
     }
 
@@ -2549,6 +2589,8 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     //
     // * split it.  This causes it to disappear but be replaced by two VLRs
     //   which together constitute the original.
+    println!("");
+    println!("-- MAIN ALLOCATION LOOP:");
     while let Some(curr_vlrix) = prioQ.get_longest_VLR(&vlr_env) {
         let curr_vlr = &vlr_env[curr_vlrix.get_usize()];
 
@@ -2736,6 +2778,7 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         spillSlotCtr += 1;
     }
 
+    println!("");
     print_RA_state("Final", &prioQ, &perRReg, &editList, &vlr_env, &frag_env);
 
     // -------- Edit the instruction stream --------
@@ -2782,8 +2825,8 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
             .partial_cmp(&frag_env[fixNo2.get_usize()].last.iix)
             .unwrap());
 
-    println!("Firsts: {}", fragMapsByStart.show());
-    println!("Lasts:  {}", fragMapsByEnd.show());
+    //println!("Firsts: {}", fragMapsByStart.show());
+    //println!("Lasts:  {}", fragMapsByEnd.show());
 
     let mut cursorStarts = 0;
     let mut numStarts = 0;
@@ -2816,9 +2859,10 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     }
 
     for insnNo in 0u32 .. cfg.insns.len() as u32 {
-        println!("");
-        println!("QQQQ insn {}: {}", insnNo, cfg.insns[insnNo as usize].show());
-        println!("QQQQ init map {}", showMap(&map));
+        //println!("");
+        //println!("QQQQ insn {}: {}",
+        //         insnNo, cfg.insns[insnNo as usize].show());
+        //println!("QQQQ init map {}", showMap(&map));
         // advance [cursorStarts, +numStarts) to the group for insnNo
         while cursorStarts < fragMapsByStart.len()
               && frag_env[ fragMapsByStart[cursorStarts].0.get_usize() ]
@@ -2852,19 +2896,19 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         // order.  And fragMapsByEnd[cursorEnd, +numEnd) are the FragIxs for
         // fragments that end at this instruction.
 
-        println!("insn no {}:", insnNo);
-        for j in cursorStarts .. cursorStarts + numStarts {
-            println!("   s: {} {}",
-                     (fragMapsByStart[j].1, fragMapsByStart[j].2).show(),
-                     frag_env[ fragMapsByStart[j].0.get_usize() ]
-                     .show());
-        }
-        for j in cursorEnds .. cursorEnds + numEnds {
-            println!("   e: {} {}",
-                     (fragMapsByEnd[j].1, fragMapsByEnd[j].2).show(),
-                     frag_env[ fragMapsByEnd[j].0.get_usize() ]
-                     .show());
-        }
+        //println!("insn no {}:", insnNo);
+        //for j in cursorStarts .. cursorStarts + numStarts {
+        //    println!("   s: {} {}",
+        //             (fragMapsByStart[j].1, fragMapsByStart[j].2).show(),
+        //             frag_env[ fragMapsByStart[j].0.get_usize() ]
+        //             .show());
+        //}
+        //for j in cursorEnds .. cursorEnds + numEnds {
+        //    println!("   e: {} {}",
+        //             (fragMapsByEnd[j].1, fragMapsByEnd[j].2).show(),
+        //             frag_env[ fragMapsByEnd[j].0.get_usize() ]
+        //             .show());
+        //}
 
         // Sanity check all frags.  In particular, reload and spill frags are
         // heavily constrained.  No functional effect.
@@ -2954,8 +2998,8 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
             }
         }
 
-        println!("QQQQ mapU {}", showMap(&mapU));
-        println!("QQQQ mapD {}", showMap(&mapD));
+        //println!("QQQQ mapU {}", showMap(&mapU));
+        //println!("QQQQ mapD {}", showMap(&mapD));
 
         // Finally, we have mapU/mapD set correctly for this instruction.
         // Apply it.
@@ -2966,7 +3010,7 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         cursorEnds += numEnds;
 
         if cfg.blocks.iter().any(|b| b.start.get() + b.len - 1 == insnNo) {
-            println!("Block end");
+            //println!("Block end");
             debug_assert!(map.is_empty());
         }
     }
@@ -3005,15 +3049,15 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         spillsAndReloads.push((whereTo, insn));
     }
 
-    for pair in &spillsAndReloads {
-        println!("spill/reload: {}", pair.show());
-    }
+    //for pair in &spillsAndReloads {
+    //    println!("spill/reload: {}", pair.show());
+    //}
 
     // Construct the final code by interleaving the mapped code with the
     // spills and reloads.  To do that requires having the latter sorted by
     // InsnPoint.
     //
-    // We also need to examine update CFG::blocks.  This is assumed to
+    // We also need to examine and update CFG::blocks.  This is assumed to
     // arranged in ascending order of the Block::start fields.
 
     spillsAndReloads.sort_unstable_by(
@@ -3028,7 +3072,8 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     for iixNo in 0 .. cfg.insns.len() {
         let iix = mkInsnIx(iixNo as u32);
 
-        // Are we starting a new block?
+        // Is |iixNo| the first instruction in a block?  Meaning, are we
+        // starting a new block?
         debug_assert!(curB < cfg.blocks.len());
         if cfg.blocks[curB].start == iix {
             let oldBlock = &cfg.blocks[curB];
@@ -3054,9 +3099,9 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
             curSnR += 1;
         }
 
+        // Is |iixNo| the last instruction in a block?
         if iixNo + 1 == cfg.blocks[curB].start.get_usize()
                         + cfg.blocks[curB].len as usize {
-            println!("END OF BLOCK");
             debug_assert!(curB < cfg.blocks.len());
             debug_assert!(newBlocks.len() > 0);
             debug_assert!(curB == newBlocks.len() - 1);
@@ -3081,6 +3126,8 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     // different :-/
 
     cfg.print("After allocation");
+
+    original_cfg.run("Before allocation", nRRegs);
     cfg.run("After allocation", nRRegs);
 
     println!("");
