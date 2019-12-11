@@ -3,6 +3,59 @@
 #![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
+/* TODOs, 11 Dec 2019
+
+MVP (without these, the implementation is useless in practice):
+
+- estimate block execution counts from loop depth
+
+- add a spill-slot allocation mechanism, even if it is pretty crude
+
+- add support for insns which modify regs (a la x86)
+
+- support multiple register classes
+
+Post-MVP:
+
+- Live Range Splitting
+
+Tidyings:
+
+- Cause allocation to fail if LiveIn(start) is not empty.
+
+- Cause allocation to fail if we have to spill and already-spilled VLR
+  (this means we've run out of registers)
+
+- Split fn |run_main| into pieces; it is huge.  And tidy up the RA
+  state components a bit.
+
+- (minor) make Set iterable; remove uses of to_vec() when iterating
+
+- Is it really necessary to have both SpillOrReloadInfo and EditListItem?
+  Can we get away with just one?
+
+- Use IndexedVec instead of Vec?
+
+Performance:
+
+- Collect typical use data for each Set<T> instance and replace with a
+  suitable optimised replacement.
+
+- Ditto HashMap (if we have to have it at all)
+
+- Replace SortedFragIxs with something more efficient
+
+- Currently we call getRegUsage three times for each insn.  Just do this
+  once and cache the results.
+
+- |calc_livein_and_liveout|: use a suitably optimal block sequencing, as
+  described in the literature, so as to minimise iterations to a fixpoint.
+  And/or use a worklist.
+
+- Insn rewrite loop: don't clone mapD; just use it as soon as it's available.
+*/
+
+
 use std::{fs, io};
 use std::io::BufRead;
 use std::env;
@@ -2435,10 +2488,13 @@ fn print_RA_state(who: &str,
 //=============================================================================
 // Allocator top level
 
-/* (more or less const) For each virtual live range
+/* (const) For each virtual live range
    - its sorted Frags
    - its total size
    - its spill cost
+   - (eventually) its assigned real register
+   New VLRs are created as we go, but existing ones are unchanged, apart from
+   being tagged with its assigned real register.
 
    (mut) For each real register
    - the sorted Frags assigned to it (todo: rm the M)
@@ -3133,67 +3189,10 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     println!("");
 }
 
-/*
-//=============================================================================
-// Top level: the allocator's state
-
-/*
-struct RAState {
-    // Results of initial analysis:
-    preds_by_bix: Vec::</*BlockIx, */Set::<BlockIx>>,
-    succs_by_bix: Vec::</*BlockIx, */Set::<BlockIx>>,
-
-    defsets_by_bix: Vec::</*BlockIx, */Set::<Reg>>,
-    usesets_by_bix: Vec::</*BlockIx, */Set::<Reg>>,
-
-    liveins_by_bix:  Vec::</*BlockIx, */Set::<Reg>>,
-    liveouts_by_bix: Vec::</*BlockIx, */Set::<Reg>>,
-
-    frags_by_fix: Vec::</*FragIx */, Frag>,
-    live_ranges_by_lrix: Vec::</*LRIx, */, LR>,
-
-    // The running state of the core allocation algorithm
-
-    // The current commitment per-register
-
-    fixed_uses_by_rreg: Vec::</*RReg*/, Vec::<LRIx>>,
-    nonfixed_uses
-}
-
-The live ranges must contain a sequence of nonoverlapping Frags, in
-increasing order.  So they form a total order.
-
-struct PerRReg {
-    committed: Vec::<Frag>,   // non overlapping, in order
-
-}
-
-Questions for committed vector:
-* does it have space for the LR (meaning, its Frags) ? (easy)
-* if so add it (easy)
-* and remove it (easy)
-* does it have space for this LR if we eject some other LR
-  (which it already has) ? (difficult)
-
-Edit List
-a vec of pairs (InsnPoint, Insn) to be inserted there
-
-SortedMFragVec:
-   can another one be added?
-   add another one, must not overlap
-   remove one (must have been previously added)
-   can another one be added if we first remove some third one
-      (that was previously added?)
-
-A list of LRIxes that have been committed to, ordered by increasing
-  spill weight.  This is so that we can visit candidates to evict
-  (un-commit) in O(not very much) time.
-*/
-
 
 //=============================================================================
 // Top level
-*/
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
