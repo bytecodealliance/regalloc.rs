@@ -149,10 +149,11 @@ enum Slot {
 fn mkSlot(n: u32) -> Slot { Slot::Slot(n) }
 impl Slot {
     fn get(self) -> u32 { match self { Slot::Slot(n) => n } }
+    fn get_usize(self) -> usize { self.get() as usize }
 }
 impl Show for Slot {
     fn show(&self) -> String {
-        "s".to_string() + &self.get().to_string()
+        "S".to_string() + &self.get().to_string()
     }
 }
 
@@ -327,6 +328,14 @@ impl<'a> Show for Insn<'a> {
                 + &" + ".to_string() + &aoff.to_string()
                 + &"], ".to_string()
                 + &src.show(),
+            Insn::Spill { dst, src } => {
+                "SPILL  ".to_string() + &dst.show() + &", ".to_string()
+                + &src.show()
+            },
+            Insn::Reload { dst, src } => {
+                "RELOAD ".to_string() + &dst.show() + &", ".to_string()
+                + &src.show()
+            },
             Insn::Goto { target } =>
                 "goto   ".to_string()
                 + &target.show(),
@@ -570,6 +579,10 @@ struct CFG<'a> {
     nVRegs: u32,
     insns:  Vec::</*InsnIx, */Insn<'a>>,    // indexed by InsnIx
     blocks: Vec::</*BlockIx, */Block<'a>>   // indexed by BlockIx
+    // Note that |blocks| must be in order of increasing |Block::start|
+    // fields.  Code that wants to traverse the blocks in some other order
+    // must represent the ordering some other way; rearranging CFG::blocks is
+    // not allowed.
 }
 
 // Find a block Ix for a block name
@@ -635,13 +648,19 @@ impl<'a> CFG<'a> {
           - all blocks nonempty
           - all blocks end in i_finish, i_goto or i_goto_ctf
           - no blocks have those insns before the end
+          - blocks are in increasing order of ::start fields
           - all referenced blocks actually exist
           - convert references to block numbers
     */
     fn finish(&mut self) {
-        for b in self.blocks.iter() {
+        for bixNo in 0 .. self.blocks.len() {
+            let b = &self.blocks[bixNo];
             if b.len == 0 {
                 panic!("CFG::done: a block is empty");
+            }
+            if bixNo > 0
+                && self.blocks[bixNo - 1].start >= self.blocks[bixNo].start {
+                panic!("CFG: blocks are not in increasing order of InsnIx");
             }
             for i in 0 .. b.len {
                 let iix = mkInsnIx(b.start.get() + i);
@@ -674,7 +693,8 @@ struct IState<'a> {
     nia:   InsnIx, // Program counter
     vregs: Vec::<Option::<u32>>, // unlimited
     rregs: Vec::<Option::<u32>>, // [0 .. maxRRegs)
-    mem:   Vec::<Option::<u32>>  // [0 .. maxMem)
+    mem:   Vec::<Option::<u32>>, // [0 .. maxMem)
+    slots: Vec::<Option::<u32>>  // [0..] Spill slots, no upper limit
 }
 
 impl<'a> IState<'a> {
@@ -686,6 +706,7 @@ impl<'a> IState<'a> {
                 vregs:    Vec::new(),
                 rregs:    Vec::new(),
                 mem:      Vec::new(),
+                slots:    Vec::new()
             };
         state.rregs.resize(maxRRegs, None);
         state.mem.resize(maxMem, None);
@@ -693,7 +714,7 @@ impl<'a> IState<'a> {
     }
 
     fn getRReg(&self, rreg: RReg) -> u32 {
-        // No automatic resizing.  If the reg doesn't exist, just fail.
+        // No automatic resizing.  If the rreg doesn't exist, just fail.
         match self.rregs.get(rreg.get_usize()) {
             None =>
                 panic!("IState::getRReg: invalid rreg# {}", rreg.get()),
@@ -705,7 +726,7 @@ impl<'a> IState<'a> {
     }
 
     fn setRReg(&mut self, rreg: RReg, val: u32) {
-        // No automatic resizing.  If the reg doesn't exist, just fail.
+        // No automatic resizing.  If the rreg doesn't exist, just fail.
         match self.rregs.get_mut(rreg.get_usize()) {
             None =>
                 panic!("IState::setRReg: invalid rreg# {}", rreg.get()),
@@ -716,7 +737,7 @@ impl<'a> IState<'a> {
 
     fn getVReg(&self, vreg: VReg) -> u32 {
         // The vector might be too small.  But in that case we'd be
-        // reading the reg uninitialised anyway, so just complain.
+        // reading the vreg uninitialised anyway, so just complain.
         match self.vregs.get(vreg.get_usize()) {
             None |          // indexing error
             Some(None) =>   // entry present, but has never been written
@@ -734,6 +755,28 @@ impl<'a> IState<'a> {
         }
         debug_assert!(ix < self.vregs.len());
         self.vregs[ix] = Some(val);
+    }
+
+    fn getSlot(&self, slot: Slot) -> u32 {
+        // The vector might be too small.  But in that case we'd be
+        // reading the slot uninitialised anyway, so just complain.
+        match self.slots.get(slot.get_usize()) {
+            None |          // indexing error
+            Some(None) =>   // entry present, but has never been written
+                panic!("IState::getSlot: read of uninit slot # {}", slot.get()),
+            Some(Some(val))
+                => *val
+        }
+    }
+
+    fn setSlot(&mut self, slot: Slot, val: u32) {
+        // Auto-resize the vector if necessary
+        let ix = slot.get_usize();
+        if ix >= self.slots.len() {
+            self.slots.resize(ix + 1, None);
+        }
+        debug_assert!(ix < self.slots.len());
+        self.slots[ix] = Some(val);
     }
 
     fn getReg(&self, reg: Reg) -> u32 {
@@ -805,6 +848,14 @@ impl<'a> IState<'a> {
                 let addr_v = self.getReg(*addr);
                 let src_v  = self.getReg(*src);
                 self.setMem(addr_v + aoff, src_v);
+            },
+            Insn::Spill { dst, src } => {
+                let src_v = self.getRReg(*src);
+                self.setSlot(*dst, src_v);
+            },
+            Insn::Reload { dst, src } => {
+                let src_v = self.getSlot(*src);
+                self.setRReg(*dst, src_v);
             },
             Insn::Goto { target } =>
                 self.nia = self.cfg.blocks[target.getBlockIx().get_usize()]
@@ -897,6 +948,10 @@ impl<T: Eq + Ord + Hash + Copy + Show> Set<T> {
             res.push(*item)
         }
         res.sort_unstable();
+        // FIXME rm excess paranoia
+        for i in 1 .. res.len() {
+            debug_assert!(res[i-1] < res[i]);
+        }
         res
     }
 
@@ -2952,7 +3007,78 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         println!("spill/reload: {}", pair.show());
     }
 
-    cfg.print("After mapping");
+    // Construct the final code by interleaving the mapped code with the
+    // spills and reloads.  To do that requires having the latter sorted by
+    // InsnPoint.
+    //
+    // We also need to examine update CFG::blocks.  This is assumed to
+    // arranged in ascending order of the Block::start fields.
+
+    spillsAndReloads.sort_unstable_by(
+        |(ip1, _), (ip2, _)| ip1.partial_cmp(ip2).unwrap());
+
+    let mut curSnR = 0; // cursor in |spillsAndReloads|
+    let mut curB = 0; // cursor in CFG::blocks
+
+    let mut newInsns = Vec::<Insn>::new();
+    let mut newBlocks = Vec::<Block>::new();
+
+    for iixNo in 0 .. cfg.insns.len() {
+        let iix = mkInsnIx(iixNo as u32);
+
+        // Are we starting a new block?
+        debug_assert!(curB < cfg.blocks.len());
+        if cfg.blocks[curB].start == iix {
+            let oldBlock = &cfg.blocks[curB];
+            let newBlock = Block { name: oldBlock.name,
+                                   start: mkInsnIx(newInsns.len() as u32),
+                                   len: 0, eef: oldBlock.eef };
+            newBlocks.push(newBlock);
+
+        }
+
+        // Copy reloads for this insn
+        while curSnR < spillsAndReloads.len()
+               && spillsAndReloads[curSnR].0 == InsnPoint_R(iix) {
+            newInsns.push(spillsAndReloads[curSnR].1.clone());
+            curSnR += 1;
+        }
+        // And the insn itself
+        newInsns.push(cfg.insns[iixNo as usize].clone());
+        // Copy spills for this insn
+        while curSnR < spillsAndReloads.len()
+               && spillsAndReloads[curSnR].0 == InsnPoint_S(iix) {
+            newInsns.push(spillsAndReloads[curSnR].1.clone());
+            curSnR += 1;
+        }
+
+        if iixNo + 1 == cfg.blocks[curB].start.get_usize()
+                        + cfg.blocks[curB].len as usize {
+            println!("END OF BLOCK");
+            debug_assert!(curB < cfg.blocks.len());
+            debug_assert!(newBlocks.len() > 0);
+            debug_assert!(curB == newBlocks.len() - 1);
+            newBlocks[curB].len = newInsns.len() as u32
+                                  - newBlocks[curB].start.get();
+            curB += 1;
+        }
+    }
+
+    debug_assert!(curSnR == spillsAndReloads.len());
+    debug_assert!(curB == cfg.blocks.len());
+    debug_assert!(curB == newBlocks.len());
+
+    cfg.insns = newInsns;
+    cfg.blocks = newBlocks;
+
+    // And we're done!
+    //
+    // Curiously, there's no need to fix up Labels after having merged the
+    // spill and original instructions.  That's because Labels refer to
+    // Blocks, not to individual Insns.  Obviously in a real system things are
+    // different :-/
+
+    cfg.print("After allocation");
     cfg.run("After allocation", nRRegs);
 
     println!("");
