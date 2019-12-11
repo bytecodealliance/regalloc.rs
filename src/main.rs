@@ -2678,7 +2678,8 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
                     continue;
                 }
                 let iix = mkInsnIx(iixNo);
-                if regs_u.contains(Reg_V(curr_vlr.vreg)) { // FIXME: also MOD
+                if regs_u.contains(Reg_V(curr_vlr.vreg)) // FIXME: also MOD
+                   && frag.contains(&InsnPoint_U(iix)) {
                     // Stash enough info that we can create a new VLR
                     // and a new edit list entry for the reload.
                     let new_sri = SpillOrReloadInfo { is_reload: true,
@@ -2686,7 +2687,8 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
                                                       bix: frag.bix };
                     sri_vec.push(new_sri);
                 }
-                if regs_d.contains(Reg_V(curr_vlr.vreg)) { // FIXME: also MOD
+                if regs_d.contains(Reg_V(curr_vlr.vreg)) // FIXME: also MOD
+                   && frag.contains(&InsnPoint_D(iix)) {
                     // Stash enough info that we can create a new VLR
                     // and a new edit list entry for the spill.
                     let new_sri = SpillOrReloadInfo { is_reload: false,
@@ -3147,8 +3149,8 @@ A list of LRIxes that have been committed to, ordered by increasing
 */
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        println!("usage: {} <name of CFG to use>", args[0]);
+    if args.len() != 3 {
+        println!("usage: {} <name of CFG to use> <num real regs>", args[0]);
         return;
     }
 
@@ -3164,7 +3166,15 @@ fn main() {
         }
     };
 
-    run_main(cfg, /*nRRegs=*/3+5-5);
+    let nRRegs = match args[2].parse::<usize>() {
+        Ok(n) if n >= 2 => n,
+        _other => {
+            println!("{}: invalid #rregs.  Must be 2 or more.", args[0]);
+            return;
+        }
+    };
+
+    run_main(cfg, nRRegs);
 }
 
 
