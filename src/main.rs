@@ -15,6 +15,9 @@ MVP (without these, the implementation is useless in practice):
 
 - support multiple register classes
 
+- add a random-CFG generator and maybe some way to run it in a loop
+  (a.k.a a differential fuzzer)
+
 Post-MVP:
 
 - Live Range Splitting
@@ -29,7 +32,12 @@ Tidyings:
 - Split fn |run_main| into pieces; it is huge.  And tidy up the RA
   state components a bit.
 
+- (minor) rename |struct CFG| to something better ("Func" ?)
+
 - (minor) make Set iterable; remove uses of to_vec() when iterating
+
+- (minor) add an LR classifier (Spill/Reload/Normal) and use that instead
+  of current in-line tests
 
 - Is it really necessary to have both SpillOrReloadInfo and EditListItem?
   Can we get away with just one?
@@ -53,6 +61,9 @@ Performance:
   And/or use a worklist.
 
 - Insn rewrite loop: don't clone mapD; just use it as soon as it's available.
+
+- Insn rewrite loop: move cursors forwards at Point granularity so we don't
+  have to repeatedly re-scan the groups looking for particular LR kinds?
 */
 
 
