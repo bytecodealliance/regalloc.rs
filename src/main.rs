@@ -34,8 +34,6 @@ Tidyings:
 
 - (minor) rename |struct CFG| to something better ("Func" ?)
 
-- (minor) make Set iterable; remove uses of to_vec() when iterating
-
 - (minor) add an LR classifier (Spill/Reload/Normal) and use that instead
   of current in-line tests
 
@@ -70,11 +68,12 @@ Performance:
 use std::{fs, io};
 use std::io::BufRead;
 use std::env;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::hash_set::Iter;
 use std::hash::Hash;
 use std::convert::TryInto;
 use std::cmp::Ordering;
+use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 
 
 //=============================================================================
@@ -191,7 +190,7 @@ impl Reg {
             Reg::VReg(vreg)  => *vreg
         }
     }
-    fn apply(&mut self, map: &HashMap::<VReg, RReg>) {
+    fn apply(&mut self, map: &Map::<VReg, RReg>) {
         match self {
             Reg::RReg(_) => {},
             Reg::VReg(vreg) => {
@@ -321,7 +320,7 @@ impl RI {
             RI::Imm { ..  } => { }
         }
     }
-    fn apply(&mut self, map: &HashMap::<VReg, RReg>) {
+    fn apply(&mut self, map: &Map::<VReg, RReg>) {
         match self {
             RI::Reg { ref mut reg } => { reg.apply(map); },
             RI::Imm { .. }          => {}
@@ -490,8 +489,8 @@ impl<'a> Insn<'a> {
     // * For registers mentioned in a write role, apply mapD.
     // * For registers mentioned in a modify role, mapU and mapD *must* agree
     //   (if not, our caller is buggy).  So apply either map to that register.
-    fn mapRegs_D_U(&mut self, mapD: &HashMap::<VReg, RReg>,
-                              mapU: &HashMap::<VReg, RReg>) {
+    fn mapRegs_D_U(&mut self, mapD: &Map::<VReg, RReg>,
+                              mapU: &Map::<VReg, RReg>) {
         let mut ok = true;
         match self {
             Insn::Imm { dst, imm:_ } => {
@@ -995,13 +994,13 @@ impl<'a> CFG<'a> {
 // Sets of things
 
 struct Set<T> {
-    set: HashSet<T>
+    set: FxHashSet<T>
 }
 
 impl<T: Eq + Ord + Hash + Copy + Show> Set<T> {
     fn empty() -> Self {
         Self {
-            set: HashSet::<T>::new()
+            set: FxHashSet::<T>::default()
         }
     }
 
@@ -1041,10 +1040,6 @@ impl<T: Eq + Ord + Hash + Copy + Show> Set<T> {
             res.push(*item)
         }
         res.sort_unstable();
-        // FIXME rm excess paranoia
-        for i in 1 .. res.len() {
-            debug_assert!(res[i-1] < res[i]);
-        }
         res
     }
 
@@ -1092,6 +1087,28 @@ impl<T: Eq + Ord + Hash + Copy + Show + Clone> Clone for Set<T> {
 }
 
 
+struct SetIter<'a, T> {
+    set_iter: Iter<'a, T>
+}
+impl<T> Set<T> {
+    fn iter(&self) -> SetIter<T> {
+        SetIter { set_iter: self.set.iter() }
+    }
+}
+impl<'a, T> Iterator for SetIter<'a, T> {
+    type Item = &'a T;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.set_iter.next()
+    }
+}
+
+
+//=============================================================================
+// Maps
+
+type Map<K, V> = FxHashMap<K, V>;
+
+
 //=============================================================================
 // CFG successor and predecessor maps
 
@@ -1124,7 +1141,7 @@ impl CFGMap {
         let mut pred_map = Vec::<Set<BlockIx>>::new();
         pred_map.resize(cfg.blocks.len(), Set::empty());
         for (src, dst_set) in (0..).zip(&succ_map) {
-            for dst in dst_set.to_vec().iter() {
+            for dst in dst_set.iter() {
                 pred_map[dst.get_usize()].insert(mkBlockIx(src));
             }
         }
@@ -1153,7 +1170,7 @@ impl<'a> CFG<'a> {
                                               + b.len as usize {
                 let insn = &self.insns[iix];
                 let (regs_d, regs_u) = insn.getRegUsage();
-                for u in regs_u.to_vec().iter() {
+                for u in regs_u.iter() {
                     // |u| is used (read) by the instruction.  Whether or not
                     // we should consider it live-in for the block depends on
                     // whether it was been written earlier in the block.  We
@@ -1164,7 +1181,7 @@ impl<'a> CFG<'a> {
                     }
                 }
                 // FIXME: isn't this just: defs union= regs_d?
-                for d in regs_d.to_vec().iter() {
+                for d in regs_d.iter() {
                     def.insert(*d);
                 }
             }
@@ -1206,7 +1223,7 @@ impl<'a> CFG<'a> {
                 new_livein.union(&uce);
 
                 let mut new_liveout = Set::<Reg>::empty();
-                for succ_bix in cfg_map.succ_map[bix].to_vec().iter() {
+                for succ_bix in cfg_map.succ_map[bix].iter() {
                     new_liveout.union(&liveins[succ_bix.get_usize()]);
                 }
 
@@ -1265,7 +1282,7 @@ impl<'a> CFG<'a> {
 // * S(pill): this is where any spill insns for the insn itself are considered
 //   to live.
 //
-// Instructions in the incoming CFG may only to exist at the U and D points,
+// Instructions in the incoming CFG may only exist at the U and D points,
 // and so their associated live range fragments will only mention the U and D
 // points.  However, when adding spill code, we need a way to represent live
 // ranges involving the added spill and reload insns, in which case R and S
@@ -1525,7 +1542,7 @@ impl<'a> CFG<'a> {
     // (duh!)
     fn get_Frags_for_block(&self, bix: BlockIx,
                            livein: &Set::<Reg>, liveout: &Set::<Reg>,
-                           outMap: &mut HashMap::<Reg, Vec::<FragIx>>,
+                           outMap: &mut Map::<Reg, Vec::<FragIx>>,
                            outFEnv: &mut Vec::<Frag>)
     {
         // State machine entries.  See comment above.
@@ -1561,7 +1578,7 @@ impl<'a> CFG<'a> {
         // The running state.
         let blocks = &self.blocks;
         let block = &blocks[bix.get_usize()];
-        let mut state = HashMap::<Reg, Frag_SME>::new();
+        let mut state = Map::<Reg, Frag_SME>::default();
 
         // The generated Frag components are initially are dumped in here.  We
         // group them by Reg at the end of this function.
@@ -1569,7 +1586,7 @@ impl<'a> CFG<'a> {
 
         // First, set up |state| as if all of |livein| had been written just
         // prior to the block.
-        for r in livein.to_vec().iter() {
+        for r in livein.iter() {
             state.insert(*r, Frag_SME::Written { uses: 0, wp: None });
         }
 
@@ -1582,7 +1599,7 @@ impl<'a> CFG<'a> {
 
             // Examine reads.  This is pretty simple.  They simply extend
             // existing fragments.
-            for r in regs_u.to_vec().iter() {
+            for r in regs_u.iter() {
                 let new_sme: Frag_SME;
                 match state.get(r) {
                     // First event for |r| is a read, but it's not listed
@@ -1613,7 +1630,7 @@ impl<'a> CFG<'a> {
             // terminate the existing frag, if any, add it to |tmpResultVec|,
             // and start a new frag.  But we have to be careful to deal
             // correctly with dead writes.
-            for r in regs_d.to_vec().iter() {
+            for r in regs_d.iter() {
                 let new_sme: Frag_SME;
                 match state.get(r) {
                     // First mention of a Reg we've never heard of before.
@@ -1662,7 +1679,7 @@ impl<'a> CFG<'a> {
 
         // Deal with live-out Regs.  Treat each one as if it is read just
         // after the block.
-        for r in liveout.to_vec().iter() {
+        for r in liveout.iter() {
             match state.get(r) {
                 // This can't happen.  It implies that |r| is in |liveout|,
                 // but is neither defined in the block nor present in |livein|.
@@ -1737,11 +1754,11 @@ impl<'a> CFG<'a> {
     fn get_Frags(&self,
                  livein_sets_per_block:  &Vec::<Set<Reg>>,
                  liveout_sets_per_block: &Vec::<Set<Reg>>
-                ) -> (HashMap::<Reg, Vec<FragIx>>, Vec::<Frag>)
+                ) -> (Map::<Reg, Vec<FragIx>>, Vec::<Frag>)
     {
         debug_assert!(livein_sets_per_block.len()  == self.blocks.len());
         debug_assert!(liveout_sets_per_block.len() == self.blocks.len());
-        let mut resMap  = HashMap::<Reg, Vec<FragIx>>::new();
+        let mut resMap  = Map::<Reg, Vec<FragIx>>::default();
         let mut resFEnv = Vec::<Frag>::new();
         for bix in 0 .. self.blocks.len() {
             self.get_Frags_for_block(mkBlockIx(bix.try_into().unwrap()),
@@ -1932,7 +1949,7 @@ impl Show for VLRIx {
 //=============================================================================
 // Merging of Frags, producing the final LRs, minus metrics
 
-fn merge_Frags(fragIx_vecs_per_reg: &HashMap::<Reg, Vec<FragIx>>,
+fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
                frag_env: &Vec::</*FragIx, */Frag>,
                cfg_map: &CFGMap)
                -> (Vec::<RLR>, Vec::<VLR>)
@@ -2900,9 +2917,9 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     let mut cursorEnds = 0;
     let mut numEnds = 0;
 
-    let mut map = HashMap::<VReg, RReg>::new();
+    let mut map = Map::<VReg, RReg>::default();
 
-    fn showMap(m: &HashMap::<VReg, RReg>) -> String {
+    fn showMap(m: &Map::<VReg, RReg>) -> String {
         let mut vec: Vec::<(&VReg, &RReg)> = m.iter().collect();
         vec.sort_by(|p1, p2| p1.0.partial_cmp(p2.0).unwrap());
         vec.show()
@@ -3125,7 +3142,7 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     // InsnPoint.
     //
     // We also need to examine and update CFG::blocks.  This is assumed to
-    // arranged in ascending order of the Block::start fields.
+    // be arranged in ascending order of the Block::start fields.
 
     spillsAndReloads.sort_unstable_by(
         |(ip1, _), (ip2, _)| ip1.partial_cmp(ip2).unwrap());
