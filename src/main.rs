@@ -26,7 +26,7 @@ Tidyings:
 
 - Cause allocation to fail if LiveIn(start) is not empty.
 
-- Cause allocation to fail if we have to spill and already-spilled VLR
+- Cause allocation to fail if we have to spill an already-spilled VLR
   (this means we've run out of registers)
 
 - Split fn |run_main| into pieces; it is huge.  And tidy up the RA
@@ -1014,6 +1014,10 @@ impl<T: Eq + Ord + Hash + Copy + Show> Set<T> {
         self.set.insert(item);
     }
 
+    fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+
     fn contains(&self, item: T) -> bool {
         self.set.contains(&item)
     }
@@ -1837,16 +1841,17 @@ impl SortedFragIxs {
 
 
 //=============================================================================
-// Representing and printing live ranges.  This is parameterised over the reg
-// type, since we don't care what it is.
+// Representing and printing live ranges.  These are represented by two
+// different but closely related types, RLR and VLR.
 
-// Finally, a live range.  This is the fundamental unit of allocation.  This
-// pairs a Reg with a vector of FragIxs in which it is live.  The FragIxs are
-// indices into some vector of Frags (a "fragment environment, 'fenv'), which
-// is not specified here.  They are sorted so as to give ascending order to
-// the Frags which they refer to.
+// RLRs are live ranges for real regs (RRegs).  VLRs are live ranges for
+// virtual regs (VRegs).  VLRs are the fundamental unit of allocation.  Both
+// RLR and VLR pair the relevant kind of Reg with a vector of FragIxs in which
+// it is live.  The FragIxs are indices into some vector of Frags (a "fragment
+// environment, 'fenv'), which is not specified here.  They are sorted so as
+// to give ascending order to the Frags which they refer to.
 //
-// Live ranges may contain metrics.  Not all are initially filled in:
+// VLRs contain metrics.  Not all are initially filled in:
 //
 // * |size| is the number of instructions in total spanned by the LR.  It must
 //   not be zero.
@@ -1858,14 +1863,13 @@ impl SortedFragIxs {
 //   that allocation can always succeed in the worst case, in which all of the
 //   original live ranges of the program are spilled.
 //
-// I find it helpful to think of a live range as a "renaming equivalence
-// class".  That is, if you rename |reg| at some point inside |sfrags|, then
-// you must rename *all* occurrences of |reg| inside |sfrags|, since otherwise
-// the program will no longer work.
-
-// RLRs are live ranges for real regs (RRegs).  These don't carry any metrics
-// info since we are not trying to allocate them.  We merely need to work
-// around them.
+// RLRs don't carry any metrics info since we are not trying to allocate them.
+// We merely need to work around them.
+//
+// I find it helpful to think of a live range, both RLRs and VLRs, as a
+// "renaming equivalence class".  That is, if you rename |reg| at some point
+// inside |sfrags|, then you must rename *all* occurrences of |reg| inside
+// |sfrags|, since otherwise the program will no longer work.
 
 struct RLR {
     rreg:   RReg,
@@ -2552,14 +2556,11 @@ fn show_commit_tab(commit_tab: &Vec::<SortedFragIxs>,
 }
 */
 
-fn run_main(mut cfg: CFG, nRRegs: usize) {
-
-    // Just so we can run it later.  Not needed for actual allocation.
-    let original_cfg = cfg.clone();
-
-    cfg.print("Initial");
-
-    cfg.run("Before allocation", nRRegs);
+// Allocator top level.  |func| is modified so that, when this function
+// returns, it will contain no VReg uses.  Allocation can fail if there are
+// insufficient registers to even generate spill/reload code, or if the
+// function appears to have any undefined VReg/RReg uses.
+fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
 
     let (def_sets_per_block, use_sets_per_block) = cfg.calc_def_and_use();
     debug_assert!(def_sets_per_block.len() == cfg.blocks.len());
@@ -2596,6 +2597,10 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         println!("{:<3}   livein {:<16}  liveout {:<16}",
                  mkBlockIx(n).show(), livein.show(), liveout.show());
         n += 1;
+    }
+
+    if !livein_sets_per_block[cfg.entry.getBlockIx().get_usize()].is_empty() {
+        return Err("entry block has live-in values".to_string());
     }
 
     let (fragIxs_per_reg, mut frag_env) =
@@ -2764,6 +2769,15 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
         // Still no luck.  We can't find a register to put it in, so we'll
         // have to spill it, since splitting it isn't yet implemented.
         println!("--   spill");
+
+        // If the live range is already pertains to a spill or restore, then
+        // it's Game Over.  The constraints (availability of RRegs vs
+        // requirement for them) are impossible to fulfill, and so we cannot
+        // generate any valid allocation for this function.
+        if curr_vlr.cost.is_none() {
+            return Err("out of registers".to_string());
+        }
+
         // Generate a new spill slot number, Slot
         /* Spilling vreg V with LR to slot S:
               for each frag F in LR {
@@ -3208,13 +3222,7 @@ fn run_main(mut cfg: CFG, nRRegs: usize) {
     // spill and original instructions.  That's because Labels refer to
     // Blocks, not to individual Insns.  Obviously in a real system things are
     // different :-/
-
-    cfg.print("After allocation");
-
-    original_cfg.run("Before allocation", nRRegs);
-    cfg.run("After allocation", nRRegs);
-
-    println!("");
+    Ok(())
 }
 
 
@@ -3228,7 +3236,7 @@ fn main() {
         return;
     }
 
-    let cfg = match find_CFG(&args[1]) {
+    let mut cfg = match find_CFG(&args[1]) {
         Ok(cfg) => cfg,
         Err(available_cfg_names) => {
             println!("{}: can't find CFG with name '{}'", args[0], args[1]);
@@ -3241,14 +3249,35 @@ fn main() {
     };
 
     let nRRegs = match args[2].parse::<usize>() {
-        Ok(n) if n >= 2 => n,
+        Ok(n) if n >= 1 => n,
         _other => {
-            println!("{}: invalid #rregs.  Must be 2 or more.", args[0]);
+            println!("{}: invalid #rregs.  Must be 1 or more.", args[0]);
             return;
         }
     };
 
-    run_main(cfg, nRRegs);
+    cfg.print("Initial");
+
+    cfg.run("Before allocation", nRRegs);
+
+    // Just so we can run it later.  Not needed for actual allocation.
+    let original_cfg = cfg.clone();
+
+    let alloc_res = alloc_main(&mut cfg, nRRegs);
+    match alloc_res {
+        Err(s) => {
+            println!("{}: allocation failed: {}", args[0], s);
+            return;
+        }
+        Ok(_) => { }
+    }
+
+    cfg.print("After allocation");
+
+    original_cfg.run("Before allocation", nRRegs);
+    cfg.run("After allocation", nRRegs);
+
+    println!("");
 }
 
 
