@@ -15,7 +15,7 @@ MVP (without these, the implementation is useless in practice):
 
 - support multiple register classes
 
-- add a random-CFG generator and maybe some way to run it in a loop
+- add a random-Func generator and maybe some way to run it in a loop
   (a.k.a a differential fuzzer)
 
 Post-MVP:
@@ -23,16 +23,6 @@ Post-MVP:
 - Live Range Splitting
 
 Tidyings:
-
-- Cause allocation to fail if LiveIn(start) is not empty.
-
-- Cause allocation to fail if we have to spill an already-spilled VLR
-  (this means we've run out of registers)
-
-- Split fn |run_main| into pieces; it is huge.  And tidy up the RA
-  state components a bit.
-
-- (minor) rename |struct CFG| to something better ("Func" ?)
 
 - (minor) add an LR classifier (Spill/Reload/Normal) and use that instead
   of current in-line tests
@@ -221,7 +211,7 @@ impl Show for Slot {
 }
 
 
-// The absolute index of a Block (in CFG::blocks[]).
+// The absolute index of a Block (in Func::blocks[]).
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 enum BlockIx {
     BlockIx(u32)
@@ -236,7 +226,7 @@ impl Show for BlockIx {
 }
 
 
-// The absolute index of an Insn (in CFG::insns[]).
+// The absolute index of an Insn (in Func::insns[]).
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 enum InsnIx {
     InsnIx(u32)
@@ -617,7 +607,7 @@ fn resolveInsn<'a, F>(insn: &mut Insn<'a>, lookup: F)
 
 
 //=============================================================================
-// Definition of Block and CFG, and printing thereof.
+// Definition of Block and Func, and printing thereof.
 
 struct Block<'a> {
     name:  &'a str,
@@ -645,7 +635,7 @@ impl<'a> Block<'a> {
 }
 
 
-struct CFG<'a> {
+struct Func<'a> {
     name:   &'a str,
     entry:  Label<'a>,
     nVRegs: u32,
@@ -653,17 +643,17 @@ struct CFG<'a> {
     blocks: Vec::</*BlockIx, */Block<'a>>   // indexed by BlockIx
     // Note that |blocks| must be in order of increasing |Block::start|
     // fields.  Code that wants to traverse the blocks in some other order
-    // must represent the ordering some other way; rearranging CFG::blocks is
+    // must represent the ordering some other way; rearranging Func::blocks is
     // not allowed.
 }
-impl<'a> Clone for CFG<'a> {
+impl<'a> Clone for Func<'a> {
     // This is only needed for debug printing.
     fn clone(&self) -> Self {
-        CFG { name:   self.name.clone(),
-              entry:  self.entry.clone(),
-              nVRegs: self.nVRegs,
-              insns:  self.insns.clone(),
-              blocks: self.blocks.clone() }
+        Func { name:   self.name.clone(),
+               entry:  self.entry.clone(),
+               nVRegs: self.nVRegs,
+               insns:  self.insns.clone(),
+               blocks: self.blocks.clone() }
     }
 }
 
@@ -676,12 +666,12 @@ fn lookup<'a>(blocks: &Vec::<Block<'a>>, name: &'a str) -> BlockIx {
         }
         bix += 1;
     }
-    panic!("CFG::lookup: can't resolve label name '{}'", name);
+    panic!("Func::lookup: can't resolve label name '{}'", name);
 }
 
-impl<'a> CFG<'a> {
+impl<'a> Func<'a> {
     fn new(name: &'a str, entry: &'a str) -> Self {
-        CFG {
+        Func {
             name: name,
             entry: Label::Unresolved { name: entry },
             nVRegs: 0,
@@ -692,7 +682,7 @@ impl<'a> CFG<'a> {
 
     fn print(&self, who: &str) {
         println!("");
-        println!("CFG {}: name='{}' entry='{}' {{",
+        println!("Func {}: name='{}' entry='{}' {{",
                  who, self.name, self.entry.show());
         let mut ix = 0;
         for b in self.blocks.iter() {
@@ -716,7 +706,7 @@ impl<'a> CFG<'a> {
         v
     }
 
-    // Add a block to the CFG
+    // Add a block to the Func
     fn block(&mut self, name: &'a str, mut insns: Vec::<Insn<'a>>) {
         let start = self.insns.len() as u32;
         let len = insns.len() as u32;
@@ -738,21 +728,21 @@ impl<'a> CFG<'a> {
         for bixNo in 0 .. self.blocks.len() {
             let b = &self.blocks[bixNo];
             if b.len == 0 {
-                panic!("CFG::done: a block is empty");
+                panic!("Func::done: a block is empty");
             }
             if bixNo > 0
                 && self.blocks[bixNo - 1].start >= self.blocks[bixNo].start {
-                panic!("CFG: blocks are not in increasing order of InsnIx");
+                panic!("Func: blocks are not in increasing order of InsnIx");
             }
             for i in 0 .. b.len {
                 let iix = mkInsnIx(b.start.get() + i);
                 if i == b.len - 1 &&
                     !is_control_flow_insn(&self.insns[iix.get_usize()]) {
-                    panic!("CFG: block must end in control flow insn");
+                    panic!("Func: block must end in control flow insn");
                 }
                 if i != b.len -1 &&
                     is_control_flow_insn(&self.insns[iix.get_usize()]) {
-                    panic!("CFG: block contains control flow insn not at end");
+                    panic!("Func: block contains control flow insn not at end");
                 }
             }
         }
@@ -771,7 +761,7 @@ impl<'a> CFG<'a> {
 // The interpreter
 
 struct IState<'a> {
-    cfg:       &'a CFG<'a>,
+    func:      &'a Func<'a>,
     nia:       InsnIx, // Program counter ("next instruction address")
     vregs:     Vec::<Option::<u32>>, // unlimited
     rregs:     Vec::<Option::<u32>>, // [0 .. maxRRegs)
@@ -783,11 +773,12 @@ struct IState<'a> {
 }
 
 impl<'a> IState<'a> {
-    fn new(cfg: &'a CFG<'a>, maxRRegs: usize, maxMem: usize) -> Self {
+    fn new(func: &'a Func<'a>, maxRRegs: usize, maxMem: usize) -> Self {
         let mut state =
             IState {
-                cfg:       cfg,
-                nia:       cfg.blocks[cfg.entry.getBlockIx().get_usize()].start,
+                func:      func,
+                nia:       func.blocks[func.entry.getBlockIx().get_usize()]
+                               .start,
                 vregs:     Vec::new(),
                 rregs:     Vec::new(),
                 mem:       Vec::new(),
@@ -918,7 +909,7 @@ impl<'a> IState<'a> {
         self.nia = mkInsnIx(iix + 1);
         self.n_insns += 1;
 
-        let insn = &self.cfg.insns[iix as usize];
+        let insn = &self.func.insns[iix as usize];
         match insn {
             Insn::Imm { dst, imm } =>
                 self.setReg(*dst, *imm),
@@ -949,12 +940,12 @@ impl<'a> IState<'a> {
                 self.n_reloads += 1;
             },
             Insn::Goto { target } =>
-                self.nia = self.cfg.blocks[target.getBlockIx().get_usize()]
+                self.nia = self.func.blocks[target.getBlockIx().get_usize()]
                                .start,
             Insn::GotoCTF { cond, targetT, targetF } => {
                 let target =
                        if self.getReg(*cond) != 0 { targetT } else { targetF };
-                self.nia = self.cfg.blocks[target.getBlockIx().get_usize()]
+                self.nia = self.func.blocks[target.getBlockIx().get_usize()]
                                .start;
             },
             Insn::PrintS { str } =>
@@ -972,10 +963,10 @@ impl<'a> IState<'a> {
     }
 }
 
-impl<'a> CFG<'a> {
+impl<'a> Func<'a> {
     fn run(&self, who: &str, nRRegs: usize) {
         println!("");
-        println!("Running stage '{}': CFG: name='{}' entry='{}'",
+        println!("Running stage '{}': Func: name='{}' entry='{}'",
                  who, self.name, self.entry.show());
 
         let mut istate = IState::new(&self, nRRegs, /*maxMem=*/64);
@@ -1114,25 +1105,26 @@ type Map<K, V> = FxHashMap<K, V>;
 
 
 //=============================================================================
-// CFG successor and predecessor maps
+// Func successor and predecessor maps
 
-struct CFGMap {
-    pred_map: Vec::<Set<BlockIx>>, // Vec contains one element per block
-    succ_map: Vec::<Set<BlockIx>>  // Ditto
+// CFGInfo contains CFG-related info computed from a Func.
+struct CFGInfo {
+    pred_map: Vec::</*BlockIx, */Set<BlockIx>>, // Both Vecs contain ..
+    succ_map: Vec::</*BlockIx, */Set<BlockIx>>  // .. one element per block
 }
 
-impl CFGMap {
-    fn create(cfg: &CFG) -> Self {
+impl CFGInfo {
+    fn create(func: &Func) -> Self {
         // First calculate the succ map, since we can do that directly from
-        // the CFG.
+        // the Func.
 
-        // CFG::finish() ensures that all blocks are non-empty, and that only
+        // Func::finish() ensures that all blocks are non-empty, and that only
         // the last instruction is a control flow transfer.  Hence the
         // following won't miss any edges.
         let mut succ_map = Vec::<Set<BlockIx>>::new();
-        for b in cfg.blocks.iter() {
-            let last_insn = &cfg.insns[ b.start.get_usize()
-                                        + b.len as usize - 1 ];
+        for b in func.blocks.iter() {
+            let last_insn = &func.insns[ b.start.get_usize()
+                                         + b.len as usize - 1 ];
             let succs = last_insn.getTargets();
             let mut bixSet = Set::<BlockIx>::empty();
             for bix in succs.iter() {
@@ -1143,7 +1135,7 @@ impl CFGMap {
 
         // Now invert the mapping
         let mut pred_map = Vec::<Set<BlockIx>>::new();
-        pred_map.resize(cfg.blocks.len(), Set::empty());
+        pred_map.resize(func.blocks.len(), Set::empty());
         for (src, dst_set) in (0..).zip(&succ_map) {
             for dst in dst_set.iter() {
                 pred_map[dst.get_usize()].insert(mkBlockIx(src));
@@ -1151,10 +1143,10 @@ impl CFGMap {
         }
 
         // Stay sane ..
-        debug_assert!(pred_map.len() == cfg.blocks.len());
-        debug_assert!(succ_map.len() == cfg.blocks.len());
+        debug_assert!(pred_map.len() == func.blocks.len());
+        debug_assert!(succ_map.len() == func.blocks.len());
 
-        CFGMap { pred_map, succ_map }
+        CFGInfo { pred_map, succ_map }
     }
 }
 
@@ -1162,7 +1154,7 @@ impl CFGMap {
 //=============================================================================
 // Computation of live-in and live-out sets
 
-impl<'a> CFG<'a> {
+impl<'a> Func<'a> {
     // Returned vectors contain one element per block
     fn calc_def_and_use(&self) -> (Vec::<Set<Reg>>, Vec::<Set<Reg>>) {
         let mut def_sets = Vec::new();
@@ -1199,7 +1191,7 @@ impl<'a> CFG<'a> {
     fn calc_livein_and_liveout(&self,
                                def_sets_per_block: &Vec::<Set<Reg>>,
                                use_sets_per_block: &Vec::<Set<Reg>>,
-                               cfg_map: &CFGMap
+                               cfg_info: &CFGInfo
                               ) -> (Vec::<Set<Reg>>, Vec::<Set<Reg>>) {
         let empty = Set::<Reg>::empty();
         let mut liveins  = Vec::<Set::<Reg>>::new();
@@ -1227,7 +1219,7 @@ impl<'a> CFG<'a> {
                 new_livein.union(&uce);
 
                 let mut new_liveout = Set::<Reg>::empty();
-                for succ_bix in cfg_map.succ_map[bix].iter() {
+                for succ_bix in cfg_info.succ_map[bix].iter() {
                     new_liveout.union(&liveins[succ_bix.get_usize()]);
                 }
 
@@ -1286,7 +1278,7 @@ impl<'a> CFG<'a> {
 // * S(pill): this is where any spill insns for the insn itself are considered
 //   to live.
 //
-// Instructions in the incoming CFG may only exist at the U and D points,
+// Instructions in the incoming Func may only exist at the U and D points,
 // and so their associated live range fragments will only mention the U and D
 // points.  However, when adding spill code, we need a way to represent live
 // ranges involving the added spill and reload insns, in which case R and S
@@ -1539,10 +1531,10 @@ impl Frag {
 // most of which were just to NoInfo.  Instead, NoInfo is implied by a Reg not
 // being mapped in |state|.
 
-impl<'a> CFG<'a> {
+impl<'a> Func<'a> {
     // Calculate all the Frags for |bix|.  Add them to |outFEnv| and add to
     // |outMap|, the associated FragIxs, segregated by Reg.  |bix|, |livein|
-    // and |liveout| are expected to be valid in the context of the CFG |self|
+    // and |liveout| are expected to be valid in the context of the Func |self|
     // (duh!)
     fn get_Frags_for_block(&self, bix: BlockIx,
                            livein: &Set::<Reg>, liveout: &Set::<Reg>,
@@ -1955,7 +1947,7 @@ impl Show for VLRIx {
 
 fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
                frag_env: &Vec::</*FragIx, */Frag>,
-               cfg_map: &CFGMap)
+               cfg_info: &CFGInfo)
                -> (Vec::<RLR>, Vec::<VLR>)
 {
     let mut resR = Vec::<RLR>::new();
@@ -1987,7 +1979,7 @@ fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
             let mut succs_of_live_out_blocks = Set::<BlockIx>::empty();
             let frag = &frag_env[fix.get_usize()];
             let frag_bix = frag.bix;
-            let frag_succ_bixes = &cfg_map.succ_map[frag_bix.get_usize()];
+            let frag_succ_bixes = &cfg_info.succ_map[frag_bix.get_usize()];
             match frag.kind {
                 FragKind::Local => {
                 },
@@ -2560,11 +2552,11 @@ fn show_commit_tab(commit_tab: &Vec::<SortedFragIxs>,
 // returns, it will contain no VReg uses.  Allocation can fail if there are
 // insufficient registers to even generate spill/reload code, or if the
 // function appears to have any undefined VReg/RReg uses.
-fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
+fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
-    let (def_sets_per_block, use_sets_per_block) = cfg.calc_def_and_use();
-    debug_assert!(def_sets_per_block.len() == cfg.blocks.len());
-    debug_assert!(use_sets_per_block.len() == cfg.blocks.len());
+    let (def_sets_per_block, use_sets_per_block) = func.calc_def_and_use();
+    debug_assert!(def_sets_per_block.len() == func.blocks.len());
+    debug_assert!(use_sets_per_block.len() == func.blocks.len());
 
     let mut n = 0;
     println!("");
@@ -2574,21 +2566,21 @@ fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
         n += 1;
     }
 
-    let cfg_map = CFGMap::create(&cfg);
+    let cfg_info = CFGInfo::create(&func);
 
     n = 0;
     println!("");
-    for (preds, succs) in cfg_map.pred_map.iter().zip(&cfg_map.succ_map) {
+    for (preds, succs) in cfg_info.pred_map.iter().zip(&cfg_info.succ_map) {
         println!("{:<3}   preds {:<16}  succs {}",
                  mkBlockIx(n).show(), preds.show(), succs.show());
         n += 1;
     }
 
     let (livein_sets_per_block, liveout_sets_per_block) =
-        cfg.calc_livein_and_liveout(&def_sets_per_block,
-                                    &use_sets_per_block, &cfg_map);
-    debug_assert!(livein_sets_per_block.len() == cfg.blocks.len());
-    debug_assert!(liveout_sets_per_block.len() == cfg.blocks.len());
+        func.calc_livein_and_liveout(&def_sets_per_block,
+                                     &use_sets_per_block, &cfg_info);
+    debug_assert!(livein_sets_per_block.len() == func.blocks.len());
+    debug_assert!(liveout_sets_per_block.len() == func.blocks.len());
 
     n = 0;
     println!("");
@@ -2599,12 +2591,12 @@ fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
         n += 1;
     }
 
-    if !livein_sets_per_block[cfg.entry.getBlockIx().get_usize()].is_empty() {
+    if !livein_sets_per_block[func.entry.getBlockIx().get_usize()].is_empty() {
         return Err("entry block has live-in values".to_string());
     }
 
     let (fragIxs_per_reg, mut frag_env) =
-        cfg.get_Frags(&livein_sets_per_block, &liveout_sets_per_block);
+        func.get_Frags(&livein_sets_per_block, &liveout_sets_per_block);
 
     println!("");
     n = 0;
@@ -2619,8 +2611,8 @@ fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
     }
 
     let (rlr_env, mut vlr_env)
-        = merge_Frags(&fragIxs_per_reg, &frag_env, &cfg_map);
-    set_VLR_metrics(&mut vlr_env, &frag_env, &cfg.blocks);
+        = merge_Frags(&fragIxs_per_reg, &frag_env, &cfg_info);
+    set_VLR_metrics(&mut vlr_env, &frag_env, &func.blocks);
 
     println!("");
     n = 0;
@@ -2811,7 +2803,7 @@ fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
             let frag: &Frag = &frag_env[fix.get_usize()];
             for iixNo in frag.first.iix.get()
                          .. frag.last.iix.get() + 1/*CHECK THIS*/ {
-                let insn: &Insn = &cfg.insns[iixNo as usize];
+                let insn: &Insn = &func.insns[iixNo as usize];
                 let (regs_d, regs_u) = insn.getRegUsage();
                 if !regs_u.contains(Reg_V(curr_vlr.vreg))
                    && !regs_d.contains(Reg_V(curr_vlr.vreg)) {
@@ -2956,10 +2948,10 @@ fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
         }
     }
 
-    for insnNo in 0u32 .. cfg.insns.len() as u32 {
+    for insnNo in 0u32 .. func.insns.len() as u32 {
         //println!("");
         //println!("QQQQ insn {}: {}",
-        //         insnNo, cfg.insns[insnNo as usize].show());
+        //         insnNo, func.insns[insnNo as usize].show());
         //println!("QQQQ init map {}", showMap(&map));
         // advance [cursorStarts, +numStarts) to the group for insnNo
         while cursorStarts < fragMapsByStart.len()
@@ -3101,13 +3093,13 @@ fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
 
         // Finally, we have mapU/mapD set correctly for this instruction.
         // Apply it.
-        cfg.insns[insnNo as usize].mapRegs_D_U(&mapD, &mapU);
+        func.insns[insnNo as usize].mapRegs_D_U(&mapD, &mapU);
 
         // Update cursorStarts and cursorEnds for the next iteration
         cursorStarts += numStarts;
         cursorEnds += numEnds;
 
-        if cfg.blocks.iter().any(|b| b.start.get() + b.len - 1 == insnNo) {
+        if func.blocks.iter().any(|b| b.start.get() + b.len - 1 == insnNo) {
             //println!("Block end");
             debug_assert!(map.is_empty());
         }
@@ -3155,26 +3147,26 @@ fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
     // spills and reloads.  To do that requires having the latter sorted by
     // InsnPoint.
     //
-    // We also need to examine and update CFG::blocks.  This is assumed to
+    // We also need to examine and update Func::blocks.  This is assumed to
     // be arranged in ascending order of the Block::start fields.
 
     spillsAndReloads.sort_unstable_by(
         |(ip1, _), (ip2, _)| ip1.partial_cmp(ip2).unwrap());
 
     let mut curSnR = 0; // cursor in |spillsAndReloads|
-    let mut curB = 0; // cursor in CFG::blocks
+    let mut curB = 0; // cursor in Func::blocks
 
     let mut newInsns = Vec::<Insn>::new();
     let mut newBlocks = Vec::<Block>::new();
 
-    for iixNo in 0 .. cfg.insns.len() {
+    for iixNo in 0 .. func.insns.len() {
         let iix = mkInsnIx(iixNo as u32);
 
         // Is |iixNo| the first instruction in a block?  Meaning, are we
         // starting a new block?
-        debug_assert!(curB < cfg.blocks.len());
-        if cfg.blocks[curB].start == iix {
-            let oldBlock = &cfg.blocks[curB];
+        debug_assert!(curB < func.blocks.len());
+        if func.blocks[curB].start == iix {
+            let oldBlock = &func.blocks[curB];
             let newBlock = Block { name: oldBlock.name,
                                    start: mkInsnIx(newInsns.len() as u32),
                                    len: 0, eef: oldBlock.eef };
@@ -3189,7 +3181,7 @@ fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
             curSnR += 1;
         }
         // And the insn itself
-        newInsns.push(cfg.insns[iixNo as usize].clone());
+        newInsns.push(func.insns[iixNo as usize].clone());
         // Copy spills for this insn
         while curSnR < spillsAndReloads.len()
                && spillsAndReloads[curSnR].0 == InsnPoint_S(iix) {
@@ -3198,9 +3190,9 @@ fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
         }
 
         // Is |iixNo| the last instruction in a block?
-        if iixNo + 1 == cfg.blocks[curB].start.get_usize()
-                        + cfg.blocks[curB].len as usize {
-            debug_assert!(curB < cfg.blocks.len());
+        if iixNo + 1 == func.blocks[curB].start.get_usize()
+                        + func.blocks[curB].len as usize {
+            debug_assert!(curB < func.blocks.len());
             debug_assert!(newBlocks.len() > 0);
             debug_assert!(curB == newBlocks.len() - 1);
             newBlocks[curB].len = newInsns.len() as u32
@@ -3210,11 +3202,11 @@ fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
     }
 
     debug_assert!(curSnR == spillsAndReloads.len());
-    debug_assert!(curB == cfg.blocks.len());
+    debug_assert!(curB == func.blocks.len());
     debug_assert!(curB == newBlocks.len());
 
-    cfg.insns = newInsns;
-    cfg.blocks = newBlocks;
+    func.insns = newInsns;
+    func.blocks = newBlocks;
 
     // And we're done!
     //
@@ -3232,16 +3224,16 @@ fn alloc_main(cfg: &mut CFG, nRRegs: usize) -> Result<(), String> {
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
-        println!("usage: {} <name of CFG to use> <num real regs>", args[0]);
+        println!("usage: {} <name of Func to use> <num real regs>", args[0]);
         return;
     }
 
-    let mut cfg = match find_CFG(&args[1]) {
-        Ok(cfg) => cfg,
-        Err(available_cfg_names) => {
-            println!("{}: can't find CFG with name '{}'", args[0], args[1]);
-            println!("{}: available CFG names are:", args[0]);
-            for name in available_cfg_names {
+    let mut func = match find_Func(&args[1]) {
+        Ok(func) => func,
+        Err(available_func_names) => {
+            println!("{}: can't find Func with name '{}'", args[0], args[1]);
+            println!("{}: available Func names are:", args[0]);
+            for name in available_func_names {
                 println!("{}:     {}", args[0], name);
             }
             return;
@@ -3256,14 +3248,14 @@ fn main() {
         }
     };
 
-    cfg.print("Initial");
+    func.print("Initial");
 
-    cfg.run("Before allocation", nRRegs);
+    func.run("Before allocation", nRRegs);
 
     // Just so we can run it later.  Not needed for actual allocation.
-    let original_cfg = cfg.clone();
+    let original_func = func.clone();
 
-    let alloc_res = alloc_main(&mut cfg, nRRegs);
+    let alloc_res = alloc_main(&mut func, nRRegs);
     match alloc_res {
         Err(s) => {
             println!("{}: allocation failed: {}", args[0], s);
@@ -3272,10 +3264,10 @@ fn main() {
         Ok(_) => { }
     }
 
-    cfg.print("After allocation");
+    func.print("After allocation");
 
-    original_cfg.run("Before allocation", nRRegs);
-    cfg.run("After allocation", nRRegs);
+    original_func.run("Before allocation", nRRegs);
+    func.run("After allocation", nRRegs);
 
     println!("");
 }
@@ -3465,11 +3457,11 @@ fn test_SortedFragIxs() {
 //=============================================================================
 // Example programs
 
-// Returns either the requested CFG, or if not found, a list of the available
+// Returns either the requested Func, or if not found, a list of the available
 // ones.
-fn find_CFG<'a>(name: &String) -> Result::<CFG<'a>, Vec::<&str>> {
+fn find_Func<'a>(name: &String) -> Result::<Func<'a>, Vec::<&str>> {
     // This is really stupid.  Fortunately it's not performance critical :)
-    let all_CFGs = vec![
+    let all_Funcs = vec![
         example_0(), // straight_line
         example_1(), // fill_then_sum
         example_2(), // shellsort
@@ -3477,11 +3469,11 @@ fn find_CFG<'a>(name: &String) -> Result::<CFG<'a>, Vec::<&str>> {
     ];
 
     let mut all_names = Vec::new();
-    for cand in &all_CFGs {
+    for cand in &all_Funcs {
         all_names.push(cand.name);
     }
 
-    for cand in all_CFGs {
+    for cand in all_Funcs {
         if cand.name == name {
             return Ok(cand);
         }
@@ -3490,49 +3482,49 @@ fn find_CFG<'a>(name: &String) -> Result::<CFG<'a>, Vec::<&str>> {
     Err(all_names)
 }
 
-fn example_0<'a>() -> CFG<'a> {
-    let mut cfg = CFG::new("straight_line", "b0");
+fn example_0<'a>() -> Func<'a> {
+    let mut func = Func::new("straight_line", "b0");
 
     // Regs, virtual and real, that we want to use.
-    let vA = cfg.vreg();
+    let vA = func.vreg();
 
-    cfg.block("b0", vec![
+    func.block("b0", vec![
         i_print_s("Start\n"),
         i_imm(vA, 10),
         i_add(vA, vA, RI_I(7)),
         i_goto("b1"),
     ]);
-    cfg.block("b1", vec![
+    func.block("b1", vec![
         i_print_s("Result = "),
         i_print_i(vA),
         i_print_s("\n"),
         i_finish()
     ]);
 
-    cfg.finish();
-    cfg
+    func.finish();
+    func
 }
 
-fn example_1<'a>() -> CFG<'a> {
-    let mut cfg = CFG::new("fill_then_sum", "set-loop-pre");
+fn example_1<'a>() -> Func<'a> {
+    let mut func = Func::new("fill_then_sum", "set-loop-pre");
 
     // Regs, virtual and real, that we want to use.
-    let vNENT = cfg.vreg();
-    let vI    = cfg.vreg();
-    let vSUM  = cfg.vreg();
+    let vNENT = func.vreg();
+    let vI    = func.vreg();
+    let vSUM  = func.vreg();
     let rTMP  = Reg_R(mkRReg(2)); // "2" is arbitrary.
-    let vTMP2 = cfg.vreg();
+    let vTMP2 = func.vreg();
 
     // Loop pre-header for filling array with numbers.
     // This is also the entry point.
-    cfg.block("set-loop-pre", vec![
+    func.block("set-loop-pre", vec![
         i_imm (vNENT, 10),
         i_imm (vI,    0),
         i_goto("set-loop")
     ]);
 
     // Filling loop
-    cfg.block("set-loop", vec![
+    func.block("set-loop", vec![
         i_store   (vI,0, vI),
         i_add     (vI,   vI, RI_I(1)),
         i_cmp_lt  (rTMP, vI, RI_R(vNENT)),
@@ -3540,14 +3532,14 @@ fn example_1<'a>() -> CFG<'a> {
     ]);
 
     // Loop pre-header for summing them
-    cfg.block("sum-loop-pre", vec![
+    func.block("sum-loop-pre", vec![
         i_imm(vSUM, 0),
         i_imm(vI,   0),
         i_goto("sum-loop")
     ]);
 
     // Summing loop
-    cfg.block("sum-loop", vec![
+    func.block("sum-loop", vec![
         i_load  (rTMP,  vI,0),
         i_add   (vSUM,  vSUM, RI_R(rTMP)),
         i_add   (vI,    vI,   RI_I(1)),
@@ -3556,19 +3548,19 @@ fn example_1<'a>() -> CFG<'a> {
     ]);
 
     // After loop.  Print result and stop.
-    cfg.block("print-result", vec![
+    func.block("print-result", vec![
         i_print_s("Sum = "),
         i_print_i(vSUM),
         i_print_s("\n"),
         i_finish()
     ]);
 
-    cfg.finish();
-    cfg
+    func.finish();
+    func
 }
 
-fn example_2<'a>() -> CFG<'a> {
-    let mut cfg = CFG::new("shellsort", "Lstart");
+fn example_2<'a>() -> Func<'a> {
+    let mut func = Func::new("shellsort", "Lstart");
 
     // This is a simple "shellsort" test.  An array of numbers to sort is
     // placed in mem[5..24] and an increment table is placed in mem[0..4].
@@ -3579,18 +3571,18 @@ fn example_2<'a>() -> CFG<'a> {
     // some live ranges which span parts of the loop nest.  So it's an
     // interesting test case.
 
-    let lo = cfg.vreg();
-    let hi = cfg.vreg();
-    let i = cfg.vreg();
-    let j = cfg.vreg();
-    let h = cfg.vreg();
-    let bigN = cfg.vreg();
-    let v = cfg.vreg();
-    let hp = cfg.vreg();
-    let t0 = cfg.vreg();
-    let zero = cfg.vreg();
+    let lo = func.vreg();
+    let hi = func.vreg();
+    let i = func.vreg();
+    let j = func.vreg();
+    let h = func.vreg();
+    let bigN = func.vreg();
+    let v = func.vreg();
+    let hp = func.vreg();
+    let t0 = func.vreg();
+    let zero = func.vreg();
 
-    cfg.block("Lstart", vec![
+    func.block("Lstart", vec![
         i_imm(zero, 0),
         // Store the increment table
         i_imm(t0,   1),        i_store(zero,0,  t0),
@@ -3628,23 +3620,23 @@ fn example_2<'a>() -> CFG<'a> {
         i_goto("L11")
     ]);
 
-    cfg.block("L11", vec![
+    func.block("L11", vec![
         i_load(t0, hp,0),
         i_cmp_gt(t0, t0, RI_R(bigN)),
         i_goto_ctf(t0, "L20", "L11a")
     ]);
 
-    cfg.block("L11a", vec![
+    func.block("L11a", vec![
         i_add(hp, hp, RI_I(1)),
         i_goto("L11")
     ]);
 
-    cfg.block("L20", vec![
+    func.block("L20", vec![
         i_cmp_lt(t0, hp, RI_I(1)),
         i_goto_ctf(t0, "L60", "L21a"),
     ]);
 
-    cfg.block("L21a", vec![
+    func.block("L21a", vec![
         i_sub(t0, hp, RI_I(1)),
         i_load(h, t0, 0),
         //printf("h = %u\n", h),
@@ -3652,25 +3644,25 @@ fn example_2<'a>() -> CFG<'a> {
         i_goto("L30"),
     ]);
 
-    cfg.block("L30", vec![
+    func.block("L30", vec![
         i_cmp_gt(t0, i, RI_R(hi)),
         i_goto_ctf(t0, "L50", "L30a"),
     ]);
 
-    cfg.block("L30a", vec![
+    func.block("L30a", vec![
         i_load(v, i,0),
         i_add(j, i, RI_I(0)),  // FIXME: is this a coalescable copy?
         i_goto("L40"),
     ]);
 
-    cfg.block("L40", vec![
+    func.block("L40", vec![
         i_sub(t0, j, RI_R(h)),
         i_load(t0, t0,0),
         i_cmp_le(t0, t0, RI_R(v)),
         i_goto_ctf(t0, "L45", "L40a"),
     ]);
 
-    cfg.block("L40a", vec![
+    func.block("L40a", vec![
         i_sub(t0, j, RI_R(h)),
         i_load(t0, t0,0),
         i_store(j,0, t0),
@@ -3681,28 +3673,28 @@ fn example_2<'a>() -> CFG<'a> {
         i_goto_ctf(t0, "L45", "L40"),
     ]);
 
-    cfg.block("L45", vec![
+    func.block("L45", vec![
         i_store(j, 0, v),
         i_add(i, i, RI_I(1)),
         i_goto("L30"),
     ]);
 
-    cfg.block("L50", vec![
+    func.block("L50", vec![
         i_sub(hp, hp, RI_I(1)),
         i_goto("L20"),
     ]);
 
-    cfg.block("L60", vec![
+    func.block("L60", vec![
         i_add(i, lo, RI_I(0)), // FIXME: ditto
         i_goto("L61")
     ]);
 
-    cfg.block("L61", vec![
+    func.block("L61", vec![
         i_cmp_gt(t0, i, RI_R(hi)),
         i_goto_ctf(t0, "L62", "L61a"),
     ]);
 
-    cfg.block("L61a", vec![
+    func.block("L61a", vec![
         i_load(t0, i,0),
         i_print_i(t0),
         i_print_s(" "),
@@ -3710,27 +3702,27 @@ fn example_2<'a>() -> CFG<'a> {
         i_goto("L61"),
     ]);
 
-    cfg.block("L62", vec![
+    func.block("L62", vec![
         i_print_s("\n"),
         i_finish()
     ]);
 
-    cfg.finish();
-    cfg
+    func.finish();
+    func
 }
 
 // Whatever the current badness is
-fn badness<'a>() -> CFG<'a> {
-    let mut cfg = CFG::new("badness", "Lstart");
+fn badness<'a>() -> Func<'a> {
+    let mut func = Func::new("badness", "Lstart");
 
-    let lo = cfg.vreg();
-    let hi = cfg.vreg();
-    let bigN = cfg.vreg();
-    let hp = cfg.vreg();
-    let t0 = cfg.vreg();
-    let zero = cfg.vreg();
+    let lo = func.vreg();
+    let hi = func.vreg();
+    let bigN = func.vreg();
+    let hp = func.vreg();
+    let t0 = func.vreg();
+    let zero = func.vreg();
 
-    cfg.block("Lstart", vec![
+    func.block("Lstart", vec![
         i_imm(zero, 0),
         i_imm(t0,   1),        i_store(zero,0,  t0),
         i_imm(t0,   100),      i_store(zero,1,  t0),
@@ -3742,21 +3734,21 @@ fn badness<'a>() -> CFG<'a> {
         i_goto("L11")
     ]);
 
-    cfg.block("L11", vec![
+    func.block("L11", vec![
         i_load(t0, hp,0),
         i_cmp_gt(t0, t0, RI_R(bigN)),
         i_goto_ctf(t0, "L20", "L11a")
     ]);
 
-    cfg.block("L11a", vec![
+    func.block("L11a", vec![
         i_add(hp, hp, RI_I(1)),
         i_goto("L11")
     ]);
 
-    cfg.block("L20", vec![
+    func.block("L20", vec![
         i_finish()
     ]);
 
-    cfg.finish();
-    cfg
+    func.finish();
+    func
 }
