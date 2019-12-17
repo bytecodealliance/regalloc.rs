@@ -7,8 +7,6 @@
 
 MVP (without these, the implementation is useless in practice):
 
-- estimate block execution counts from loop depth
-
 - add a spill-slot allocation mechanism, even if it is pretty crude
 
 - add support for insns which modify regs (a la x86)
@@ -1001,6 +999,17 @@ impl<T: Eq + Ord + Hash + Copy + Show> Set<T> {
         s
     }
 
+    fn two(item1: T, item2: T) -> Self {
+        let mut s = Self::empty();
+        s.insert(item1);
+        s.insert(item2);
+        s
+    }
+
+    fn card(&self) -> usize {
+        self.set.len()
+    }
+
     fn insert(&mut self, item: T) {
         self.set.insert(item);
     }
@@ -1011,6 +1020,16 @@ impl<T: Eq + Ord + Hash + Copy + Show> Set<T> {
 
     fn contains(&self, item: T) -> bool {
         self.set.contains(&item)
+    }
+
+    fn intersect(&mut self, other: &Self) {
+        let mut res = FxHashSet::<T>::default();
+        for item in self.set.iter() {
+            if other.set.contains(item) {
+                res.insert(*item);
+            }
+        }
+        self.set = res;
     }
 
     fn union(&mut self, other: &Self) {
@@ -1029,12 +1048,24 @@ impl<T: Eq + Ord + Hash + Copy + Show> Set<T> {
         !self.set.is_disjoint(&other.set)
     }
 
+    fn is_subset_of(&self, other: &Self) -> bool {
+        self.set.is_subset(&other.set)
+    }
+
     fn to_vec(&self) -> Vec::<T> {
         let mut res = Vec::<T>::new();
         for item in self.set.iter() {
             res.push(*item)
         }
         res.sort_unstable();
+        res
+    }
+
+    fn from_vec(vec: Vec::<T>) -> Self {
+        let mut res = Set::<T>::empty();
+        for x in vec {
+            res.insert(x);
+        }
         res
     }
 
@@ -1105,16 +1136,28 @@ type Map<K, V> = FxHashMap<K, V>;
 
 
 //=============================================================================
-// Func successor and predecessor maps
+// Control-flow analysis results for a Func: predecessors, successors,
+// dominators and loop depths.
 
 // CFGInfo contains CFG-related info computed from a Func.
 struct CFGInfo {
-    pred_map: Vec::</*BlockIx, */Set<BlockIx>>, // Both Vecs contain ..
-    succ_map: Vec::</*BlockIx, */Set<BlockIx>>  // .. one element per block
+    // All these vectors contain one element per Block in the Func.
+
+    // Predecessor and successor maps.
+    pred_map: Vec::</*BlockIx, */Set<BlockIx>>,
+    succ_map: Vec::</*BlockIx, */Set<BlockIx>>,
+
+    // This maps from a Block to the set of Blocks it is dominated by
+    dom_map:  Vec::</*BlockIx, */Set<BlockIx>>,
+
+    // This maps from a Block to the loop depth that it is at
+    depth_map: Vec::</*BlockIx, */u32>
 }
 
 impl CFGInfo {
     fn create(func: &Func) -> Self {
+        let nBlocks = func.blocks.len();
+
         // First calculate the succ map, since we can do that directly from
         // the Func.
 
@@ -1135,19 +1178,187 @@ impl CFGInfo {
 
         // Now invert the mapping
         let mut pred_map = Vec::<Set<BlockIx>>::new();
-        pred_map.resize(func.blocks.len(), Set::empty());
+        pred_map.resize(nBlocks, Set::empty());
         for (src, dst_set) in (0..).zip(&succ_map) {
             for dst in dst_set.iter() {
                 pred_map[dst.get_usize()].insert(mkBlockIx(src));
             }
         }
 
-        // Stay sane ..
-        debug_assert!(pred_map.len() == func.blocks.len());
-        debug_assert!(succ_map.len() == func.blocks.len());
+        // Calculate dominators..
+        let dom_map = calc_dominators(&pred_map, func.entry.getBlockIx());
 
-        CFGInfo { pred_map, succ_map }
+        // Stay sane ..
+        debug_assert!(pred_map.len() == nBlocks);
+        debug_assert!(succ_map.len() == nBlocks);
+        debug_assert!(dom_map.len()  == nBlocks);
+
+        // BEGIN compute loop depth of all Blocks
+        //
+        // Find the loops.  First, find the "loop header nodes", and from
+        // those, derive the loops.
+        //
+        // Loop headers:
+        // A "back edge" m->n is some edge m->n where n dominates m.  'n' is
+        // the loop header node.
+        //
+        // |back_edges| is a set rather than a vector so as to avoid
+        // complications that might later arise if the same loop is enumerated
+        // more than once.
+        let mut back_edges = Set::<(BlockIx, BlockIx)>::empty(); // (m->n)
+        // Iterate over all edges
+        for ixnoM in 0 .. nBlocks as u32 {
+            let bixM = mkBlockIx(ixnoM);
+            for bixN in succ_map[bixM.get_usize()].iter() {
+                if dom_map[bixM.get_usize()].contains(*bixN) {
+                    //println!("QQQQ back edge {} -> {}",
+                    //         bixM.show(), bixN.show());
+                    back_edges.insert((bixM, *bixN));
+                }
+            }
+        }
+
+        // Now collect the sets of Blocks for each loop.  For each back edge,
+        // collect up all the blocks in the natural loop defined by the back
+        // edge M->N.  Muchnick Fig 7.21.  Order in |natural_loops| has no
+        // particular meaning.
+        let mut natural_loops = Vec::<Set<BlockIx>>::new();
+        for (bixM, bixN) in back_edges.iter() {
+            let mut Loop: Set::<BlockIx>;
+            let mut Stack: Vec::<BlockIx>;
+            let mut bixP: BlockIx;
+            let mut bixQ: BlockIx;
+            Stack = Vec::<BlockIx>::new();
+            Loop = Set::<BlockIx>::two(*bixM, *bixN);
+            if bixM != bixN {
+                // The next line is missing in the Muchnick description.
+                // Without it the algorithm doesn't make any sense, though.
+                Stack.push(*bixM);
+                while let Some(bixP) = Stack.pop() {
+                    for bixQ in pred_map[bixP.get_usize()].iter() {
+                        if !Loop.contains(*bixQ) {
+                            Loop.insert(*bixQ);
+                            Stack.push(*bixQ);
+                        }
+                    }
+                }
+            }
+            //println!("QQQQ back edge {} -> {} has loop {}",
+            //         bixM.show(), bixN.show(), Loop.show());
+            natural_loops.push(Loop);
+        }
+
+        // Here is a kludgey way to compute the depth of each loop.  First,
+        // order |natural_loops| by increasing size, so the largest loops are
+        // at the end.  Then, repeatedly scan forwards through the vector (in
+        // upper triangular matrix style).  For each scan, remember the
+        // "current loop".  Initially the "current loop is the start point of
+        // each scan.  If, during the scan, we encounter a loop which is a
+        // superset of the "current loop", change the "current loop" to this
+        // new loop, and increment a counter associated with the start point
+        // of the scan.  The effect is that the counter records the nesting
+        // depth of the loop at the start of the scan.  For this to be
+        // completely accurate, I _think_ this requires the property that
+        // loops are either disjoint or nested, but are in no case
+        // intersecting.
+
+        natural_loops.sort_by(
+            |blockSet1, blockSet2|
+            blockSet1.card().partial_cmp(&blockSet2.card()).unwrap());
+
+        let nLoops = natural_loops.len();
+        let mut loop_depths = Vec::<u32>::new();
+        loop_depths.resize(nLoops, 0);
+
+        for i in 0 .. nLoops {
+            let mut curr  = i;
+            let mut depth = 1;
+            for j in i+1 .. nLoops {
+                debug_assert!(curr < j);
+                if natural_loops[curr].is_subset_of(&natural_loops[j]) {
+                    depth += 1;
+                    curr = j;
+                }
+            }
+            loop_depths[i] = depth;
+        }
+
+        // Now that we have a depth for each loop, we can finally compute the
+        // depth for each block.
+        let mut depth_map = Vec::<u32>::new();
+        depth_map.resize(nBlocks, 0);
+        for (loopBixs, depth) in natural_loops.iter().zip(loop_depths) {
+            println!("QQQQ4 {} {}", depth.show(), loopBixs.show());
+            for loopBix in loopBixs.iter() {
+                if depth_map[loopBix.get_usize()] < depth {
+                    depth_map[loopBix.get_usize()] = depth;
+                }
+            }
+        }
+
+        debug_assert!(depth_map.len() == nBlocks);
+
+        //
+        // END compute loop depth of all Blocks
+
+        CFGInfo { pred_map, succ_map, dom_map, depth_map }
     }
+}
+
+
+// Calculate the dominance relationship, given |pred_map| and a start node
+// |start|.  The resulting vector maps each block to the set of blocks that
+// dominate it. This algorithm is from Fig 7.14 of Muchnick 1997 (an excellent
+// book). The algorithm is described as simple but not as performant as some
+// others.
+fn calc_dominators(pred_map: &Vec::</*BlockIx, */Set<BlockIx>>,
+                   start: BlockIx)
+                   -> Vec::</*BlockIx, */Set<BlockIx>> {
+    //
+    let nBlocks = pred_map.len();
+    let mut dom_map = Vec::<Set<BlockIx>>::new();
+    {
+        let r: BlockIx = start;
+        let N: Set<BlockIx> =
+            Set::from_vec((0 .. nBlocks as u32)
+                          .map(|bixNo| mkBlockIx(bixNo)).collect());
+        let mut D: Set<BlockIx>;
+        let mut T: Set<BlockIx>;
+        let mut n: BlockIx;
+        let mut p: BlockIx;
+        let mut change = true;
+        dom_map.resize(nBlocks, Set::<BlockIx>::empty());
+        dom_map[r.get_usize()] = Set::unit(r);
+        for ixnoN in 0 .. nBlocks as u32 {
+            let bixN = mkBlockIx(ixnoN);
+            if bixN != r {
+                dom_map[bixN.get_usize()] = N.clone();
+            }
+        }
+        loop {
+            change = false;
+            for ixnoN in 0 .. nBlocks as u32 {
+                let bixN = mkBlockIx(ixnoN);
+                if bixN == r {
+                    continue;
+                }
+                T = N.clone();
+                for bixP in pred_map[bixN.get_usize()].iter() {
+                    T.intersect(&dom_map[bixP.get_usize()]);
+                }
+                D = T.clone();
+                D.insert(bixN);
+                if !D.equals(&dom_map[bixN.get_usize()]) {
+                    change = true;
+                    dom_map[bixN.get_usize()] = D;
+                }
+            }
+            if !change {
+                break;
+            }
+        }
+    }
+    dom_map
 }
 
 
@@ -2119,7 +2330,6 @@ fn set_VLR_metrics(vlrs: &mut Vec::<VLR>,
         // short LRs in competition for registers.  This seems a bit of a hack
         // to me, but hey ..
         tot_cost /= tot_size as f32;
-        tot_cost *= 10.0; // Just to make the numbers look a bit nicer
         vlr.cost = Some(tot_cost);
     }
 }
@@ -2574,6 +2784,25 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         println!("{:<3}   preds {:<16}  succs {}",
                  mkBlockIx(n).show(), preds.show(), succs.show());
         n += 1;
+    }
+
+    n = 0;
+    println!("");
+    for (depth, dom_by) in cfg_info.depth_map.iter().zip(&cfg_info.dom_map) {
+        println!("{:<3}   depth {}   dom_by {:<16}",
+                 mkBlockIx(n).show(), depth, dom_by.show());
+        n += 1;
+    }
+
+    // Annotate each Block with its estimated execution count
+    for bixNo in 0 .. func.blocks.len() {
+        let mut eef = 1;
+        let mut depth = cfg_info.depth_map[bixNo];
+        if depth > 3 { depth = 3; }
+        for i in 0 .. depth {
+            eef *= 10;
+        }
+        func.blocks[bixNo].eef = eef;
     }
 
     let (livein_sets_per_block, liveout_sets_per_block) =
