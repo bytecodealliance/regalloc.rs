@@ -100,6 +100,14 @@ impl<T: Show> Show for Vec<T> {
         res + &"]".to_string()
     }
 }
+impl<T: Show> Show for Option<T> {
+    fn show(&self) -> String {
+        match self {
+            None => "None".to_string(),
+            Some(x) => "Some(".to_string() + &x.show() + &")".to_string()
+        }
+    }
+}
 impl<A: Show, B: Show> Show for (A, B) {
     fn show(&self) -> String {
         "(".to_string() + &self.0.show() + &",".to_string() + &self.1.show()
@@ -245,14 +253,14 @@ impl Show for InsnIx {
 // left.
 
 #[derive(Clone)]
-enum Label<'a> {
-    Unresolved { name: &'a str },
-    Resolved { name: &'a str, bix: BlockIx }
+enum Label {
+    Unresolved { name: String },
+    Resolved { name: String, bix: BlockIx }
 }
 
-fn mkUnresolved<'a>(name: &'a str) -> Label<'a> { Label::Unresolved { name }}
+fn mkUnresolved(name: String) -> Label { Label::Unresolved { name }}
 
-impl<'a> Show for Label<'a> {
+impl Show for Label {
     fn show(&self) -> String {
         match self {
             Label::Unresolved { name } =>
@@ -262,7 +270,7 @@ impl<'a> Show for Label<'a> {
         }
     }
 }
-impl<'a> Label<'a> {
+impl Label {
     fn getBlockIx(&self) -> BlockIx {
         match self {
             Label::Resolved { name:_, bix } => *bix,
@@ -270,15 +278,29 @@ impl<'a> Label<'a> {
                 panic!("Label::getBlockIx: unresolved label!")
         }
     }
+
+    fn remapControlFlow(&mut self, from: &String, to: &String) {
+        match self {
+            Label::Resolved { .. } => {
+                panic!("Label::remapControlFlow on resolved label");
+            },
+            Label::Unresolved { name } => {
+                if name == from {
+                    *name = to.clone();
+                }
+            }
+        }
+    }
 }
 
-fn resolveLabel<'a, F>(label: &mut Label<'a>, lookup: F)
-    where F: Fn(&'a str) -> BlockIx
+fn resolveLabel<F>(label: &mut Label, lookup: F)
+    where F: Fn(String) -> BlockIx
 {
     let resolved = 
         match label {
             Label::Unresolved { name } =>
-                Label::Resolved { name: name, bix: lookup(name) },
+                Label::Resolved { name: name.clone(),
+                                  bix: lookup(name.clone()) },
             Label::Resolved { .. } =>
                 panic!("resolveLabel: is already resolved!")
         };
@@ -319,13 +341,14 @@ impl RI {
 
 #[derive(Copy, Clone)]
 enum BinOp {
-    Add, Sub, CmpLT, CmpLE, CmpGT
+    Add, Sub, Mul, CmpLT, CmpLE, CmpGT
 }
 impl Show for BinOp {
     fn show(&self) -> String {
         match self {
             BinOp::Add   => "add   ".to_string(),
             BinOp::Sub   => "sub   ".to_string(),
+            BinOp::Mul   => "mul   ".to_string(),
             BinOp::CmpLT => "cmplt ".to_string(),
             BinOp::CmpLE => "cmple ".to_string(),
             BinOp::CmpGT => "cmpgt ".to_string()
@@ -337,6 +360,7 @@ impl BinOp {
         match self {
             BinOp::Add   => argL + argR,
             BinOp::Sub   => argL - argR,
+            BinOp::Mul   => argL * argR,
             BinOp::CmpLT => if argL <  argR { 1 } else { 0 },
             BinOp::CmpLE => if argL <= argR { 1 } else { 0 },
             BinOp::CmpGT => if argL >  argR { 1 } else { 0 }
@@ -346,21 +370,21 @@ impl BinOp {
 
 
 #[derive(Clone)]
-enum Insn<'a> {
+enum Insn {
     Imm { dst: Reg, imm: u32 },
     BinOp { op: BinOp, dst: Reg, srcL: Reg, srcR: RI },
     Load { dst: Reg, addr: Reg, aoff: u32 },
     Store { addr: Reg, aoff: u32, src: Reg },
     Spill { dst: Slot, src: RReg },
     Reload { dst: RReg, src: Slot },
-    Goto { target: Label<'a> },
-    GotoCTF { cond: Reg, targetT: Label<'a>, targetF: Label<'a> },
-    PrintS { str: &'a str },
+    Goto { target: Label },
+    GotoCTF { cond: Reg, targetT: Label, targetF: Label },
+    PrintS { str: String },
     PrintI { reg: Reg },
     Finish { }
 }
 
-impl<'a> Show for Insn<'a> {
+impl Show for Insn {
     fn show(&self) -> String {
         match self {
             Insn::Imm { dst, imm } =>
@@ -412,7 +436,7 @@ impl<'a> Show for Insn<'a> {
     }
 }
 
-impl<'a> Insn<'a> {
+impl Insn {
     // Returns a vector of BlockIxs, being those that this insn might jump to.
     // This might contain duplicates (although it would be pretty strange if
     // it did). This function should not be applied to non-control-flow
@@ -516,62 +540,87 @@ impl<'a> Insn<'a> {
     }
 }
 
-fn i_imm<'a>(dst: Reg, imm: u32) -> Insn<'a> { Insn::Imm { dst, imm } }
+fn i_imm(dst: Reg, imm: u32) -> Insn { Insn::Imm { dst, imm } }
 // For BinOp variants see below
-fn i_load<'a>(dst: Reg, addr: Reg, aoff: u32) -> Insn<'a> {
+fn i_load(dst: Reg, addr: Reg, aoff: u32) -> Insn {
     Insn::Load { dst, addr, aoff }
 }
-fn i_store<'a>(addr: Reg, aoff: u32, src: Reg) -> Insn<'a> {
+fn i_store(addr: Reg, aoff: u32, src: Reg) -> Insn {
     Insn::Store { addr, aoff, src }
 }
-fn i_spill<'a>(dst: Slot, src: RReg) -> Insn<'a> {
+fn i_spill(dst: Slot, src: RReg) -> Insn {
     Insn::Spill { dst, src }
 }
-fn i_reload<'a>(dst: RReg, src: Slot) -> Insn<'a> {
+fn i_reload(dst: RReg, src: Slot) -> Insn {
     Insn::Reload { dst, src }
 }
-fn i_goto<'a>(target: &'a str) -> Insn<'a> {
-    Insn::Goto { target: mkUnresolved(target) }
+fn i_goto<'a>(target: &'a str) -> Insn {
+    Insn::Goto { target: mkUnresolved(target.to_string()) }
 }
-fn i_goto_ctf<'a>(cond: Reg, targetT: &'a str, targetF: &'a str) -> Insn<'a> {
-    Insn::GotoCTF { cond: cond, targetT: mkUnresolved(targetT),
-                    targetF: mkUnresolved(targetF) }
+fn i_goto_ctf<'a>(cond: Reg, targetT: &'a str, targetF: &'a str) -> Insn {
+    Insn::GotoCTF { cond: cond,
+                    targetT: mkUnresolved(targetT.to_string()),
+                    targetF: mkUnresolved(targetF.to_string()) }
 }
-fn i_print_s<'a>(str: &'a str) -> Insn<'a> { Insn::PrintS { str } }
-fn i_print_i<'a>(reg: Reg) -> Insn<'a> { Insn::PrintI { reg } }
-fn i_finish<'a>() -> Insn<'a> { Insn::Finish { } }
+fn i_print_s<'a>(str: &'a str) -> Insn { Insn::PrintS { str: str.to_string() } }
+fn i_print_i(reg: Reg) -> Insn { Insn::PrintI { reg } }
+fn i_finish() -> Insn { Insn::Finish { } }
 
-fn i_add<'a>(dst: Reg, srcL: Reg, srcR: RI) -> Insn<'a> {
+fn i_add(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
     Insn::BinOp { op: BinOp::Add, dst, srcL, srcR }
 }
-fn i_sub<'a>(dst: Reg, srcL: Reg, srcR: RI) -> Insn<'a> {
+fn i_sub(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
     Insn::BinOp { op: BinOp::Sub, dst, srcL, srcR }
 }
-fn i_cmp_lt<'a>(dst: Reg, srcL: Reg, srcR: RI) -> Insn<'a> {
+fn i_mul(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    Insn::BinOp { op: BinOp::Mul, dst, srcL, srcR }
+}
+fn i_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
     Insn::BinOp { op: BinOp::CmpLT, dst, srcL, srcR }
 }
-fn i_cmp_le<'a>(dst: Reg, srcL: Reg, srcR: RI) -> Insn<'a> {
+fn i_cmp_le(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
     Insn::BinOp { op: BinOp::CmpLE, dst, srcL, srcR }
 }
-fn i_cmp_gt<'a>(dst: Reg, srcL: Reg, srcR: RI) -> Insn<'a> {
+fn i_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
     Insn::BinOp { op: BinOp::CmpGT, dst, srcL, srcR }
 }
 
-fn is_control_flow_insn<'a>(insn: &Insn<'a>) -> bool {
+fn is_control_flow_insn(insn: &Insn) -> bool {
     match insn {
         Insn::Goto { .. } | Insn::GotoCTF { .. } | Insn::Finish{} => true,
         _ => false
     }
 }
 
-fn resolveInsn<'a, F>(insn: &mut Insn<'a>, lookup: F)
-    where F: Copy + Fn(&'a str) -> BlockIx
+fn is_goto_insn(insn: &Insn) -> Option<Label> {
+    match insn {
+        Insn::Goto { target } => Some(target.clone()),
+        _ => None
+    }
+}
+
+fn resolveInsn<F>(insn: &mut Insn, lookup: F)
+    where F: Copy + Fn(String) -> BlockIx
 {
     match insn {
         Insn::Goto { ref mut target } => resolveLabel(target, lookup),
         Insn::GotoCTF { cond:_, ref mut targetT, ref mut targetF } => {
             resolveLabel(targetT, lookup);
             resolveLabel(targetF, lookup);
+        },
+        _ => ()
+    }
+}
+
+fn remapControlFlowTarget(insn: &mut Insn, from: &String, to: &String)
+{
+    match insn {
+        Insn::Goto { ref mut target } => {
+            target.remapControlFlow(from, to);
+        },
+        Insn::GotoCTF { cond:_, ref mut targetT, ref mut targetF } => {
+            targetT.remapControlFlow(from, to);
+            targetF.remapControlFlow(from, to);
         },
         _ => ()
     }
@@ -607,16 +656,16 @@ fn resolveInsn<'a, F>(insn: &mut Insn<'a>, lookup: F)
 //=============================================================================
 // Definition of Block and Func, and printing thereof.
 
-struct Block<'a> {
-    name:  &'a str,
+struct Block {
+    name:  String,
     start: InsnIx,
     len:   u32,
     eef:   u16
 }
-fn mkBlock<'a>(name: &'a str, start: InsnIx, len: u32) -> Block<'a> {
+fn mkBlock(name: String, start: InsnIx, len: u32) -> Block {
     Block { name: name, start: start, len: len, eef: 1 }
 }
-impl<'a> Clone for Block<'a> {
+impl Clone for Block {
     // This is only needed for debug printing.
     fn clone(&self) -> Self {
         Block { name:  self.name.clone(),
@@ -625,7 +674,7 @@ impl<'a> Clone for Block<'a> {
                 eef:   self.eef }
     }
 }
-impl<'a> Block<'a> {
+impl Block {
     fn containsInsnIx(&self, iix: InsnIx) -> bool {
         iix.get() >= self.start.get()
             && iix.get() < self.start.get() + self.len
@@ -633,18 +682,18 @@ impl<'a> Block<'a> {
 }
 
 
-struct Func<'a> {
-    name:   &'a str,
-    entry:  Label<'a>,
+struct Func {
+    name:   String,
+    entry:  Label,
     nVRegs: u32,
-    insns:  Vec::</*InsnIx, */Insn<'a>>,    // indexed by InsnIx
-    blocks: Vec::</*BlockIx, */Block<'a>>   // indexed by BlockIx
+    insns:  Vec::</*InsnIx, */Insn>,    // indexed by InsnIx
+    blocks: Vec::</*BlockIx, */Block>   // indexed by BlockIx
     // Note that |blocks| must be in order of increasing |Block::start|
     // fields.  Code that wants to traverse the blocks in some other order
     // must represent the ordering some other way; rearranging Func::blocks is
     // not allowed.
 }
-impl<'a> Clone for Func<'a> {
+impl Clone for Func {
     // This is only needed for debug printing.
     fn clone(&self) -> Self {
         Func { name:   self.name.clone(),
@@ -656,7 +705,7 @@ impl<'a> Clone for Func<'a> {
 }
 
 // Find a block Ix for a block name
-fn lookup<'a>(blocks: &Vec::<Block<'a>>, name: &'a str) -> BlockIx {
+fn lookup(blocks: &Vec::<Block>, name: String) -> BlockIx {
     let mut bix = 0;
     for b in blocks.iter() {
         if b.name == name {
@@ -667,14 +716,14 @@ fn lookup<'a>(blocks: &Vec::<Block<'a>>, name: &'a str) -> BlockIx {
     panic!("Func::lookup: can't resolve label name '{}'", name);
 }
 
-impl<'a> Func<'a> {
-    fn new(name: &'a str, entry: &'a str) -> Self {
+impl Func {
+    fn new<'a>(name: &'a str, entry: &'a str) -> Self {
         Func {
-            name: name,
-            entry: Label::Unresolved { name: entry },
+            name: name.to_string(),
+            entry: Label::Unresolved { name: entry.to_string() },
             nVRegs: 0,
-            insns: Vec::<Insn<'a>>::new(),
-            blocks: Vec::<Block<'a>>::new()
+            insns: Vec::<Insn>::new(),
+            blocks: Vec::<Block>::new()
         }
     }
 
@@ -705,11 +754,11 @@ impl<'a> Func<'a> {
     }
 
     // Add a block to the Func
-    fn block(&mut self, name: &'a str, mut insns: Vec::<Insn<'a>>) {
+    fn block<'a>(&mut self, name: &'a str, mut insns: Vec::<Insn>) {
         let start = self.insns.len() as u32;
         let len = insns.len() as u32;
         self.insns.append(&mut insns);
-        let b = mkBlock(name, mkInsnIx(start), len);
+        let b = mkBlock(name.to_string(), mkInsnIx(start), len);
         self.blocks.push(b);
     }
 
@@ -759,7 +808,7 @@ impl<'a> Func<'a> {
 // The interpreter
 
 struct IState<'a> {
-    func:      &'a Func<'a>,
+    func:      &'a Func,
     nia:       InsnIx, // Program counter ("next instruction address")
     vregs:     Vec::<Option::<u32>>, // unlimited
     rregs:     Vec::<Option::<u32>>, // [0 .. maxRRegs)
@@ -771,7 +820,7 @@ struct IState<'a> {
 }
 
 impl<'a> IState<'a> {
-    fn new(func: &'a Func<'a>, maxRRegs: usize, maxMem: usize) -> Self {
+    fn new(func: &'a Func, maxRRegs: usize, maxMem: usize) -> Self {
         let mut state =
             IState {
                 func:      func,
@@ -961,7 +1010,7 @@ impl<'a> IState<'a> {
     }
 }
 
-impl<'a> Func<'a> {
+impl Func {
     fn run(&self, who: &str, nRRegs: usize) {
         println!("");
         println!("Running stage '{}': Func: name='{}' entry='{}'",
@@ -1288,7 +1337,7 @@ impl CFGInfo {
         let mut depth_map = Vec::<u32>::new();
         depth_map.resize(nBlocks, 0);
         for (loopBixs, depth) in natural_loops.iter().zip(loop_depths) {
-            println!("QQQQ4 {} {}", depth.show(), loopBixs.show());
+            //println!("QQQQ4 {} {}", depth.show(), loopBixs.show());
             for loopBix in loopBixs.iter() {
                 if depth_map[loopBix.get_usize()] < depth {
                     depth_map[loopBix.get_usize()] = depth;
@@ -1365,7 +1414,7 @@ fn calc_dominators(pred_map: &Vec::</*BlockIx, */Set<BlockIx>>,
 //=============================================================================
 // Computation of live-in and live-out sets
 
-impl<'a> Func<'a> {
+impl Func {
     // Returned vectors contain one element per block
     fn calc_def_and_use(&self) -> (Vec::<Set<Reg>>, Vec::<Set<Reg>>) {
         let mut def_sets = Vec::new();
@@ -1742,7 +1791,7 @@ impl Frag {
 // most of which were just to NoInfo.  Instead, NoInfo is implied by a Reg not
 // being mapped in |state|.
 
-impl<'a> Func<'a> {
+impl Func {
     // Calculate all the Frags for |bix|.  Add them to |outFEnv| and add to
     // |outMap|, the associated FragIxs, segregated by Reg.  |bix|, |livein|
     // and |liveout| are expected to be valid in the context of the Func |self|
@@ -3396,7 +3445,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         debug_assert!(curB < func.blocks.len());
         if func.blocks[curB].start == iix {
             let oldBlock = &func.blocks[curB];
-            let newBlock = Block { name: oldBlock.name,
+            let newBlock = Block { name: oldBlock.name.clone(),
                                    start: mkInsnIx(newInsns.len() as u32),
                                    len: 0, eef: oldBlock.eef };
             newBlocks.push(newBlock);
@@ -3519,7 +3568,7 @@ fn test_SortedFragIxs() {
         res
     }
 
-    fn getFrag<'a>(fenv: &'a Vec::<Frag>, fix: FragIx) -> &'a Frag {
+    fn getFrag(fenv: &'a Vec::<Frag>, fix: FragIx) -> &'a Frag {
         &fenv[ fix.get_usize() ]
     }
 
@@ -3684,26 +3733,262 @@ fn test_SortedFragIxs() {
 
 
 //=============================================================================
+// The "blockifier".  This is just to make it easier to write test cases, by
+// allowing direct use of if-then-else, do-while and repeat-until.  It is
+// otherwise entirely unrelated to the register allocator proper.
+
+enum Stmt {
+    Vanilla     { insn: Insn },
+    IfThen      { cond: Reg, stmts_t: Vec::<Stmt> },
+    IfThenElse  { cond: Reg,
+                  stmts_t: Vec::<Stmt>, stmts_e: Vec::<Stmt> },
+    RepeatUntil { stmts: Vec::<Stmt>, cond: Reg },
+    WhileDo     { cond: Reg, stmts: Vec::<Stmt> }
+}
+
+// Various handy wrappers, mostly wrappings of i_* functions
+fn s_ite(cond: Reg, stmts_t: Vec::<Stmt>, stmts_e: Vec::<Stmt>) -> Stmt {
+    Stmt::IfThenElse { cond, stmts_t, stmts_e }
+}
+fn s_repeat_until(stmts: Vec::<Stmt>, cond: Reg) -> Stmt {
+    Stmt::RepeatUntil { stmts, cond }
+}
+fn s_while_do(cond: Reg, stmts: Vec::<Stmt>) -> Stmt {
+    Stmt::WhileDo { cond, stmts }
+}
+
+fn s_vanilla(insn: Insn) -> Stmt {
+    Stmt::Vanilla { insn }
+}
+
+fn s_imm(dst: Reg, imm: u32) -> Stmt {
+    s_vanilla( i_imm(dst, imm) )
+}
+fn s_print_s<'a>(str: &'a str) -> Stmt {
+    s_vanilla( i_print_s(str) )
+}
+fn s_print_i(reg: Reg) -> Stmt {
+    s_vanilla( i_print_i(reg) )
+}
+
+fn s_add(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_add(dst, srcL, srcR) )
+}
+fn s_sub(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_sub(dst, srcL, srcR) )
+}
+fn s_mul(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_mul(dst, srcL, srcR) )
+}
+fn s_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_cmp_lt(dst, srcL, srcR) )
+}
+fn s_cmp_le(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_cmp_le(dst, srcL, srcR) )
+}
+fn s_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_cmp_gt(dst, srcL, srcR) )
+}
+
+
+struct Blockifier {
+    name:    String,
+    blocks:  Vec::< Vec<Insn> >,
+    currBNo: usize,  // index into |blocks|
+    nVRegs:  u32
+}
+
+fn mkTextLabel(n: usize) -> String {
+    "L".to_string() + &n.to_string()
+}
+
+impl Blockifier {
+    fn new<'a>(name: &'a str) -> Self {
+        Self {
+            name: name.to_string(),
+            blocks: vec![],
+            currBNo: 0,
+            nVRegs: 0
+        }
+    }
+
+    // Get a new VReg name
+    fn vreg(&mut self) -> Reg {
+        let v = Reg::VReg(mkVReg(self.nVRegs));
+        self.nVRegs += 1;
+        v
+    }
+
+    // Recursive worker function, which flattens out the control flow,
+    // producing a set of blocks
+    fn blockify(&mut self, stmts: Vec::<Stmt>) -> (usize, usize) {
+        let entryBNo = self.blocks.len();
+        let mut currBNo = entryBNo;
+        self.blocks.push(vec![]);
+        for s in stmts {
+            match s {
+                Stmt::Vanilla { insn } => {
+                    self.blocks[currBNo].push(insn);
+                },
+                Stmt::IfThenElse { cond, stmts_t, stmts_e } => {
+                    let (t_ent, t_exit) = self.blockify(stmts_t);
+                    let (e_ent, e_exit) = self.blockify(stmts_e);
+                    let cont = self.blocks.len();
+                    self.blocks.push(vec![]);
+                    self.blocks[t_exit].push(i_goto(&mkTextLabel(cont)));
+                    self.blocks[e_exit].push(i_goto(&mkTextLabel(cont)));
+                    self.blocks[currBNo].push(i_goto_ctf(cond,
+                                                         &mkTextLabel(t_ent),
+                                                         &mkTextLabel(e_ent)));
+                    currBNo = cont;
+                },
+                Stmt::RepeatUntil { stmts, cond } => {
+                    let (s_ent, s_exit) = self.blockify(stmts);
+                    self.blocks[currBNo].push(i_goto(&mkTextLabel(s_ent)));
+                    let cont = self.blocks.len();
+                    self.blocks.push(vec![]);
+                    self.blocks[s_exit].push(i_goto_ctf(cond,
+                                                        &mkTextLabel(cont),
+                                                        &mkTextLabel(s_ent)));
+                    currBNo = cont;
+                },
+                Stmt::WhileDo { cond, stmts } => {
+                    let condblock = self.blocks.len();
+                    self.blocks.push(vec![]);
+                    self.blocks[currBNo].push(i_goto(&mkTextLabel(condblock)));
+                    let (s_ent, s_exit) = self.blockify(stmts);
+                    self.blocks[s_exit].push(i_goto(&mkTextLabel(condblock)));
+                    let cont = self.blocks.len();
+                    self.blocks.push(vec![]);
+                    self.blocks[condblock].push(i_goto_ctf(cond,
+                                                           &mkTextLabel(s_ent),
+                                                           &mkTextLabel(cont)));
+                    currBNo = cont;
+                },
+                _ => panic!("blockify: unhandled case")
+            }
+        }
+        (entryBNo, currBNo)
+    }
+
+    // The main external function.  Convert the given statements, into a Func.
+    fn finish(&mut self, stmts: Vec::<Stmt>) -> Func {
+
+        let (ent_bno, exit_bno) = self.blockify(stmts);
+        self.blocks[exit_bno].push(i_finish());
+
+        let mut blockz = Vec::<Vec<Insn>>::new();
+        std::mem::swap(&mut self.blocks, &mut blockz);
+
+        // BEGIN optionally, short out blocks that merely jump somewhere else
+        let mut cleanedUp = Vec::<Option<Vec<Insn>>>::new();
+        for ivec in blockz {
+            cleanedUp.push(Some(ivec));
+        }
+
+        //println!("Before:");
+        //let mut n = 0;
+        //for b in &cleanedUp {
+        //    println!("   {}  {}", n, b.show());
+        //    n += 1;
+        //}
+
+        loop {
+            // Repeatedly, look for a block that simply jumps to another one
+            let mut n = 0;
+            let mut redir: Option<(usize, String)> = None;
+            for maybe_b in &cleanedUp {
+                let b = match maybe_b {
+                    None => continue,
+                    Some(b) => b
+                };
+
+                debug_assert!(b.len() > 0);
+                if b.len() == 1 {
+                    if let Some(targetLabel) = is_goto_insn(&b[0]) {
+                        if let Label::Unresolved { name } = targetLabel {
+                            redir = Some((n, name));
+                            break;
+                        }
+                    }
+                }
+                n += 1;
+            }
+
+            match redir {
+                // We didn't find any
+                None => break,
+                // Forget about the block, and apply the redirection to all
+                // the rest
+                Some((from, to)) => {
+                    cleanedUp[from] = None;
+                    let nnn = cleanedUp.len();
+                    for i in 0 .. nnn {
+                        match cleanedUp[i] {
+                            None => { },
+                            Some(ref mut insns) => {
+                                let mmm = insns.len();
+                                for j in 0 .. mmm {
+                                    remapControlFlowTarget(&mut insns[j],
+                                                           &mkTextLabel(from),
+                                                           &to);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } // loop {
+
+        //println!("Blocks:");
+        //let mut n = 0;
+        //for b in &cleanedUp {
+        //    println!("   {}  {}", n, b.show());
+        //    n += 1;
+        //}
+        // END optionally, short out blocks that merely jump somewhere else
+
+        // Convert (ent_bno, exit_bno, cleanedUp) into a Func
+        let mut func = Func::new(&self.name, &mkTextLabel(ent_bno));
+        func.nVRegs = 3; // or whatever
+        let mut n = 0;
+        for mb_ivec in cleanedUp {
+            if let Some(ivec) = mb_ivec {
+                func.block(&mkTextLabel(n), ivec);
+            }
+            n += 1;
+        }
+
+        func.finish();
+
+        func
+    }
+}
+
+
+//=============================================================================
 // Example programs
 
 // Returns either the requested Func, or if not found, a list of the available
 // ones.
-fn find_Func<'a>(name: &String) -> Result::<Func<'a>, Vec::<&str>> {
+fn find_Func(name: &String) -> Result::<Func, Vec::<String>> {
     // This is really stupid.  Fortunately it's not performance critical :)
     let all_Funcs = vec![
         example_0(), // straight_line
         example_1(), // fill_then_sum
         example_2(), // shellsort
+        example_3(), // three loops
+        stmts_0(),   // a small Stmty test
         badness()
     ];
 
     let mut all_names = Vec::new();
     for cand in &all_Funcs {
-        all_names.push(cand.name);
+        all_names.push(cand.name.clone());
     }
 
     for cand in all_Funcs {
-        if cand.name == name {
+        if cand.name == *name {
             return Ok(cand);
         }
     }
@@ -3711,7 +3996,7 @@ fn find_Func<'a>(name: &String) -> Result::<Func<'a>, Vec::<&str>> {
     Err(all_names)
 }
 
-fn example_0<'a>() -> Func<'a> {
+fn example_0() -> Func {
     let mut func = Func::new("straight_line", "b0");
 
     // Regs, virtual and real, that we want to use.
@@ -3734,7 +4019,7 @@ fn example_0<'a>() -> Func<'a> {
     func
 }
 
-fn example_1<'a>() -> Func<'a> {
+fn example_1() -> Func {
     let mut func = Func::new("fill_then_sum", "set-loop-pre");
 
     // Regs, virtual and real, that we want to use.
@@ -3788,7 +4073,7 @@ fn example_1<'a>() -> Func<'a> {
     func
 }
 
-fn example_2<'a>() -> Func<'a> {
+fn example_2() -> Func {
     let mut func = Func::new("shellsort", "Lstart");
 
     // This is a simple "shellsort" test.  An array of numbers to sort is
@@ -3940,8 +4225,87 @@ fn example_2<'a>() -> Func<'a> {
     func
 }
 
+fn example_3() -> Func {
+    let mut func = Func::new("three_loops", "start");
+
+    let v00  = func.vreg();
+    let v01  = func.vreg();
+    let v02  = func.vreg();
+    let v03  = func.vreg();
+    let v04  = func.vreg();
+    let v05  = func.vreg();
+    let v06  = func.vreg();
+    let v07  = func.vreg();
+    let v08  = func.vreg();
+    let v09  = func.vreg();
+    let v10  = func.vreg();
+    let v11  = func.vreg();
+    let vI   = func.vreg();
+    let vJ   = func.vreg();
+    let vSUM = func.vreg();
+    let vTMP = func.vreg();
+
+    // Loop pre-header for filling array with numbers.
+    // This is also the entry point.
+    func.block("start", vec![
+        i_imm(v00, 0),
+        i_imm(v01, 0),
+        i_imm(v02, 0),
+        i_imm(v03, 0),
+        i_imm(v04, 0),
+        i_imm(v05, 0),
+        i_imm(v06, 0),
+        i_imm(v07, 0),
+        i_imm(v08, 0),
+        i_imm(v09, 0),
+        i_imm(v10, 0),
+        i_imm(v11, 0),
+        i_imm(vI, 0),
+        i_goto("outer-loop-cond")
+    ]);
+
+    // Outer loop
+    func.block("outer-loop-cond", vec![
+        i_add     (vI,   vI, RI_I(1)),
+        i_cmp_le  (vTMP, vI, RI_I(20)),
+        i_goto_ctf(vTMP, "outer-loop-1", "after-outer-loop")
+    ]);
+
+    func.block("outer-loop-1", vec![
+        i_add(v00, v00, RI_I(1)),
+        i_add(v01, v01, RI_I(1)),
+        i_add(v02, v02, RI_I(1)),
+        i_add(v03, v03, RI_I(1)),
+        i_goto("outer-loop-cond")
+    ]);
+
+    // After loop.  Print result and stop.
+    func.block("after-outer-loop", vec![
+        i_imm(vSUM, 0),
+        i_add(vSUM, vSUM, RI_R(v00)),
+        i_add(vSUM, vSUM, RI_R(v01)),
+        i_add(vSUM, vSUM, RI_R(v02)),
+        i_add(vSUM, vSUM, RI_R(v03)),
+        i_add(vSUM, vSUM, RI_R(v04)),
+        i_add(vSUM, vSUM, RI_R(v05)),
+        i_add(vSUM, vSUM, RI_R(v06)),
+        i_add(vSUM, vSUM, RI_R(v07)),
+        i_add(vSUM, vSUM, RI_R(v08)),
+        i_add(vSUM, vSUM, RI_R(v09)),
+        i_add(vSUM, vSUM, RI_R(v10)),
+        i_add(vSUM, vSUM, RI_R(v11)),
+        i_print_s("Sum = "),
+        i_print_i(vSUM),
+        i_print_s("\n"),
+        i_finish()
+    ]);
+
+    func.finish();
+    func
+}
+
 // Whatever the current badness is
-fn badness<'a>() -> Func<'a> {
+fn badness() -> Func {
     let mut func = Func::new("badness", "Lstart");
 
     let lo = func.vreg();
@@ -3980,4 +4344,74 @@ fn badness<'a>() -> Func<'a> {
 
     func.finish();
     func
+}
+
+fn stmts_0() -> Func {
+    let mut bif = Blockifier::new("stmts_0");
+    let vI = bif.vreg();
+    let vJ = bif.vreg();
+    let vSUM = bif.vreg();
+    let vTMP = bif.vreg();
+    let stmts = vec![
+        s_imm(vSUM, 0),
+        s_imm(vI, 0),
+        s_repeat_until(vec![
+            s_imm(vJ, 0),
+            s_repeat_until(vec![
+                s_mul   (vTMP, vI,   RI_R(vJ)),
+                s_add   (vSUM, vSUM, RI_R(vTMP)),
+                s_add   (vJ,   vJ,   RI_I(1)),
+                s_cmp_gt(vTMP, vJ,   RI_I(10))
+                ],
+                vTMP
+            ),
+            s_add   (vSUM, vSUM, RI_R(vI)),
+            s_add   (vI,   vI,   RI_I(1)),
+            s_cmp_gt(vTMP, vI,   RI_I(10))
+            ],
+            vTMP
+        ),
+        s_print_s("Result is "),
+        s_print_i(vSUM),
+        s_print_s("\n")
+    ];
+    /*
+    let stmts = vec![
+        s_imm(v0, 0),
+        s_imm(v1, 0),
+        s_imm(v2, 0),
+        s_add(v0, v1, RI_R(v2)),
+        s_add(v2, v1, RI_R(v0)),
+        s_ite(v0, vec![
+                  s_add(v2, v2, RI_I(0)),
+                  s_ite(v2, vec![
+                            s_add(v2, v2, RI_I(1))
+                        ], vec![
+                            s_add(v2, v2, RI_I(2))
+                        ],
+                  ),
+              ], vec![
+                  s_add(v1, v1, RI_I(3))
+              ]
+        ),
+        s_add(v0, v0, RI_I(4)),
+        s_repeat_until(
+            vec![
+                  s_add(v1, v1, RI_I(5)),
+                  s_add(v1, v1, RI_I(6)),
+                  s_add(v1, v1, RI_I(7))
+            ],
+            v0
+        ),
+        s_add(v0, v0, RI_I(10)),
+        s_add(v0, v0, RI_I(11)),
+        s_while_do(
+            v2,
+            vec![
+                s_add(v2, v2, RI_I(12))
+            ]
+        )
+    ];
+     */
+    bif.finish(stmts)
 }
