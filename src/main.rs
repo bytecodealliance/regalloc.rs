@@ -341,7 +341,7 @@ impl RI {
 
 #[derive(Copy, Clone)]
 enum BinOp {
-    Add, Sub, Mul, CmpLT, CmpLE, CmpGT
+    Add, Sub, Mul, CmpLT, CmpLE, CmpGE, CmpGT
 }
 impl Show for BinOp {
     fn show(&self) -> String {
@@ -351,6 +351,7 @@ impl Show for BinOp {
             BinOp::Mul   => "mul   ".to_string(),
             BinOp::CmpLT => "cmplt ".to_string(),
             BinOp::CmpLE => "cmple ".to_string(),
+            BinOp::CmpGE => "cmpge ".to_string(),
             BinOp::CmpGT => "cmpgt ".to_string()
         }
     }
@@ -363,6 +364,7 @@ impl BinOp {
             BinOp::Mul   => argL * argR,
             BinOp::CmpLT => if argL <  argR { 1 } else { 0 },
             BinOp::CmpLE => if argL <= argR { 1 } else { 0 },
+            BinOp::CmpGE => if argL >= argR { 1 } else { 0 }
             BinOp::CmpGT => if argL >  argR { 1 } else { 0 }
         }
     }
@@ -372,6 +374,7 @@ impl BinOp {
 #[derive(Clone)]
 enum Insn {
     Imm { dst: Reg, imm: u32 },
+    Copy { dst: Reg, src: Reg },
     BinOp { op: BinOp, dst: Reg, srcL: Reg, srcR: RI },
     Load { dst: Reg, addr: Reg, aoff: u32 },
     Store { addr: Reg, aoff: u32, src: Reg },
@@ -390,6 +393,9 @@ impl Show for Insn {
             Insn::Imm { dst, imm } =>
                 "imm    ".to_string()
                 + &dst.show() + &", ".to_string() + &imm.to_string(),
+            Insn::Copy { dst, src } =>
+                "copy   ".to_string()
+                + &dst.show() + &", ".to_string() + &src.show(),
             Insn::BinOp { op, dst, srcL, srcR } =>
                 op.show() + &" ".to_string() + &dst.show()
                 + &", ".to_string() + &srcL.show() + &", ".to_string()
@@ -469,6 +475,10 @@ impl Insn {
             Insn::Imm { dst, imm:_ } => {
                 def.insert(*dst);
             },
+            Insn::Copy { dst, src } => {
+                def.insert(*dst);
+                uce.insert(*src);
+            },
             Insn::BinOp { op:_, dst, srcL, srcR } => {
                 def.insert(*dst);
                 uce.insert(*srcL);
@@ -508,6 +518,10 @@ impl Insn {
             Insn::Imm { dst, imm:_ } => {
                 dst.apply(mapD);
             },
+            Insn::Copy { dst, src } => {
+                dst.apply(mapD);
+                src.apply(mapU);
+            },
             Insn::BinOp { op:_, dst, srcL, srcR } => {
                 dst.apply(mapD);
                 srcL.apply(mapU);
@@ -540,7 +554,12 @@ impl Insn {
     }
 }
 
-fn i_imm(dst: Reg, imm: u32) -> Insn { Insn::Imm { dst, imm } }
+fn i_imm(dst: Reg, imm: u32) -> Insn {
+    Insn::Imm { dst, imm }
+}
+fn i_copy(dst: Reg, src: Reg) -> Insn {
+    Insn::Copy { dst, src }
+}
 // For BinOp variants see below
 fn i_load(dst: Reg, addr: Reg, aoff: u32) -> Insn {
     Insn::Load { dst, addr, aoff }
@@ -580,6 +599,9 @@ fn i_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
 }
 fn i_cmp_le(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
     Insn::BinOp { op: BinOp::CmpLE, dst, srcL, srcR }
+}
+fn i_cmp_ge(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    Insn::BinOp { op: BinOp::CmpGE, dst, srcL, srcR }
 }
 fn i_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
     Insn::BinOp { op: BinOp::CmpGT, dst, srcL, srcR }
@@ -960,6 +982,8 @@ impl<'a> IState<'a> {
         match insn {
             Insn::Imm { dst, imm } =>
                 self.setReg(*dst, *imm),
+            Insn::Copy { dst, src } =>
+                self.setReg(*dst, self.getReg(*src)),
             Insn::BinOp { op, dst, srcL, srcR } => {
                 let srcL_v = self.getReg(*srcL);
                 let srcR_v = self.getRI(srcR);
@@ -3764,6 +3788,9 @@ fn s_vanilla(insn: Insn) -> Stmt {
 fn s_imm(dst: Reg, imm: u32) -> Stmt {
     s_vanilla( i_imm(dst, imm) )
 }
+fn s_copy(dst: Reg, src: Reg) -> Stmt {
+    s_vanilla( i_copy(dst, src) )
+}
 fn s_print_s<'a>(str: &'a str) -> Stmt {
     s_vanilla( i_print_s(str) )
 }
@@ -3785,6 +3812,9 @@ fn s_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
 }
 fn s_cmp_le(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
     s_vanilla( i_cmp_le(dst, srcL, srcR) )
+}
+fn s_cmp_ge(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_cmp_ge(dst, srcL, srcR) )
 }
 fn s_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
     s_vanilla( i_cmp_gt(dst, srcL, srcR) )
@@ -3979,6 +4009,8 @@ fn find_Func(name: &String) -> Result::<Func, Vec::<String>> {
         example_2(), // shellsort
         example_3(), // three loops
         stmts_0(),   // a small Stmty test
+        split_0(),          // LR splitting might help here
+        split_0_by_hand(),  // As split_0 but with LRs split by hand
         badness()
     ];
 
@@ -4413,5 +4445,149 @@ fn stmts_0() -> Func {
         )
     ];
      */
+    bif.finish(stmts)
+}
+
+// Test cases where live range splitting might obviously help
+
+fn split_0() -> Func {
+    let mut bif = Blockifier::new("split_0");
+    let v10 = bif.vreg();
+    let v11 = bif.vreg();
+    let v12 = bif.vreg();
+
+    let v20 = bif.vreg();
+    let v21 = bif.vreg();
+    let v22 = bif.vreg();
+
+    let vI   = bif.vreg();
+    let vSUM = bif.vreg();
+    let vTMP = bif.vreg();
+
+    let stmts = vec![
+        // Both the v1x and the v2x set become live at this point
+        s_imm(v10, 0),
+        s_imm(v11, 0),
+        s_imm(v12, 0),
+        s_imm(v20, 0),
+        s_imm(v21, 0),
+        s_imm(v22, 0),
+
+        // In this loop, v1x are hot, but v2x are unused.  In an ideal world,
+        // the v2x set would be spilled across the loop and reloaded after
+        // that.
+        s_imm(vI, 0),
+        s_repeat_until(vec![
+            s_add(v10, v10, RI_I(1)),
+            s_add(v11, v11, RI_I(2)),
+            s_add(v12, v12, RI_I(3)),
+            s_add(vI,   vI, RI_I(1)),
+            s_cmp_ge(vTMP, vI, RI_I(10))
+            ],
+            vTMP
+        ),
+
+        // Conversely, v2x in this loop are hot, and v1x are unused, but still
+        // need to stay alive across it.
+        s_imm(vI, 0),
+        s_repeat_until(vec![
+            s_add(v20, v20, RI_I(1)),
+            s_add(v21, v21, RI_I(2)),
+            s_add(v22, v22, RI_I(3)),
+            s_add(vI,   vI, RI_I(1)),
+            s_cmp_ge(vTMP, vI, RI_I(10))
+            ],
+            vTMP
+        ),
+
+        // All in all, the v1x and v2x set are both still live down to here.
+        s_imm(vSUM, 0),
+        s_add(vSUM, vSUM, RI_R(v10)),
+        s_add(vSUM, vSUM, RI_R(v11)),
+        s_add(vSUM, vSUM, RI_R(v12)),
+        s_add(vSUM, vSUM, RI_R(v20)),
+        s_add(vSUM, vSUM, RI_R(v21)),
+        s_add(vSUM, vSUM, RI_R(v22)),
+
+        s_print_s("Result is "),
+        s_print_i(vSUM),
+        s_print_s("\n")
+    ];
+    bif.finish(stmts)
+}
+
+// This is the same as split_0, but with the live ranges split "manually"
+fn split_0_by_hand() -> Func {
+    let mut bif = Blockifier::new("split_0_by_hand");
+    let v10 = bif.vreg();
+    let v11 = bif.vreg();
+    let v12 = bif.vreg();
+
+    let v20 = bif.vreg();
+    let v21 = bif.vreg();
+    let v22 = bif.vreg();
+
+    // Post-split versions of v20 .. v22
+    let sv20 = bif.vreg();
+    let sv21 = bif.vreg();
+    let sv22 = bif.vreg();
+
+    let vI   = bif.vreg();
+    let vSUM = bif.vreg();
+    let vTMP = bif.vreg();
+
+    let stmts = vec![
+        // Both the v1x and the v2x set become live at this point
+        s_imm(v10, 0),
+        s_imm(v11, 0),
+        s_imm(v12, 0),
+        s_imm(v20, 0),
+        s_imm(v21, 0),
+        s_imm(v22, 0),
+
+        // In this loop, v1x are hot, but v2x are unused.  In an ideal world,
+        // the v2x set would be spilled across the loop and reloaded after
+        // that.
+        s_imm(vI, 0),
+        s_repeat_until(vec![
+            s_add(v10, v10, RI_I(1)),
+            s_add(v11, v11, RI_I(2)),
+            s_add(v12, v12, RI_I(3)),
+            s_add(vI,   vI, RI_I(1)),
+            s_cmp_ge(vTMP, vI, RI_I(10))
+            ],
+            vTMP
+        ),
+
+        s_copy(sv20, v20),
+        s_copy(sv21, v21),
+        s_copy(sv22, v22),
+
+        // Conversely, v2x in this loop are hot, and v1x are unused, but still
+        // need to stay alive across it.
+        s_imm(vI, 0),
+        s_repeat_until(vec![
+            s_add(sv20, sv20, RI_I(1)),
+            s_add(sv21, sv21, RI_I(2)),
+            s_add(sv22, sv22, RI_I(3)),
+            s_add(vI,   vI, RI_I(1)),
+            s_cmp_ge(vTMP, vI, RI_I(10))
+            ],
+            vTMP
+        ),
+
+        // All in all, the v1x and v2x set are both still live down to here.
+        s_imm(vSUM, 0),
+        s_add(vSUM, vSUM, RI_R(v10)),
+        s_add(vSUM, vSUM, RI_R(v11)),
+        s_add(vSUM, vSUM, RI_R(v12)),
+        s_add(vSUM, vSUM, RI_R(sv20)),
+        s_add(vSUM, vSUM, RI_R(sv21)),
+        s_add(vSUM, vSUM, RI_R(sv22)),
+
+        s_print_s("Result is "),
+        s_print_i(vSUM),
+        s_print_s("\n")
+    ];
     bif.finish(stmts)
 }
