@@ -44,7 +44,8 @@ Performance:
 
 - |calc_livein_and_liveout|: use a suitably optimal block sequencing, as
   described in the literature, so as to minimise iterations to a fixpoint.
-  And/or use a worklist.
+  And/or use a worklist.  2019Dec19: this is important!  As it stands, it
+  takes 30 iterations to reach a fixpoint for the |qsort| test. (!!)
 
 - Insn rewrite loop: don't clone mapD; just use it as soon as it's available.
 
@@ -340,8 +341,48 @@ impl RI {
 
 
 #[derive(Copy, Clone)]
+enum AM {
+   RI { base: Reg, offset: u32 },
+   RR { base: Reg, offset: Reg }
+}
+fn AM_R(base: Reg)               -> AM { AM::RI { base, offset: 0 } }
+fn AM_RI(base: Reg, offset: u32) -> AM { AM::RI { base, offset } }
+fn AM_RR(base: Reg, offset: Reg) -> AM { AM::RR { base, offset } }
+impl Show for AM {
+    fn show(&self) -> String {
+        match self {
+            AM::RI { base, offset } =>
+                "[".to_string() + &base.show() + &" + ".to_string()
+                + &offset.show() + &"]".to_string(),
+            AM::RR { base, offset } =>
+                "[".to_string() + &base.show() + &" + ".to_string()
+                + &offset.show() + &"]".to_string()
+        }
+    }
+}
+impl AM {
+    fn addRegReadsTo(&self, uce: &mut Set::<Reg>) {
+        match self {
+            AM::RI { base, .. } =>
+                uce.insert(*base),
+            AM::RR { base, offset } =>
+                { uce.insert(*base); uce.insert(*offset); },
+        }
+    }
+    fn apply(&mut self, map: &Map::<VReg, RReg>) {
+        match self {
+            AM::RI { ref mut base, .. } =>
+                { base.apply(map); },
+            AM::RR { ref mut base, ref mut offset } =>
+                { base.apply(map); offset.apply(map); }
+        }
+    }
+}
+
+
+#[derive(Copy, Clone)]
 enum BinOp {
-    Add, Sub, Mul, CmpLT, CmpLE, CmpGE, CmpGT
+    Add, Sub, Mul, Mod, Shr, And, CmpEQ, CmpLT, CmpLE, CmpGE, CmpGT
 }
 impl Show for BinOp {
     fn show(&self) -> String {
@@ -349,6 +390,10 @@ impl Show for BinOp {
             BinOp::Add   => "add   ".to_string(),
             BinOp::Sub   => "sub   ".to_string(),
             BinOp::Mul   => "mul   ".to_string(),
+            BinOp::Mod   => "mod   ".to_string(),
+            BinOp::Shr   => "shr   ".to_string(),
+            BinOp::And   => "and   ".to_string(),
+            BinOp::CmpEQ => "cmpeq ".to_string(),
             BinOp::CmpLT => "cmplt ".to_string(),
             BinOp::CmpLE => "cmple ".to_string(),
             BinOp::CmpGE => "cmpge ".to_string(),
@@ -360,8 +405,12 @@ impl BinOp {
     fn calc(self, argL: u32, argR: u32) -> u32 {
         match self {
             BinOp::Add   => argL + argR,
-            BinOp::Sub   => argL - argR,
+            BinOp::Sub   => u32::wrapping_sub(argL, argR),
             BinOp::Mul   => argL * argR,
+            BinOp::Mod   => argL % argR,
+            BinOp::Shr   => argL >> (argR & 31),
+            BinOp::And   => argL & argR,
+            BinOp::CmpEQ => if argL == argR { 1 } else { 0 },
             BinOp::CmpLT => if argL <  argR { 1 } else { 0 },
             BinOp::CmpLE => if argL <= argR { 1 } else { 0 },
             BinOp::CmpGE => if argL >= argR { 1 } else { 0 }
@@ -373,18 +422,18 @@ impl BinOp {
 
 #[derive(Clone)]
 enum Insn {
-    Imm { dst: Reg, imm: u32 },
-    Copy { dst: Reg, src: Reg },
-    BinOp { op: BinOp, dst: Reg, srcL: Reg, srcR: RI },
-    Load { dst: Reg, addr: Reg, aoff: u32 },
-    Store { addr: Reg, aoff: u32, src: Reg },
-    Spill { dst: Slot, src: RReg },
-    Reload { dst: RReg, src: Slot },
-    Goto { target: Label },
+    Imm     { dst: Reg, imm: u32 },
+    Copy    { dst: Reg, src: Reg },
+    BinOp   { op: BinOp, dst: Reg, srcL: Reg, srcR: RI },
+    Load    { dst: Reg, addr: AM },
+    Store   { addr: AM, src: Reg },
+    Spill   { dst: Slot, src: RReg },
+    Reload  { dst: RReg, src: Slot },
+    Goto    { target: Label },
     GotoCTF { cond: Reg, targetT: Label, targetF: Label },
-    PrintS { str: String },
-    PrintI { reg: Reg },
-    Finish { }
+    PrintS  { str: String },
+    PrintI  { reg: Reg },
+    Finish  { }
 }
 
 impl Show for Insn {
@@ -400,14 +449,12 @@ impl Show for Insn {
                 op.show() + &" ".to_string() + &dst.show()
                 + &", ".to_string() + &srcL.show() + &", ".to_string()
                 + &srcR.show(),
-            Insn::Load { dst, addr, aoff } =>
-                "load   ".to_string() + &dst.show() + &", [".to_string()
-                + &addr.show() + &" + ".to_string() + &aoff.to_string()
-                + &"]".to_string(),
-            Insn::Store { addr, aoff, src } =>
-                "store  [".to_string() + &addr.show()
-                + &" + ".to_string() + &aoff.to_string()
-                + &"], ".to_string()
+            Insn::Load { dst, addr } =>
+                "load   ".to_string() + &dst.show() + &", ".to_string()
+                + &addr.show(),
+            Insn::Store { addr, src } =>
+                "store  ".to_string() + &addr.show()
+                + &", ".to_string()
                 + &src.show(),
             Insn::Spill { dst, src } => {
                 "SPILL  ".to_string() + &dst.show() + &", ".to_string()
@@ -484,13 +531,13 @@ impl Insn {
                 uce.insert(*srcL);
                 srcR.addRegReadsTo(&mut uce);
             },
-            Insn::Store { addr, aoff, src } => {
-                uce.insert(*addr);
+            Insn::Store { addr, src } => {
+                addr.addRegReadsTo(&mut uce);
                 uce.insert(*src);
             },
-            Insn::Load { dst, addr, aoff } => {
+            Insn::Load { dst, addr } => {
                 def.insert(*dst);
-                uce.insert(*addr);
+                addr.addRegReadsTo(&mut uce);
             },
             Insn::Goto { .. } => { },
             Insn::GotoCTF { cond, targetT:_, targetF:_ } => {
@@ -527,11 +574,11 @@ impl Insn {
                 srcL.apply(mapU);
                 srcR.apply(mapU);
             },
-            Insn::Store { addr, aoff, src } => {
+            Insn::Store { addr, src } => {
                 addr.apply(mapU);
                 src.apply(mapU);
             },
-            Insn::Load { dst, addr, aoff } => {
+            Insn::Load { dst, addr } => {
                 dst.apply(mapD);
                 addr.apply(mapU);
             },
@@ -561,11 +608,12 @@ fn i_copy(dst: Reg, src: Reg) -> Insn {
     Insn::Copy { dst, src }
 }
 // For BinOp variants see below
-fn i_load(dst: Reg, addr: Reg, aoff: u32) -> Insn {
-    Insn::Load { dst, addr, aoff }
+
+fn i_load(dst: Reg, addr: AM) -> Insn {
+    Insn::Load { dst, addr }
 }
-fn i_store(addr: Reg, aoff: u32, src: Reg) -> Insn {
-    Insn::Store { addr, aoff, src }
+fn i_store(addr: AM, src: Reg) -> Insn {
+    Insn::Store { addr, src }
 }
 fn i_spill(dst: Slot, src: RReg) -> Insn {
     Insn::Spill { dst, src }
@@ -593,6 +641,18 @@ fn i_sub(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
 }
 fn i_mul(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
     Insn::BinOp { op: BinOp::Mul, dst, srcL, srcR }
+}
+fn i_mod(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    Insn::BinOp { op: BinOp::Mod, dst, srcL, srcR }
+}
+fn i_shr(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    Insn::BinOp { op: BinOp::Shr, dst, srcL, srcR }
+}
+fn i_and(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    Insn::BinOp { op: BinOp::And, dst, srcL, srcR }
+}
+fn i_cmp_eq(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    Insn::BinOp { op: BinOp::CmpEQ, dst, srcL, srcR }
 }
 fn i_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
     Insn::BinOp { op: BinOp::CmpLT, dst, srcL, srcR }
@@ -970,6 +1030,13 @@ impl<'a> IState<'a> {
         }
     }
 
+    fn getAM(&self, am: &AM) -> u32 {
+        match am {
+            AM::RI { base, offset } => self.getReg(*base) + offset,
+            AM::RR { base, offset } => self.getReg(*base) + self.getReg(*offset)
+        }
+    }
+
     // Move the interpreter one step forward
     fn step(&mut self) -> bool {
         let mut done = false;
@@ -990,15 +1057,15 @@ impl<'a> IState<'a> {
                 let dst_v = op.calc(srcL_v, srcR_v);
                 self.setReg(*dst, dst_v);
             },
-            Insn::Load { dst, addr, aoff } => {
-                let addr_v = self.getReg(*addr);
-                let dst_v = self.getMem(addr_v + aoff);
+            Insn::Load { dst, addr } => {
+                let addr_v = self.getAM(addr);
+                let dst_v = self.getMem(addr_v);
                 self.setReg(*dst, dst_v);
             },
-            Insn::Store { addr, aoff, src } => {
-                let addr_v = self.getReg(*addr);
+            Insn::Store { addr, src } => {
+                let addr_v = self.getAM(addr);
                 let src_v  = self.getReg(*src);
-                self.setMem(addr_v + aoff, src_v);
+                self.setMem(addr_v, src_v);
             },
             Insn::Spill { dst, src } => {
                 let src_v = self.getRReg(*src);
@@ -1040,7 +1107,7 @@ impl Func {
         println!("Running stage '{}': Func: name='{}' entry='{}'",
                  who, self.name, self.entry.show());
 
-        let mut istate = IState::new(&self, nRRegs, /*maxMem=*/64);
+        let mut istate = IState::new(&self, nRRegs, /*maxMem=*/1000);
         let mut done = false;
         while !done {
             done = istate.step();
@@ -1485,7 +1552,7 @@ impl Func {
         liveins.resize(nBlocks, empty.clone());
         liveouts.resize(nBlocks, empty.clone());
 
-        let mut _iterNo = 0;
+        let mut iterNo = 0;
 
         loop {
             let mut changed = false;
@@ -1520,17 +1587,17 @@ impl Func {
             liveouts = new_liveouts;
 
             ////!!
-            /*
-            println!("");
-            println!("After  iteration {}", iterNo);
-            iterNo += 1;
-            let mut n = 0;
-            for (livein, liveout) in liveins.iter().zip(&liveouts) {
-                println!("  block {}:  livein {:<16}  liveout {:<16}",
-                         n, livein.show(), liveout.show());
-                n += 1;
+            if false {
+                println!("");
+                println!("After  iteration {}", iterNo);
+                iterNo += 1;
+                let mut n = 0;
+                for (livein, liveout) in liveins.iter().zip(&liveouts) {
+                    println!("  block {}:  livein {:<16}  liveout {:<16}",
+                             n, livein.show(), liveout.show());
+                    n += 1;
+                }
             }
-            */
             ////!!
 
             if !changed {
@@ -3771,8 +3838,12 @@ enum Stmt {
 }
 
 // Various handy wrappers, mostly wrappings of i_* functions
-fn s_ite(cond: Reg, stmts_t: Vec::<Stmt>, stmts_e: Vec::<Stmt>) -> Stmt {
+fn s_if_then_else(cond: Reg,
+                  stmts_t: Vec::<Stmt>, stmts_e: Vec::<Stmt>) -> Stmt {
     Stmt::IfThenElse { cond, stmts_t, stmts_e }
+}
+fn s_if_then(cond: Reg, stmts_t: Vec::<Stmt>) -> Stmt {
+    Stmt::IfThenElse { cond, stmts_t, stmts_e: vec![] }
 }
 fn s_repeat_until(stmts: Vec::<Stmt>, cond: Reg) -> Stmt {
     Stmt::RepeatUntil { stmts, cond }
@@ -3791,6 +3862,12 @@ fn s_imm(dst: Reg, imm: u32) -> Stmt {
 fn s_copy(dst: Reg, src: Reg) -> Stmt {
     s_vanilla( i_copy(dst, src) )
 }
+fn s_load(dst: Reg, addr: AM) -> Stmt {
+    s_vanilla( i_load(dst, addr) )
+}
+fn s_store(addr: AM, src: Reg) -> Stmt {
+    s_vanilla( i_store(addr, src) )
+}
 fn s_print_s<'a>(str: &'a str) -> Stmt {
     s_vanilla( i_print_s(str) )
 }
@@ -3806,6 +3883,18 @@ fn s_sub(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
 }
 fn s_mul(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
     s_vanilla( i_mul(dst, srcL, srcR) )
+}
+fn s_mod(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_mod(dst, srcL, srcR) )
+}
+fn s_shr(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_shr(dst, srcL, srcR) )
+}
+fn s_and(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_and(dst, srcL, srcR) )
+}
+fn s_cmp_eq(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_cmp_eq(dst, srcL, srcR) )
 }
 fn s_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
     s_vanilla( i_cmp_lt(dst, srcL, srcR) )
@@ -3922,12 +4011,12 @@ impl Blockifier {
         //    println!("   {}  {}", n, b.show());
         //    n += 1;
         //}
-
         loop {
             // Repeatedly, look for a block that simply jumps to another one
             let mut n = 0;
             let mut redir: Option<(usize, String)> = None;
             for maybe_b in &cleanedUp {
+                n += 1;
                 let b = match maybe_b {
                     None => continue,
                     Some(b) => b
@@ -3937,12 +4026,11 @@ impl Blockifier {
                 if b.len() == 1 {
                     if let Some(targetLabel) = is_goto_insn(&b[0]) {
                         if let Label::Unresolved { name } = targetLabel {
-                            redir = Some((n, name));
+                            redir = Some((n - 1, name));
                             break;
                         }
                     }
                 }
-                n += 1;
             }
 
             match redir {
@@ -4011,7 +4099,8 @@ fn find_Func(name: &String) -> Result::<Func, Vec::<String>> {
         stmts_0(),   // a small Stmty test
         split_0(),          // LR splitting might help here
         split_0_by_hand(),  // As split_0 but with LRs split by hand
-        badness()
+        badness(),
+        qsort()
     ];
 
     let mut all_names = Vec::new();
@@ -4071,7 +4160,7 @@ fn example_1() -> Func {
 
     // Filling loop
     func.block("set-loop", vec![
-        i_store   (vI,0, vI),
+        i_store   (AM_R(vI), vI),
         i_add     (vI,   vI, RI_I(1)),
         i_cmp_lt  (rTMP, vI, RI_R(vNENT)),
         i_goto_ctf(rTMP, "set-loop", "sum-loop-pre")
@@ -4086,7 +4175,7 @@ fn example_1() -> Func {
 
     // Summing loop
     func.block("sum-loop", vec![
-        i_load  (rTMP,  vI,0),
+        i_load  (rTMP,  AM_R(vI)),
         i_add   (vSUM,  vSUM, RI_R(rTMP)),
         i_add   (vI,    vI,   RI_I(1)),
         i_cmp_lt(vTMP2, vI,   RI_R(vNENT)),
@@ -4131,32 +4220,32 @@ fn example_2() -> Func {
     func.block("Lstart", vec![
         i_imm(zero, 0),
         // Store the increment table
-        i_imm(t0,   1),        i_store(zero,0,  t0),
-        i_imm(t0,   4),        i_store(zero,1,  t0),
-        i_imm(t0,  13),        i_store(zero,2,  t0),
-        i_imm(t0,  40),        i_store(zero,3,  t0),
-        i_imm(t0, 121),        i_store(zero,4,  t0),
+        i_imm(t0,   1),        i_store(AM_RI(zero,0),  t0),
+        i_imm(t0,   4),        i_store(AM_RI(zero,1),  t0),
+        i_imm(t0,  13),        i_store(AM_RI(zero,2),  t0),
+        i_imm(t0,  40),        i_store(AM_RI(zero,3),  t0),
+        i_imm(t0, 121),        i_store(AM_RI(zero,4),  t0),
         // Store the numbers to be sorted
-        i_imm(t0,  30),        i_store(zero,5,  t0),
-        i_imm(t0,  29),        i_store(zero,6,  t0),
-        i_imm(t0,  31),        i_store(zero,7,  t0),
-        i_imm(t0,  29),        i_store(zero,8,  t0),
-        i_imm(t0,  32),        i_store(zero,9,  t0),
-        i_imm(t0,  66),        i_store(zero,10, t0),
-        i_imm(t0,  77),        i_store(zero,11, t0),
-        i_imm(t0,  44),        i_store(zero,12, t0),
-        i_imm(t0,  22),        i_store(zero,13, t0),
-        i_imm(t0,  11),        i_store(zero,14, t0),
-        i_imm(t0,  99),        i_store(zero,15, t0),
-        i_imm(t0,  11),        i_store(zero,16, t0),
-        i_imm(t0,  12),        i_store(zero,17, t0),
-        i_imm(t0,   7),        i_store(zero,18, t0),
-        i_imm(t0,   9),        i_store(zero,19, t0),
-        i_imm(t0,   2),        i_store(zero,20, t0),
-        i_imm(t0,  32),        i_store(zero,21, t0),
-        i_imm(t0,  23),        i_store(zero,22, t0),
-        i_imm(t0,  41),        i_store(zero,23, t0),
-        i_imm(t0,  14),        i_store(zero,24, t0),
+        i_imm(t0,  30),        i_store(AM_RI(zero,5),  t0),
+        i_imm(t0,  29),        i_store(AM_RI(zero,6),  t0),
+        i_imm(t0,  31),        i_store(AM_RI(zero,7),  t0),
+        i_imm(t0,  29),        i_store(AM_RI(zero,8),  t0),
+        i_imm(t0,  32),        i_store(AM_RI(zero,9),  t0),
+        i_imm(t0,  66),        i_store(AM_RI(zero,10), t0),
+        i_imm(t0,  77),        i_store(AM_RI(zero,11), t0),
+        i_imm(t0,  44),        i_store(AM_RI(zero,12), t0),
+        i_imm(t0,  22),        i_store(AM_RI(zero,13), t0),
+        i_imm(t0,  11),        i_store(AM_RI(zero,14), t0),
+        i_imm(t0,  99),        i_store(AM_RI(zero,15), t0),
+        i_imm(t0,  11),        i_store(AM_RI(zero,16), t0),
+        i_imm(t0,  12),        i_store(AM_RI(zero,17), t0),
+        i_imm(t0,   7),        i_store(AM_RI(zero,18), t0),
+        i_imm(t0,   9),        i_store(AM_RI(zero,19), t0),
+        i_imm(t0,   2),        i_store(AM_RI(zero,20), t0),
+        i_imm(t0,  32),        i_store(AM_RI(zero,21), t0),
+        i_imm(t0,  23),        i_store(AM_RI(zero,22), t0),
+        i_imm(t0,  41),        i_store(AM_RI(zero,23), t0),
+        i_imm(t0,  14),        i_store(AM_RI(zero,24), t0),
         // The real computation begins here
         i_imm(lo, 5),  // Lowest address of the range to sort
         i_imm(hi, 24), // Highest address of the range to sort
@@ -4167,7 +4256,7 @@ fn example_2() -> Func {
     ]);
 
     func.block("L11", vec![
-        i_load(t0, hp,0),
+        i_load(t0, AM_R(hp)),
         i_cmp_gt(t0, t0, RI_R(bigN)),
         i_goto_ctf(t0, "L20", "L11a")
     ]);
@@ -4184,7 +4273,7 @@ fn example_2() -> Func {
 
     func.block("L21a", vec![
         i_sub(t0, hp, RI_I(1)),
-        i_load(h, t0, 0),
+        i_load(h, AM_R(t0)),
         //printf("h = %u\n", h),
         i_add(i, lo, RI_R(h)),
         i_goto("L30"),
@@ -4196,22 +4285,22 @@ fn example_2() -> Func {
     ]);
 
     func.block("L30a", vec![
-        i_load(v, i,0),
+        i_load(v, AM_R(i)),
         i_add(j, i, RI_I(0)),  // FIXME: is this a coalescable copy?
         i_goto("L40"),
     ]);
 
     func.block("L40", vec![
         i_sub(t0, j, RI_R(h)),
-        i_load(t0, t0,0),
+        i_load(t0, AM_R(t0)),
         i_cmp_le(t0, t0, RI_R(v)),
         i_goto_ctf(t0, "L45", "L40a"),
     ]);
 
     func.block("L40a", vec![
         i_sub(t0, j, RI_R(h)),
-        i_load(t0, t0,0),
-        i_store(j,0, t0),
+        i_load(t0, AM_R(t0)),
+        i_store(AM_R(j), t0),
         i_sub(j, j, RI_R(h)),
         i_add(t0, lo, RI_R(h)),
         i_sub(t0, t0, RI_I(1)),
@@ -4220,7 +4309,7 @@ fn example_2() -> Func {
     ]);
 
     func.block("L45", vec![
-        i_store(j, 0, v),
+        i_store(AM_R(j), v),
         i_add(i, i, RI_I(1)),
         i_goto("L30"),
     ]);
@@ -4241,7 +4330,7 @@ fn example_2() -> Func {
     ]);
 
     func.block("L61a", vec![
-        i_load(t0, i,0),
+        i_load(t0, AM_R(i)),
         i_print_i(t0),
         i_print_s(" "),
         i_add(i, i, RI_I(1)),
@@ -4349,8 +4438,8 @@ fn badness() -> Func {
 
     func.block("Lstart", vec![
         i_imm(zero, 0),
-        i_imm(t0,   1),        i_store(zero,0,  t0),
-        i_imm(t0,   100),      i_store(zero,1,  t0),
+        i_imm(t0,   1),        i_store(AM_RI(zero,0),  t0),
+        i_imm(t0,   100),      i_store(AM_RI(zero,1),  t0),
         i_imm(lo, 5),
         i_imm(hi, 24),
         i_sub(t0, hi, RI_R(lo)),
@@ -4360,7 +4449,7 @@ fn badness() -> Func {
     ]);
 
     func.block("L11", vec![
-        i_load(t0, hp,0),
+        i_load(t0, AM_R(hp)),
         i_cmp_gt(t0, t0, RI_R(bigN)),
         i_goto_ctf(t0, "L20", "L11a")
     ]);
@@ -4466,12 +4555,12 @@ fn split_0() -> Func {
 
     let stmts = vec![
         // Both the v1x and the v2x set become live at this point
-        s_imm(v10, 0),
-        s_imm(v11, 0),
-        s_imm(v12, 0),
-        s_imm(v20, 0),
-        s_imm(v21, 0),
-        s_imm(v22, 0),
+        s_imm(v10, 1),
+        s_imm(v11, 2),
+        s_imm(v12, 3),
+        s_imm(v20, 4),
+        s_imm(v21, 5),
+        s_imm(v22, 6),
 
         // In this loop, v1x are hot, but v2x are unused.  In an ideal world,
         // the v2x set would be spilled across the loop and reloaded after
@@ -4482,7 +4571,7 @@ fn split_0() -> Func {
             s_add(v11, v11, RI_I(2)),
             s_add(v12, v12, RI_I(3)),
             s_add(vI,   vI, RI_I(1)),
-            s_cmp_ge(vTMP, vI, RI_I(10))
+            s_cmp_ge(vTMP, vI, RI_I(100))
             ],
             vTMP
         ),
@@ -4495,7 +4584,7 @@ fn split_0() -> Func {
             s_add(v21, v21, RI_I(2)),
             s_add(v22, v22, RI_I(3)),
             s_add(vI,   vI, RI_I(1)),
-            s_cmp_ge(vTMP, vI, RI_I(10))
+            s_cmp_ge(vTMP, vI, RI_I(100))
             ],
             vTMP
         ),
@@ -4527,10 +4616,18 @@ fn split_0_by_hand() -> Func {
     let v21 = bif.vreg();
     let v22 = bif.vreg();
 
-    // Post-split versions of v20 .. v22
-    let sv20 = bif.vreg();
-    let sv21 = bif.vreg();
-    let sv22 = bif.vreg();
+    // Post-split versions of v10 .. v22
+    let s1v10 = bif.vreg();
+    let s1v11 = bif.vreg();
+    let s1v12 = bif.vreg();
+
+    let s1v20 = bif.vreg();
+    let s1v21 = bif.vreg();
+    let s1v22 = bif.vreg();
+
+    let s2v20 = bif.vreg();
+    let s2v21 = bif.vreg();
+    let s2v22 = bif.vreg();
 
     let vI   = bif.vreg();
     let vSUM = bif.vreg();
@@ -4545,6 +4642,10 @@ fn split_0_by_hand() -> Func {
         s_imm(v21, 0),
         s_imm(v22, 0),
 
+        s_copy(s1v20, v20),
+        s_copy(s1v21, v21),
+        s_copy(s1v22, v22),
+
         // In this loop, v1x are hot, but v2x are unused.  In an ideal world,
         // the v2x set would be spilled across the loop and reloaded after
         // that.
@@ -4554,40 +4655,379 @@ fn split_0_by_hand() -> Func {
             s_add(v11, v11, RI_I(2)),
             s_add(v12, v12, RI_I(3)),
             s_add(vI,   vI, RI_I(1)),
-            s_cmp_ge(vTMP, vI, RI_I(10))
+            s_cmp_ge(vTMP, vI, RI_I(100))
             ],
             vTMP
         ),
 
-        s_copy(sv20, v20),
-        s_copy(sv21, v21),
-        s_copy(sv22, v22),
+        s_copy(s1v10, v10),
+        s_copy(s1v11, v11),
+        s_copy(s1v12, v12),
+
+        s_copy(s2v20, s1v20),
+        s_copy(s2v21, s1v21),
+        s_copy(s2v22, s1v22),
 
         // Conversely, v2x in this loop are hot, and v1x are unused, but still
         // need to stay alive across it.
         s_imm(vI, 0),
         s_repeat_until(vec![
-            s_add(sv20, sv20, RI_I(1)),
-            s_add(sv21, sv21, RI_I(2)),
-            s_add(sv22, sv22, RI_I(3)),
+            s_add(s2v20, s2v20, RI_I(1)),
+            s_add(s2v21, s2v21, RI_I(2)),
+            s_add(s2v22, s2v22, RI_I(3)),
             s_add(vI,   vI, RI_I(1)),
-            s_cmp_ge(vTMP, vI, RI_I(10))
+            s_cmp_ge(vTMP, vI, RI_I(100))
             ],
             vTMP
         ),
 
         // All in all, the v1x and v2x set are both still live down to here.
         s_imm(vSUM, 0),
-        s_add(vSUM, vSUM, RI_R(v10)),
-        s_add(vSUM, vSUM, RI_R(v11)),
-        s_add(vSUM, vSUM, RI_R(v12)),
-        s_add(vSUM, vSUM, RI_R(sv20)),
-        s_add(vSUM, vSUM, RI_R(sv21)),
-        s_add(vSUM, vSUM, RI_R(sv22)),
+        s_add(vSUM, vSUM, RI_R(s1v10)),
+        s_add(vSUM, vSUM, RI_R(s1v11)),
+        s_add(vSUM, vSUM, RI_R(s1v12)),
+        s_add(vSUM, vSUM, RI_R(s2v20)),
+        s_add(vSUM, vSUM, RI_R(s2v21)),
+        s_add(vSUM, vSUM, RI_R(s2v22)),
 
         s_print_s("Result is "),
         s_print_i(vSUM),
         s_print_s("\n")
     ];
+    bif.finish(stmts)
+}
+
+// A big test.  This is derived from function fallbackQSort3 in the bzip2
+// sources.  Just be glad it was me and not you that had to translate it by
+// hand into machine code.  It generates 900 pseudo-random numbers, and then
+// sorts them using a Bentley-Sedgewick style 3-way-partitioning quicksort.
+// The result is checked for in-orderness and checksummed.  This is not
+// recursive (it can't be) so it maintains an explicit stack of
+// yet-to-be-processed subranges.  (Two stacks, really).
+//
+// This test has: 56 basic blocks, 215 insns, 36 virtual registers, 17
+// simultaneously live values, 735 live range fragments, 100 vreg live ranges.
+/*
+   Dynamic results by number of regs available, 2018Dec19:
+   17  224440 insns, 0 spills, 0 reloads
+   16  226241 insns, 1 spills, 1800 reloads
+   15  228045 insns, 2 spills, 3603 reloads
+   14  229804 insns, 589 spills, 4775 reloads
+   13  232127 insns, 590 spills, 7097 reloads
+   12  234450 insns, 591 spills, 9419 reloads
+   11  241229 insns, 1752 spills, 15037 reloads
+   10  248034 insns, 2913 spills, 20681 reloads
+   9   257322 insns, 4655 spills, 28227 reloads
+   8   265026 insns, 7508 spills, 33078 reloads
+   7   269598 insns, 8509 spills, 36649 reloads
+   6   276782 insns, 10453 spills, 41889 reloads
+   5   305031 insns, 14401 spills, 66190 reloads
+   4   384631 insns, 25980 spills, 134211 reloads
+   3   410510 insns, 36512 spills, 149558 reloads
+   2  out of regs in spill/reload (load and store insns can reference 3 regs)
+*/
+fn qsort() -> Func {
+    let mut bif = Blockifier::new("qsort");
+
+    // All your virtual register are belong to me.  Bwahaha.  Ha.  Ha.
+    let offs_stackLo = bif.vreg();
+    let offs_stackHi = bif.vreg();
+    let offs_numbers = bif.vreg();
+    let nNumbers = bif.vreg();
+    let rand = bif.vreg();
+    let loSt = bif.vreg();
+    let hiSt = bif.vreg();
+    let keepGoingI = bif.vreg();
+    let keepGoingO = bif.vreg();
+    let unLo = bif.vreg();
+    let unHi = bif.vreg();
+    let ltLo = bif.vreg();
+    let gtHi = bif.vreg();
+    let n = bif.vreg();
+    let m = bif.vreg();
+    let sp = bif.vreg();
+    let lo = bif.vreg();
+    let hi = bif.vreg();
+    let med = bif.vreg();
+    let r3 = bif.vreg();
+    let yyp1 = bif.vreg();
+    let yyp2 = bif.vreg();
+    let yyn = bif.vreg();
+    let t0 = bif.vreg();
+    let t1 = bif.vreg();
+    let t2 = bif.vreg();
+    let zztmp1 = bif.vreg();
+    let zztmp2 = bif.vreg();
+    let taa = bif.vreg();
+    let tbb = bif.vreg();
+    let i = bif.vreg();
+    let inOrder = bif.vreg();
+    let sum = bif.vreg();
+    let pass = bif.vreg();
+    let sp_gt_zero = bif.vreg();
+    let guard = bif.vreg();
+
+    let stmts = vec![
+    // mem[] layout and base offsets
+    //
+    // stackLo is [0..49]   (actually only needs 10 entries)
+    // stackHi is [50..99]  (ditto)
+    // array to sort is [100..999]
+    s_imm(offs_stackLo, 0),
+    s_imm(offs_stackHi, 50),
+    s_imm(offs_numbers, 100),
+    s_imm(nNumbers, 900),
+
+    // Fill mem[100..999] with "random" numbers
+    s_imm(rand, 0),
+    s_imm(i, 0),
+    s_repeat_until(vec![
+        s_mul(t0, rand, RI_I(7621)),
+        s_add(t0, t0, RI_I(1)),
+        s_mod(rand, t0, RI_I(32768)),
+        s_mod(t0, rand, RI_I(10000)),
+        s_store(AM_RR(offs_numbers, i), t0),
+        s_add(i, i, RI_I(1)),
+        s_cmp_ge(guard, i, RI_R(nNumbers))
+        ],
+        guard
+    ),
+
+    s_imm(rand, 0),
+    s_imm(sp, 0),
+    s_copy(loSt, offs_numbers),
+    s_sub(t0, offs_numbers, RI_I(1)),
+    s_add(hiSt, t0, RI_R(nNumbers)),
+
+    // Push initial stack entry
+    s_store(AM_RR(offs_stackLo, sp), loSt),
+    s_store(AM_RR(offs_stackHi, sp), hiSt),
+    s_add(sp, sp, RI_I(1)),
+
+    s_cmp_gt(sp_gt_zero, sp, RI_I(0)),
+    s_while_do(
+        sp_gt_zero,
+        vec![
+        s_cmp_lt(t0, sp, RI_I(10)),
+        //////assert(t0),
+
+        s_sub(sp, sp, RI_I(1)),
+        s_load(lo, AM_RR(offs_stackLo, sp)),
+        s_load(hi, AM_RR(offs_stackHi, sp)),
+
+        s_cmp_lt(t0, lo, RI_R(hi)),
+        s_if_then(t0, vec![
+
+            s_mul(t0, rand, RI_I(7621)),
+            s_add(t0, t0, RI_I(1)),
+            s_mod(rand, t0, RI_I(32768)),
+
+            s_mod(r3, rand, RI_I(3)),
+            s_cmp_eq(t0, r3, RI_I(0)),
+            s_if_then_else(t0, vec![
+                s_load(med, AM_R(lo))
+            ], vec![
+                s_cmp_eq(t0, r3, RI_I(1)),
+                s_if_then_else(t0, vec![
+                    s_add(t0, lo, RI_R(hi)),
+                    s_shr(t0, t0, RI_I(1)),
+                    s_load(med, AM_R(t0))
+                ], vec![
+                    s_load(med, AM_R(hi))
+                ]),
+            ]),
+
+            s_copy(unLo, lo),
+            s_copy(ltLo, lo),
+            s_copy(unHi, hi),
+            s_copy(gtHi, hi),
+
+            s_imm(keepGoingO, 1),
+            s_while_do(
+                keepGoingO,
+                vec![
+                s_imm(keepGoingI, 1),
+                s_cmp_le(guard, unLo, RI_R(unHi)),
+                s_while_do(
+                    guard,
+                    vec![
+                    s_load(t1, AM_R(unLo)),
+                    s_cmp_eq(t0, t1, RI_R(med)),
+                    s_if_then_else(t0, vec![
+                        s_load(zztmp1, AM_R(unLo)),
+                        s_load(zztmp2, AM_R(ltLo)),
+                        s_store(AM_R(unLo), zztmp2),
+                        s_store(AM_R(ltLo), zztmp1),
+                        s_add(ltLo, ltLo, RI_I(1)),
+                        s_add(unLo, unLo, RI_I(1))
+                    ], vec![
+                        s_cmp_gt(t0, t1, RI_R(med)),
+                        s_if_then_else(t0, vec![
+                           s_imm(keepGoingI, 0)
+                        ], vec![
+                           s_add(unLo, unLo, RI_I(1))
+                        ])
+                    ]),
+                    s_cmp_le(guard, unLo, RI_R(unHi)),
+                    s_and(guard, guard, RI_R(keepGoingI)),
+                ]),
+                s_imm(keepGoingI, 1),
+                s_cmp_le(guard, unLo, RI_R(unHi)),
+                s_while_do(
+                    guard,
+                    vec![
+                    s_load(t1, AM_R(unHi)),
+                    s_cmp_eq(t0, t1, RI_R(med)),
+                    s_if_then_else(t0, vec![
+                        s_load(zztmp1, AM_R(unHi)),
+                        s_load(zztmp2, AM_R(gtHi)),
+                        s_store(AM_R(unHi), zztmp2),
+                        s_store(AM_R(gtHi), zztmp1),
+                        s_sub(gtHi, gtHi, RI_I(1)),
+                        s_sub(unHi, unHi, RI_I(1))
+                    ], vec![
+                        s_cmp_lt(t0, t1, RI_R(med)),
+                        s_if_then_else(t0, vec![
+                           s_imm(keepGoingI, 0)
+                        ], vec![
+                           s_sub(unHi, unHi, RI_I(1))
+                        ]),
+                    ]),
+                    s_cmp_le(guard, unLo, RI_R(unHi)),
+                    s_and(guard, guard, RI_R(keepGoingI)),
+                ]),
+                s_cmp_gt(t0, unLo, RI_R(unHi)),
+                s_if_then_else(t0, vec![
+                    s_imm(keepGoingO, 0)
+                ], vec![
+                    s_load(zztmp1, AM_R(unLo)),
+                    s_load(zztmp2, AM_R(unHi)),
+                    s_store(AM_R(unLo), zztmp2),
+                    s_store(AM_R(unHi), zztmp1),
+                    s_add(unLo, unLo, RI_I(1)),
+                    s_sub(unHi, unHi, RI_I(1)),
+                ]),
+            ]),
+            s_sub(t0, unLo, RI_I(1)),
+            s_cmp_eq(t0, unHi, RI_R(t0)),
+            //////assert( t0 ),
+
+            s_cmp_ge(t0, gtHi, RI_R(ltLo)),
+            s_if_then(t0, vec![
+                s_sub(taa, ltLo, RI_R(lo)),
+                s_sub(tbb, unLo, RI_R(ltLo)),
+                s_cmp_lt(t0, taa, RI_R(tbb)),
+                s_if_then_else(t0, vec![
+                   s_copy(n, taa)
+                ], vec![
+                   s_copy(n, tbb)
+                ]),
+
+                s_copy(yyp1, lo),
+                s_sub(yyp2, unLo, RI_R(n)),
+                s_copy(yyn, n),
+                s_cmp_gt(guard, yyn, RI_I(0)),
+                s_while_do(
+                   guard,
+                   vec![
+                   s_load(zztmp1, AM_R(yyp1)),
+                   s_load(zztmp2, AM_R(yyp2)),
+                   s_store(AM_R(yyp1), zztmp2),
+                   s_store(AM_R(yyp2), zztmp1),
+                   s_add(yyp1, yyp1, RI_I(1)),
+                   s_add(yyp2, yyp2, RI_I(1)),
+                   s_sub(yyn, yyn, RI_I(1)),
+                   s_cmp_gt(guard, yyn, RI_I(0)),
+                ]),
+
+                s_sub(taa, hi, RI_R(gtHi)),
+                s_sub(tbb, gtHi, RI_R(unHi)),
+                s_cmp_lt(t0, taa, RI_R(tbb)),
+                s_if_then_else(t0, vec![
+                   s_copy(m, taa)
+                ], vec![
+                   s_copy(m, tbb)
+                ]),
+
+                s_copy(yyp1, unLo),
+                s_sub(yyp2, hi, RI_R(m)),
+                s_add(yyp2, yyp2, RI_I(1)),
+                s_copy(yyn, m),
+                s_cmp_gt(guard, yyn, RI_I(0)),
+                s_while_do(
+                   guard,
+                   vec![
+                   s_load(zztmp1, AM_R(yyp1)),
+                   s_load(zztmp2, AM_R(yyp2)),
+                   s_store(AM_R(yyp1), zztmp2),
+                   s_store(AM_R(yyp2), zztmp1),
+                   s_add(yyp1, yyp1, RI_I(1)),
+                   s_add(yyp2, yyp2, RI_I(1)),
+                   s_sub(yyn, yyn, RI_I(1)),
+                   s_cmp_gt(guard, yyn, RI_I(0)),
+                ]),
+
+                s_add(n, lo, RI_R(unLo)),
+                s_sub(n, n, RI_R(ltLo)),
+                s_sub(n, n, RI_I(1)),
+                s_sub(m, gtHi, RI_R(unHi)),
+                s_sub(m, hi, RI_R(m)),
+                s_add(m, m, RI_I(1)),
+
+                s_sub(t1, n, RI_R(lo)),
+                s_sub(t2, hi, RI_R(m)),
+                s_cmp_gt(t0, t1, RI_R(t2)),
+                s_if_then_else(t0, vec![
+                   s_store(AM_RR(offs_stackLo, sp), lo),
+                   s_store(AM_RR(offs_stackHi, sp), n),
+                   s_add(sp, sp, RI_I(1)),
+                   s_store(AM_RR(offs_stackLo, sp), m),
+                   s_store(AM_RR(offs_stackHi, sp), hi),
+                   s_add(sp, sp, RI_I(1)),
+                ], vec![
+                   s_store(AM_RR(offs_stackLo, sp), m),
+                   s_store(AM_RR(offs_stackHi, sp), hi),
+                   s_add(sp, sp, RI_I(1)),
+                   s_store(AM_RR(offs_stackLo, sp), lo),
+                   s_store(AM_RR(offs_stackHi, sp), n),
+                   s_add(sp, sp, RI_I(1)),
+                ]),
+            ]),
+        ]), // end "if this work unit has more than one item"
+        s_cmp_gt(sp_gt_zero, sp, RI_I(0))
+    ]), // end outer loop
+
+    // Check the results, as much as we reasonably can.
+    s_imm(sum, 0),
+    s_imm(inOrder, 1),
+    s_load(sum, AM_R(offs_numbers)),
+    s_add(i, offs_numbers, RI_I(1)),
+    s_repeat_until(vec![
+        s_load(t0, AM_R(i)),
+        s_add(sum, sum, RI_R(t0)),
+        s_sub(t2, i, RI_I(1)),
+        s_load(t1, AM_R(t2)),
+        s_cmp_gt(t2, t1, RI_R(t0)),
+        s_if_then(t2, vec![
+           s_imm(inOrder, 0)
+        ]),
+        s_add(i, i, RI_I(1)),
+        s_add(guard, offs_numbers, RI_R(nNumbers)),
+        s_cmp_ge(guard, i, RI_R(guard))
+        ],
+        guard
+    ),
+
+    s_cmp_eq(pass, sum, RI_I(4272946)),
+    s_and(pass, inOrder, RI_R(pass)),
+    s_if_then_else(pass, vec![
+        s_print_s("PASS (in order, and correct checksum)")
+    ], vec![
+        s_print_s("FAIL (not in order, or incorrect checksum)")
+    ]),
+    s_print_s("\n")
+
+    ];
+
     bif.finish(stmts)
 }
