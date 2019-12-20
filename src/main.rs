@@ -1210,20 +1210,7 @@ impl<T: Eq + Ord + Hash + Copy + Show> Set<T> {
     }
 
     fn equals(&self, other: &Self) -> bool {
-        // This is an appallingly inefficient implementation.  But it's simple.
-        let v1 = self.to_vec();
-        let v2 = other.to_vec();
-        // Since v1 and v2 are sorted, they will be element-wise identical if
-        // the sets themselves contain identical elements.
-        if v1.len() != v2.len() {
-            return false;
-        }
-        for (e1, e2) in v1.iter().zip(v2) {
-            if *e1 != e2 {
-                return false;
-            }
-        }
-        true
+        self.set == other.set
     }
 }
 
@@ -1295,6 +1282,7 @@ struct CFGInfo {
 }
 
 impl CFGInfo {
+    #[inline(never)]
     fn create(func: &Func) -> Self {
         let nBlocks = func.blocks.len();
 
@@ -1451,6 +1439,7 @@ impl CFGInfo {
 // dominate it. This algorithm is from Fig 7.14 of Muchnick 1997 (an excellent
 // book). The algorithm is described as simple but not as performant as some
 // others.
+#[inline(never)]
 fn calc_dominators(pred_map: &Vec::</*BlockIx, */Set<BlockIx>>,
                    start: BlockIx)
                    -> Vec::</*BlockIx, */Set<BlockIx>> {
@@ -1507,6 +1496,7 @@ fn calc_dominators(pred_map: &Vec::</*BlockIx, */Set<BlockIx>>,
 
 impl Func {
     // Returned vectors contain one element per block
+    #[inline(never)]
     fn calc_def_and_use(&self) -> (Vec::<Set<Reg>>, Vec::<Set<Reg>>) {
         let mut def_sets = Vec::new();
         let mut use_sets = Vec::new();
@@ -1539,6 +1529,7 @@ impl Func {
     }
 
     // Returned vectors contain one element per block
+    #[inline(never)]
     fn calc_livein_and_liveout(&self,
                                def_sets_per_block: &Vec::<Set<Reg>>,
                                use_sets_per_block: &Vec::<Set<Reg>>,
@@ -2098,6 +2089,7 @@ impl Func {
         }
     }
 
+    #[inline(never)]
     fn get_Frags(&self,
                  livein_sets_per_block:  &Vec::<Set<Reg>>,
                  liveout_sets_per_block: &Vec::<Set<Reg>>
@@ -2296,6 +2288,7 @@ impl Show for VLRIx {
 //=============================================================================
 // Merging of Frags, producing the final LRs, minus metrics
 
+#[inline(never)]
 fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
                frag_env: &Vec::</*FragIx, */Frag>,
                cfg_info: &CFGInfo)
@@ -2434,6 +2427,7 @@ fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
 //        the estimated execution count of the containing block
 //
 // all the while being very careful to avoid overflow.
+#[inline(never)]
 fn set_VLR_metrics(vlrs: &mut Vec::<VLR>,
                    fenv: &Vec::<Frag>, blocks: &Vec::<Block>)
 {
@@ -2627,11 +2621,13 @@ impl VLRPrioQ {
         res
     }
 
+    #[inline(never)]
     fn is_empty(&self) -> bool {
         self.unallocated.is_empty()
     }
     
     // Add a VLR index.
+    #[inline(never)]
     fn add_VLR(&mut self, vlr_ix: VLRIx) {
         self.unallocated.push(vlr_ix);
     }
@@ -2639,6 +2635,7 @@ impl VLRPrioQ {
     // Look in |unallocated| to locate the entry referencing the VLR with the
     // largest |size| value.  Remove the ref from |unallocated| and return the
     // LRIx for said entry.
+    #[inline(never)]
     fn get_longest_VLR(&mut self, vlr_env: &Vec::<VLR>) -> Option<VLRIx> {
         if self.unallocated.len() == 0 {
             return None;
@@ -2666,6 +2663,7 @@ impl VLRPrioQ {
         Some(res)
     }
 
+    #[inline(never)]
     fn show_with_envs(&self, vlr_env: &Vec::<VLR>) -> String {
         let mut res = "".to_string();
         let mut first = true;
@@ -2704,6 +2702,7 @@ impl PerRReg {
         }
     }
 
+    #[inline(never)]
     fn add_RLR(&mut self, to_add: &RLR, fenv: &Vec::<Frag>) {
         // Commit this register to |to_add|, irrevocably.  Don't add it to
         // |vlrixs_assigned| since we will never want to later evict the
@@ -2711,11 +2710,13 @@ impl PerRReg {
         self.frags_in_use.add(&to_add.sfrags, fenv);
     }
 
+    #[inline(never)]
     fn can_add_VLR_without_eviction(&self, to_add: &VLR,
                                     fenv: &Vec::<Frag>) -> bool {
         self.frags_in_use.can_add(&to_add.sfrags, fenv)
     }
 
+    #[inline(never)]
     fn add_VLR(&mut self, to_add_vlrix: VLRIx,
                vlr_env: &Vec::<VLR>, fenv: &Vec::<Frag>) {
         let vlr = &vlr_env[to_add_vlrix.get_usize()];
@@ -2723,6 +2724,7 @@ impl PerRReg {
         self.vlrixs_assigned.push(to_add_vlrix);
     }
 
+    #[inline(never)]
     fn del_VLR(&mut self, to_del_vlrix: VLRIx,
                vlr_env: &Vec::<VLR>, fenv: &Vec::<Frag>) {
         debug_assert!(self.vlrixs_assigned.len() > 0);
@@ -2746,6 +2748,7 @@ impl PerRReg {
         self.frags_in_use.del(&vlr.sfrags, fenv);
     }
 
+    #[inline(never)]
     fn find_best_evict_VLR(&self, would_like_to_add: &VLR,
                            vlr_env: &Vec::<VLR>,
                            frag_env: &Vec::<Frag>)
@@ -2795,9 +2798,11 @@ impl PerRReg {
         best_so_far
     }
 
+    #[inline(never)]
     fn show1_with_envs(&self, fenv: &Vec::<Frag>) -> String {
         "in_use:   ".to_string() + &self.frags_in_use.show_with_fenv(&fenv)
     }
+    #[inline(never)]
     fn show2_with_envs(&self, fenv: &Vec::<Frag>) -> String {
         "assigned: ".to_string() + &self.vlrixs_assigned.show()
     }
@@ -2834,6 +2839,7 @@ impl Show for EditListItem {
 //=============================================================================
 // Printing the allocator's top level state
 
+#[inline(never)]
 fn print_RA_state(who: &str,
                   // State components
                   prioQ: &VLRPrioQ, perRReg: &Vec::<PerRReg>,
@@ -2902,6 +2908,7 @@ fn show_commit_tab(commit_tab: &Vec::<SortedFragIxs>,
 // returns, it will contain no VReg uses.  Allocation can fail if there are
 // insufficient registers to even generate spill/reload code, or if the
 // function appears to have any undefined VReg/RReg uses.
+#[inline(never)]
 fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
     let (def_sets_per_block, use_sets_per_block) = func.calc_def_and_use();
