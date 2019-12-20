@@ -387,26 +387,26 @@ enum BinOp {
 impl Show for BinOp {
     fn show(&self) -> String {
         match self {
-            BinOp::Add   => "add   ".to_string(),
-            BinOp::Sub   => "sub   ".to_string(),
-            BinOp::Mul   => "mul   ".to_string(),
-            BinOp::Mod   => "mod   ".to_string(),
-            BinOp::Shr   => "shr   ".to_string(),
-            BinOp::And   => "and   ".to_string(),
-            BinOp::CmpEQ => "cmpeq ".to_string(),
-            BinOp::CmpLT => "cmplt ".to_string(),
-            BinOp::CmpLE => "cmple ".to_string(),
-            BinOp::CmpGE => "cmpge ".to_string(),
-            BinOp::CmpGT => "cmpgt ".to_string()
+            BinOp::Add   => "add".to_string(),
+            BinOp::Sub   => "sub".to_string(),
+            BinOp::Mul   => "mul".to_string(),
+            BinOp::Mod   => "mod".to_string(),
+            BinOp::Shr   => "shr".to_string(),
+            BinOp::And   => "and".to_string(),
+            BinOp::CmpEQ => "cmpeq".to_string(),
+            BinOp::CmpLT => "cmplt".to_string(),
+            BinOp::CmpLE => "cmple".to_string(),
+            BinOp::CmpGE => "cmpge".to_string(),
+            BinOp::CmpGT => "cmpgt".to_string()
         }
     }
 }
 impl BinOp {
     fn calc(self, argL: u32, argR: u32) -> u32 {
         match self {
-            BinOp::Add   => argL + argR,
+            BinOp::Add   => u32::wrapping_add(argL, argR),
             BinOp::Sub   => u32::wrapping_sub(argL, argR),
-            BinOp::Mul   => argL * argR,
+            BinOp::Mul   => u32::wrapping_mul(argL, argR),
             BinOp::Mod   => argL % argR,
             BinOp::Shr   => argL >> (argR & 31),
             BinOp::And   => argL & argR,
@@ -425,6 +425,7 @@ enum Insn {
     Imm     { dst: Reg, imm: u32 },
     Copy    { dst: Reg, src: Reg },
     BinOp   { op: BinOp, dst: Reg, srcL: Reg, srcR: RI },
+    BinOpM  { op: BinOp, dst: Reg, srcR: RI }, // "mod" semantics for |dst|
     Load    { dst: Reg, addr: AM },
     Store   { addr: AM, src: Reg },
     Spill   { dst: Slot, src: RReg },
@@ -438,6 +439,19 @@ enum Insn {
 
 impl Show for Insn {
     fn show(&self) -> String {
+        fn ljustify(s: String, w: usize) -> String {
+            if s.len() >= w {
+                s
+            } else {
+                // BEGIN hack
+                let mut need = w - s.len();
+                if need > 4 { need = 4; }
+                let extra = [" ", "  ", "   ", "    "][need - 1];
+                // END hack
+                s + &extra.to_string()
+            }
+        }
+
         match self {
             Insn::Imm { dst, imm } =>
                 "imm    ".to_string()
@@ -446,9 +460,14 @@ impl Show for Insn {
                 "copy   ".to_string()
                 + &dst.show() + &", ".to_string() + &src.show(),
             Insn::BinOp { op, dst, srcL, srcR } =>
-                op.show() + &" ".to_string() + &dst.show()
+                ljustify(op.show(), 6)
+                + &" ".to_string() + &dst.show()
                 + &", ".to_string() + &srcL.show() + &", ".to_string()
                 + &srcR.show(),
+            Insn::BinOpM { op, dst, srcR } =>
+                ljustify(op.show() + &"m".to_string(), 6)
+                + &" ".to_string() + &dst.show()
+                + &", ".to_string() + &srcR.show(),
             Insn::Load { dst, addr } =>
                 "load   ".to_string() + &dst.show() + &", ".to_string()
                 + &addr.show(),
@@ -508,15 +527,19 @@ impl Insn {
         }
     }
 
-    // Returns a pair of sets of regs, (def, use), being those def'd (written)
-    // and use'd (read) by the instruction, respectively.  Note "use" is often
-    // written "uce" since "use" is a Rust reserved word.
+    // Returns three sets of regs, (def, mod, use), being those def'd
+    // (written), those mod'd (modified) and those use'd (read) by the
+    // instruction, respectively.  Note "use" is sometimes written as "uce"
+    // below since "use" is a Rust reserved word, and similarly "mod" is
+    // written "m0d" (that's a zero, not capital-o).
     //
-    // FIXME for insns that modify a reg (a la Intel): add and return here a
-    // third set for registers mentioned in a modify role.  Then fix up all
-    // users of this function accordingly.
-    fn getRegUsage(&self) -> (Set::<Reg>, Set::<Reg>) {
+    // Be careful here.  If an instruction really modifies a register -- as is
+    // typical for x86 -- that register needs to be in the |mod| set, and not
+    // in the |def| and |use| sets.  *Any* mistake in describing register uses
+    // here will almost certainly lead to incorrect register allocations.
+    fn getRegUsage(&self) -> (Set::<Reg>, Set::<Reg>, Set::<Reg>) {
         let mut def = Set::<Reg>::empty();
+        let mut m0d = Set::<Reg>::empty();
         let mut uce = Set::<Reg>::empty();
         match self {
             Insn::Imm { dst, imm:_ } => {
@@ -529,6 +552,10 @@ impl Insn {
             Insn::BinOp { op:_, dst, srcL, srcR } => {
                 def.insert(*dst);
                 uce.insert(*srcL);
+                srcR.addRegReadsTo(&mut uce);
+            },
+            Insn::BinOpM { op:_, dst, srcR } => {
+                m0d.insert(*dst);
                 srcR.addRegReadsTo(&mut uce);
             },
             Insn::Store { addr, src } => {
@@ -550,7 +577,7 @@ impl Insn {
             Insn::Finish { } => { },
             _other => panic!("Insn::getRegUsage: unhandled: {}", self.show())
         }
-        (def, uce)
+        (def, m0d, uce)
     }
 
     // Apply the specified VReg->RReg mappings to the instruction, thusly:
@@ -666,6 +693,15 @@ fn i_cmp_ge(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
 fn i_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
     Insn::BinOp { op: BinOp::CmpGT, dst, srcL, srcR }
 }
+
+// 2-operand versions of i_add and i_sub, for experimentation
+fn i_addm(dst: Reg, srcR: RI) -> Insn {
+    Insn::BinOpM { op: BinOp::Add, dst, srcR }
+}
+fn i_subm(dst: Reg, srcR: RI) -> Insn {
+    Insn::BinOpM { op: BinOp::Sub, dst, srcR }
+}
+
 
 fn is_control_flow_insn(insn: &Insn) -> bool {
     match insn {
@@ -1057,6 +1093,12 @@ impl<'a> IState<'a> {
                 let dst_v = op.calc(srcL_v, srcR_v);
                 self.setReg(*dst, dst_v);
             },
+            Insn::BinOpM { op, dst, srcR } => {
+                let mut dst_v = self.getReg(*dst);
+                let srcR_v = self.getRI(srcR);
+                dst_v = op.calc(dst_v, srcR_v);
+                self.setReg(*dst, dst_v);
+            },
             Insn::Load { dst, addr } => {
                 let addr_v = self.getAM(addr);
                 let dst_v = self.getMem(addr_v);
@@ -1348,8 +1390,9 @@ impl CFGInfo {
 
         // Now collect the sets of Blocks for each loop.  For each back edge,
         // collect up all the blocks in the natural loop defined by the back
-        // edge M->N.  Muchnick Fig 7.21.  Order in |natural_loops| has no
-        // particular meaning.
+        // edge M->N.  This algorithm is from Fig 7.21 of Muchnick 1997 (an
+        // excellent book).  Order in |natural_loops| has no particular
+        // meaning.
         let mut natural_loops = Vec::<Set<BlockIx>>::new();
         for (bixM, bixN) in back_edges.iter() {
             let mut Loop: Set::<BlockIx>;
@@ -1378,8 +1421,8 @@ impl CFGInfo {
 
         // Here is a kludgey way to compute the depth of each loop.  First,
         // order |natural_loops| by increasing size, so the largest loops are
-        // at the end.  Then, repeatedly scan forwards through the vector (in
-        // upper triangular matrix style).  For each scan, remember the
+        // at the end.  Then, repeatedly scan forwards through the vector, in
+        // "upper triangular matrix" style.  For each scan, remember the
         // "current loop".  Initially the "current loop is the start point of
         // each scan.  If, during the scan, we encounter a loop which is a
         // superset of the "current loop", change the "current loop" to this
@@ -1436,9 +1479,8 @@ impl CFGInfo {
 
 // Calculate the dominance relationship, given |pred_map| and a start node
 // |start|.  The resulting vector maps each block to the set of blocks that
-// dominate it. This algorithm is from Fig 7.14 of Muchnick 1997 (an excellent
-// book). The algorithm is described as simple but not as performant as some
-// others.
+// dominate it. This algorithm is from Fig 7.14 of Muchnick 1997. The
+// algorithm is described as simple but not as performant as some others.
 #[inline(never)]
 fn calc_dominators(pred_map: &Vec::</*BlockIx, */Set<BlockIx>>,
                    start: BlockIx)
@@ -1506,19 +1548,26 @@ impl Func {
             for iix in b.start.get_usize() .. b.start.get_usize()
                                               + b.len as usize {
                 let insn = &self.insns[iix];
-                let (regs_d, regs_u) = insn.getRegUsage();
-                for u in regs_u.iter() {
-                    // |u| is used (read) by the instruction.  Whether or not
-                    // we should consider it live-in for the block depends on
-                    // whether it was been written earlier in the block.  We
-                    // can determine that by checking whether it is already in
-                    // the def set for the block.
+                let (regs_d, regs_m, regs_u) = insn.getRegUsage();
+                // Add to |uce|, any registers for which the first event
+                // in this block is a read.  Dealing with the "first event"
+                // constraint is a bit tricky.
+                for u in regs_u.iter() /*FIXME.chain(regs_m.iter())*/ {
+                    // |u| is used (either read or modified) by the
+                    // instruction.  Whether or not we should consider it
+                    // live-in for the block depends on whether it was been
+                    // written earlier in the block.  We can determine that by
+                    // checking whether it is already in the def set for the
+                    // block.
                     if !def.contains(*u) {
                         uce.insert(*u);
                     }
                 }
-                // FIXME: isn't this just: defs union= regs_d?
-                for d in regs_d.iter() {
+                // Now add to |def|, all registers written by the instruction.
+                // This is simpler.
+                // FIXME: isn't this just: defs union= (regs_d union regs_m) ?
+                // (Similar comment applies for the |uce| update too)
+                for d in regs_d.iter().chain(regs_m.iter()) {
                     def.insert(*d);
                 }
             }
@@ -1895,8 +1944,7 @@ impl Func {
             Written { uses: u16, wp: Option<InsnIx> },
 
             // Written, then read.  Meaning of |wp| is same as above.  |rp| is
-            // the most recently observed read point, using the usual
-            // dead_after indexing.
+            // the most recently observed read point.
             WrThenRd { uses: u16, wp: Option<InsnIx>, rp: InsnIx }
         }
         // end State machine entries
@@ -1933,11 +1981,11 @@ impl Func {
         for ix in block.start.get() .. block.start.get() + block.len {
             let iix = mkInsnIx(ix);
             let insn = &self.insns[ix as usize];
-            let (regs_d, regs_u) = insn.getRegUsage();
+            let (regs_d, regs_m, regs_u) = insn.getRegUsage();
 
-            // Examine reads.  This is pretty simple.  They simply extend
-            // existing fragments.
-            for r in regs_u.iter() {
+            // Examine reads (and reads implied by modifies).  This is pretty
+            // simple.  They simply extend existing fragments.
+            for r in regs_u.iter() /*FIXME.chain(regs_m.iter())*/ {
                 let new_sme: Frag_SME;
                 match state.get(r) {
                     // First event for |r| is a read, but it's not listed
@@ -1964,10 +2012,11 @@ impl Func {
                 state.insert(*r, new_sme);
             }
 
-            // Examine writes.  The general idea is that a write causes us to
-            // terminate the existing frag, if any, add it to |tmpResultVec|,
-            // and start a new frag.  But we have to be careful to deal
-            // correctly with dead writes.
+            // Examine writes (but not writes implied by modifies).  The
+            // general idea is that a write causes us to terminate the
+            // existing frag, if any, add it to |tmpResultVec|, and start a
+            // new frag.  But we have to be careful to deal correctly with
+            // dead writes.
             for r in regs_d.iter() {
                 let new_sme: Frag_SME;
                 match state.get(r) {
@@ -3180,7 +3229,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
             for iixNo in frag.first.iix.get()
                          .. frag.last.iix.get() + 1/*CHECK THIS*/ {
                 let insn: &Insn = &func.insns[iixNo as usize];
-                let (regs_d, regs_u) = insn.getRegUsage();
+                let (regs_d, regs_m_FIXME, regs_u) = insn.getRegUsage();
                 if !regs_u.contains(Reg_V(curr_vlr.vreg))
                    && !regs_d.contains(Reg_V(curr_vlr.vreg)) {
                     continue;
@@ -3916,6 +3965,12 @@ fn s_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
     s_vanilla( i_cmp_gt(dst, srcL, srcR) )
 }
 
+fn s_addm(dst: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_addm(dst, srcR) )
+}
+fn s_subm(dst: Reg, srcR: RI) -> Stmt {
+    s_vanilla( i_subm(dst, srcR) )
+}
 
 struct Blockifier {
     name:    String,
@@ -4092,39 +4147,10 @@ impl Blockifier {
 
 
 //=============================================================================
-// Example programs
+// Test cases.  The list of them is right at the bottom, function |find_Func|.
+// Add new ones there.
 
-// Returns either the requested Func, or if not found, a list of the available
-// ones.
-fn find_Func(name: &String) -> Result::<Func, Vec::<String>> {
-    // This is really stupid.  Fortunately it's not performance critical :)
-    let all_Funcs = vec![
-        example_0(), // straight_line
-        example_1(), // fill_then_sum
-        example_2(), // shellsort
-        example_3(), // three loops
-        stmts_0(),   // a small Stmty test
-        split_0(),          // LR splitting might help here
-        split_0_by_hand(),  // As split_0 but with LRs split by hand
-        badness(),
-        qsort()
-    ];
-
-    let mut all_names = Vec::new();
-    for cand in &all_Funcs {
-        all_names.push(cand.name.clone());
-    }
-
-    for cand in all_Funcs {
-        if cand.name == *name {
-            return Ok(cand);
-        }
-    }
-
-    Err(all_names)
-}
-
-fn example_0() -> Func {
+fn test__straight_line() -> Func {
     let mut func = Func::new("straight_line", "b0");
 
     // Regs, virtual and real, that we want to use.
@@ -4147,7 +4173,7 @@ fn example_0() -> Func {
     func
 }
 
-fn example_1() -> Func {
+fn test__fill_then_sum() -> Func {
     let mut func = Func::new("fill_then_sum", "set-loop-pre");
 
     // Regs, virtual and real, that we want to use.
@@ -4201,8 +4227,8 @@ fn example_1() -> Func {
     func
 }
 
-fn example_2() -> Func {
-    let mut func = Func::new("shellsort", "Lstart");
+fn test__ssort() -> Func {
+    let mut func = Func::new("ssort", "Lstart");
 
     // This is a simple "shellsort" test.  An array of numbers to sort is
     // placed in mem[5..24] and an increment table is placed in mem[0..4].
@@ -4353,8 +4379,8 @@ fn example_2() -> Func {
     func
 }
 
-fn example_3() -> Func {
-    let mut func = Func::new("three_loops", "start");
+fn test__3_loops() -> Func {
+    let mut func = Func::new("3_loops", "start");
 
     let v00  = func.vreg();
     let v01  = func.vreg();
@@ -4433,7 +4459,7 @@ fn example_3() -> Func {
 }
 
 // Whatever the current badness is
-fn badness() -> Func {
+fn test__badness() -> Func {
     let mut func = Func::new("badness", "Lstart");
 
     let lo = func.vreg();
@@ -4474,8 +4500,8 @@ fn badness() -> Func {
     func
 }
 
-fn stmts_0() -> Func {
-    let mut bif = Blockifier::new("stmts_0");
+fn test__stmts() -> Func {
+    let mut bif = Blockifier::new("stmts");
     let vI = bif.vreg();
     let vJ = bif.vreg();
     let vSUM = bif.vreg();
@@ -4546,8 +4572,8 @@ fn stmts_0() -> Func {
 
 // Test cases where live range splitting might obviously help
 
-fn split_0() -> Func {
-    let mut bif = Blockifier::new("split_0");
+fn test__needs_splitting() -> Func {
+    let mut bif = Blockifier::new("needs_splitting");
     let v10 = bif.vreg();
     let v11 = bif.vreg();
     let v12 = bif.vreg();
@@ -4612,9 +4638,9 @@ fn split_0() -> Func {
     bif.finish(stmts)
 }
 
-// This is the same as split_0, but with the live ranges split "manually"
-fn split_0_by_hand() -> Func {
-    let mut bif = Blockifier::new("split_0_by_hand");
+// This is the same as needs_splitting, but with the live ranges split "manually"
+fn test__needs_splitting2() -> Func {
+    let mut bif = Blockifier::new("needs_splitting2");
     let v10 = bif.vreg();
     let v11 = bif.vreg();
     let v12 = bif.vreg();
@@ -4733,7 +4759,7 @@ fn split_0_by_hand() -> Func {
    3   410510 insns, 36512 spills, 149558 reloads
    2  out of regs in spill/reload (load and store insns can reference 3 regs)
 */
-fn qsort() -> Func {
+fn test__qsort() -> Func {
     let mut bif = Blockifier::new("qsort");
 
     // All your virtual register are belong to me.  Bwahaha.  Ha.  Ha.
@@ -5037,4 +5063,90 @@ fn qsort() -> Func {
     ];
 
     bif.finish(stmts)
+}
+
+// This is a version of fill_then_sum that uses some 2-operand insns.
+fn test__fill_then_sum_2a() -> Func {
+    let mut func = Func::new("fill_then_sum_2a", "set-loop-pre");
+
+    // Regs, virtual and real, that we want to use.
+    let vNENT = func.vreg();
+    let vI    = func.vreg();
+    let vSUM  = func.vreg();
+    let rTMP  = Reg_R(mkRReg(2)); // "2" is arbitrary.
+    let vTMP2 = func.vreg();
+
+    // Loop pre-header for filling array with numbers.
+    // This is also the entry point.
+    func.block("set-loop-pre", vec![
+        i_imm (vNENT, 10),
+        i_imm (vI,    0),
+        i_goto("set-loop")
+    ]);
+
+    // Filling loop
+    func.block("set-loop", vec![
+        i_store   (AM_R(vI), vI),
+        i_addm    (vI,   RI_I(1)),
+        i_cmp_lt  (rTMP, vI, RI_R(vNENT)),
+        i_goto_ctf(rTMP, "set-loop", "sum-loop-pre")
+    ]);
+
+    // Loop pre-header for summing them
+    func.block("sum-loop-pre", vec![
+        i_imm(vSUM, 0),
+        i_imm(vI,   0),
+        i_goto("sum-loop")
+    ]);
+
+    // Summing loop
+    func.block("sum-loop", vec![
+        i_load  (rTMP,  AM_R(vI)),
+        i_addm  (vSUM,  RI_R(rTMP)),
+        i_addm  (vI,    RI_I(1)),
+        i_cmp_lt(vTMP2, vI,   RI_R(vNENT)),
+        i_goto_ctf(vTMP2, "sum-loop", "print-result")
+    ]);
+
+    // After loop.  Print result and stop.
+    func.block("print-result", vec![
+        i_print_s("Sum = "),
+        i_print_i(vSUM),
+        i_print_s("\n"),
+        i_finish()
+    ]);
+
+    func.finish();
+    func
+}
+
+// This is the list of available tests.  This function returns either the
+// requested Func, or if not found, a list of the available ones.
+fn find_Func(name: &String) -> Result::<Func, Vec::<String>> {
+    // This is really stupid.  Fortunately it's not performance critical :)
+    let all_Funcs = vec![
+        test__straight_line(),     // straight_line
+        test__fill_then_sum(),     // fill_then_sum
+        test__ssort(),             // shellsort
+        test__3_loops(),           // three loops
+        test__stmts(),             // a small Stmty test
+        test__needs_splitting(),   // LR splitting might help here ..
+        test__needs_splitting2(),  // .. same, but with LRs split by hand
+        test__badness(),           // Whatever the current badness is
+        test__qsort(),             // big qsort test, 3-operand only
+        test__fill_then_sum_2a(),  // 2-operand version of fill_then_sum
+    ];
+
+    let mut all_names = Vec::new();
+    for cand in &all_Funcs {
+        all_names.push(cand.name.clone());
+    }
+
+    for cand in all_Funcs {
+        if cand.name == *name {
+            return Ok(cand);
+        }
+    }
+
+    Err(all_names)
 }
