@@ -192,11 +192,35 @@ impl Reg {
             Reg::VReg(vreg)  => *vreg
         }
     }
-    fn apply(&mut self, map: &Map::<VReg, RReg>) {
+    // Apply a vreg-rreg mapping to a Reg.  This used for registers used in
+    // either a read- or a write-role.
+    fn apply_D_or_U(&mut self, map: &Map::<VReg, RReg>) {
         match self {
             Reg::RReg(_) => {},
             Reg::VReg(vreg) => {
                 if let Some(rreg) = map.get(vreg) {
+                    *self = Reg::RReg(*rreg);
+                } else {
+                    panic!("Reg::apply_D_or_U: no mapping for {}", vreg.show());
+                }
+            }
+        }
+    }
+    // Apply a pair of vreg-rreg mappings to a Reg.  The mappings *must*
+    // agree!  This seems a bit strange at first.  It is used for registers
+    // used in a modify-role.
+    fn apply_M(&mut self, mapD: &Map::<VReg, RReg>, mapU: &Map::<VReg, RReg>) {
+        match self {
+            Reg::RReg(_) => {},
+            Reg::VReg(vreg) => {
+                let mb_result_D = mapD.get(vreg);
+                let mb_result_U = mapU.get(vreg);
+                // Failure of this is serious and should be investigated.
+                if mb_result_D != mb_result_U {
+                    panic!("Reg::apply_M: inconsistent mappings for {}",
+                           vreg.show());
+                }
+                if let Some(rreg) = mb_result_D {
                     *self = Reg::RReg(*rreg);
                 } else {
                     panic!("Reg::apply: no mapping for {}", vreg.show());
@@ -336,9 +360,9 @@ impl RI {
             RI::Imm { ..  } => { }
         }
     }
-    fn apply(&mut self, map: &Map::<VReg, RReg>) {
+    fn apply_D_or_U(&mut self, map: &Map::<VReg, RReg>) {
         match self {
-            RI::Reg { ref mut reg } => { reg.apply(map); },
+            RI::Reg { ref mut reg } => { reg.apply_D_or_U(map); },
             RI::Imm { .. }          => {}
         }
     }
@@ -374,12 +398,12 @@ impl AM {
                 { uce.insert(*base); uce.insert(*offset); },
         }
     }
-    fn apply(&mut self, map: &Map::<VReg, RReg>) {
+    fn apply_D_or_U(&mut self, map: &Map::<VReg, RReg>) {
         match self {
             AM::RI { ref mut base, .. } =>
-                { base.apply(map); },
+                { base.apply_D_or_U(map); },
             AM::RR { ref mut base, ref mut offset } =>
-                { base.apply(map); offset.apply(map); }
+                { base.apply_D_or_U(map); offset.apply_D_or_U(map); }
         }
     }
 }
@@ -542,6 +566,9 @@ impl Insn {
     // typical for x86 -- that register needs to be in the |mod| set, and not
     // in the |def| and |use| sets.  *Any* mistake in describing register uses
     // here will almost certainly lead to incorrect register allocations.
+    //
+    // Also the following must hold: the union of |def| and |use| must be
+    // disjoint from |mod|.
     fn getRegUsage(&self) -> (Set::<Reg>, Set::<Reg>, Set::<Reg>) {
         let mut def = Set::<Reg>::empty();
         let mut m0d = Set::<Reg>::empty();
@@ -582,6 +609,9 @@ impl Insn {
             Insn::Finish { } => { },
             _other => panic!("Insn::getRegUsage: unhandled: {}", self.show())
         }
+        // Failure of either of these is serious and should be investigated.
+        debug_assert!(!def.intersects(&m0d));
+        debug_assert!(!uce.intersects(&m0d));
         (def, m0d, uce)
     }
 
@@ -595,32 +625,36 @@ impl Insn {
         let mut ok = true;
         match self {
             Insn::Imm { dst, imm:_ } => {
-                dst.apply(mapD);
+                dst.apply_D_or_U(mapD);
             },
             Insn::Copy { dst, src } => {
-                dst.apply(mapD);
-                src.apply(mapU);
+                dst.apply_D_or_U(mapD);
+                src.apply_D_or_U(mapU);
             },
             Insn::BinOp { op:_, dst, srcL, srcR } => {
-                dst.apply(mapD);
-                srcL.apply(mapU);
-                srcR.apply(mapU);
+                dst.apply_D_or_U(mapD);
+                srcL.apply_D_or_U(mapU);
+                srcR.apply_D_or_U(mapU);
+            },
+            Insn::BinOpM { op:_, dst, srcR } => {
+                dst.apply_M(mapD, mapU);
+                srcR.apply_D_or_U(mapU);
             },
             Insn::Store { addr, src } => {
-                addr.apply(mapU);
-                src.apply(mapU);
+                addr.apply_D_or_U(mapU);
+                src.apply_D_or_U(mapU);
             },
             Insn::Load { dst, addr } => {
-                dst.apply(mapD);
-                addr.apply(mapU);
+                dst.apply_D_or_U(mapD);
+                addr.apply_D_or_U(mapU);
             },
             Insn::Goto { .. } => { },
             Insn::GotoCTF { cond, targetT:_, targetF:_ } => {
-                cond.apply(mapU);
+                cond.apply_D_or_U(mapU);
             },
             Insn::PrintS { .. } => { },
             Insn::PrintI { reg } => {
-                reg.apply(mapU);
+                reg.apply_D_or_U(mapU);
             },
             Insn::Finish { } => { },
             _ => {
@@ -1557,7 +1591,7 @@ impl Func {
                 // Add to |uce|, any registers for which the first event
                 // in this block is a read.  Dealing with the "first event"
                 // constraint is a bit tricky.
-                for u in regs_u.iter() /*FIXME.chain(regs_m.iter())*/ {
+                for u in regs_u.iter().chain(regs_m.iter()) {
                     // |u| is used (either read or modified) by the
                     // instruction.  Whether or not we should consider it
                     // live-in for the block depends on whether it was been
@@ -2037,7 +2071,7 @@ impl Func {
             let (regs_d, regs_m, regs_u) = insn.getRegUsage();
 
             // Examine reads.  This is pretty simple.  They simply extend
-            // existing fragments.
+            // existing fragments to the D point of the reading insn.
             for r in regs_u.iter() {
                 let new_pf: ProtoFrag;
                 match state.get(r) {
@@ -2053,6 +2087,29 @@ impl Func {
                     // here.
                     Some(ProtoFrag { uses, first, last }) => {
                         let new_last = InsnPoint_U(iix);
+                        debug_assert!(last <= &new_last);
+                        new_pf = ProtoFrag { uses: plus1(*uses),
+                                             first: *first, last: new_last };
+                    },
+                }
+                state.insert(*r, new_pf);
+            }
+
+            // Examine modifies.  These are handled almost identically to
+            // read, except that they extend existing fragments down to the U
+            // point of the modifying insn.
+            for r in regs_m.iter() {
+                let new_pf: ProtoFrag;
+                match state.get(r) {
+                    // First event for |r| is a read (really, since this insn
+                    // modifies |r|), but it's not listed in |livein|, since
+                    // otherwise |state| would have an entry for it.
+                    None => {
+                        panic!("get_Frags_for_block: fail #2");
+                    },
+                    // This the first or subsequent modify after a write.
+                    Some(ProtoFrag { uses, first, last }) => {
+                        let new_last = InsnPoint_D(iix);
                         debug_assert!(last <= &new_last);
                         new_pf = ProtoFrag { uses: plus1(*uses),
                                              first: *first, last: new_last };
@@ -2265,6 +2322,16 @@ impl SortedFragIxs {
 // "renaming equivalence class".  That is, if you rename |reg| at some point
 // inside |sfrags|, then you must rename *all* occurrences of |reg| inside
 // |sfrags|, since otherwise the program will no longer work.
+//
+// Invariants for RLR/VLR Frag sets (their |sfrags| fields):
+//
+// * Either |sfrags| contains just one Frag, in which case it *must* be
+//   FragKind::Local.
+//
+// * Or |sfrags| contains more than one Frag, in which case: at least one must
+//   be FragKind::LiveOut, at least one must be FragKind::LiveIn, and there
+//   may be zero or more FragKind::Thrus.
+
 
 struct RLR {
     rreg:   RReg,
@@ -3233,35 +3300,40 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
             bix: BlockIx
         }
         let mut sri_vec = Vec::<SpillOrReloadInfo>::new();
-        let curr_vlr_reg = curr_vlr.vreg;
+        let curr_vlr_vreg = curr_vlr.vreg;
+        let curr_vlr_reg = Reg_V(curr_vlr_vreg);
 
         for fix in &curr_vlr.sfrags.fragIxs {
             let frag: &Frag = &frag_env[fix.get_usize()];
-            for iixNo in frag.first.iix.get()
-                         .. frag.last.iix.get() + 1/*CHECK THIS*/ {
+            for iixNo in frag.first.iix.get() .. frag.last.iix.get() + 1 {
                 let insn: &Insn = &func.insns[iixNo as usize];
-                let (regs_d, regs_m_FIXME, regs_u) = insn.getRegUsage();
-                if !regs_u.contains(Reg_V(curr_vlr.vreg))
-                   && !regs_d.contains(Reg_V(curr_vlr.vreg)) {
+                let (regs_d, regs_m, regs_u) = insn.getRegUsage();
+                // If this insn doesn't mention the vreg we're spilling for,
+                // move on.
+                if !regs_d.contains(curr_vlr_reg)
+                   && !regs_m.contains(curr_vlr_reg)
+                   && !regs_u.contains(curr_vlr_reg) {
                     continue;
                 }
                 let iix = mkInsnIx(iixNo);
-                if regs_u.contains(Reg_V(curr_vlr.vreg)) // FIXME: also MOD
+                // Do we need to create a reload?
+                if (regs_u.contains(curr_vlr_reg)
+                    || regs_m.contains(curr_vlr_reg))
                    && frag.contains(&InsnPoint_U(iix)) {
-                    // Stash enough info that we can create a new VLR
-                    // and a new edit list entry for the reload.
+                    // Stash enough info that we can create a new VLR and a
+                    // new edit list entry for the reload.
                     let new_sri = SpillOrReloadInfo { is_reload: true,
-                                                      iix: iix,
-                                                      bix: frag.bix };
+                                                      iix: iix, bix: frag.bix };
                     sri_vec.push(new_sri);
                 }
-                if regs_d.contains(Reg_V(curr_vlr.vreg)) // FIXME: also MOD
+                // Do we need to create a spill?
+                if (regs_d.contains(curr_vlr_reg)
+                    || regs_m.contains(curr_vlr_reg))
                    && frag.contains(&InsnPoint_D(iix)) {
-                    // Stash enough info that we can create a new VLR
-                    // and a new edit list entry for the spill.
+                    // Stash enough info that we can create a new VLR and a
+                    // new edit list entry for the spill.
                     let new_sri = SpillOrReloadInfo { is_reload: false,
-                                                      iix: iix,
-                                                      bix: frag.bix };
+                                                      iix: iix, bix: frag.bix };
                     sri_vec.push(new_sri);
                 }
             }
@@ -3284,7 +3356,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
             println!("--     new Frag       {}  :=  {}",
                      &new_vlr_fix.show(), &new_vlr_frag.show());
             let new_vlr_sfixs = SortedFragIxs::unit(new_vlr_fix, &frag_env);
-            let new_vlr = VLR { vreg: curr_vlr_reg, rreg: None,
+            let new_vlr = VLR { vreg: curr_vlr_vreg, rreg: None,
                                 sfrags: new_vlr_sfixs,
                                 size: 1, cost: None/*infinity*/ };
             let new_vlrix = mkVLRIx(vlr_env.len() as u32);
