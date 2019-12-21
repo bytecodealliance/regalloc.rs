@@ -77,6 +77,11 @@ impl Show for bool {
         (if *self { "True" } else { "False" }).to_string()
     }
 }
+impl Show for u16 {
+    fn show(&self) -> String {
+        self.to_string()
+    }
+}
 impl Show for u32 {
     fn show(&self) -> String {
         self.to_string()
@@ -1834,6 +1839,29 @@ impl Show for Frag {
             + &self.first.show() + &"-" + &self.last.show()
     }
 }
+fn mk_Frag_General(blocks: &Vec::<Block>, bix: BlockIx,
+                   first: InsnPoint, last: InsnPoint, count: u16) -> Frag {
+    let block = &blocks[bix.get_usize()];
+    debug_assert!(block.len >= 1);
+    debug_assert!(block.containsInsnIx(first.iix));
+    debug_assert!(block.containsInsnIx(last.iix));
+    debug_assert!(first <= last);
+    if first == last {
+        debug_assert!(count == 1);
+    }
+    let first_iix_in_block = block.start.get();
+    let last_iix_in_block  = first_iix_in_block + block.len - 1;
+    let first_pt_in_block  = InsnPoint_U(mkInsnIx(first_iix_in_block));
+    let last_pt_in_block   = InsnPoint_D(mkInsnIx(last_iix_in_block));
+    let kind =
+        match (first == first_pt_in_block, last == last_pt_in_block) {
+            (false, false) => FragKind::Local,
+            (false, true)  => FragKind::LiveOut,
+            (true,  false) => FragKind::LiveIn,
+            (true,  true)  => FragKind::Thru
+        };
+    Frag { bix, kind, first, last, count }
+}
 fn mk_Frag_Local(blocks: &Vec::<Block>, bix: BlockIx,
                  live_after: InsnIx, dead_after: InsnIx, count: u16) -> Frag {
     let block = &blocks[bix.get_usize()];
@@ -1913,15 +1941,6 @@ impl Frag {
 // This is surprisingly complex, in part because of the need to correctly
 // handle dead writes.
 
-// Frag_SME ("Frag State Machine Entry") defines states for a state machine
-// used to track states of Regs during Frag construction.  Each state contains
-// information for an Frag that is currently under construction.  There are
-// really 3 states: NoInfo, Written and WrThenRd.  We don't represent NoInfo
-// explicitly because most blocks don't reference most Regs, so in
-// |get_Frags_for_block|, it would be wasteful to have a mapping for all Regs
-// most of which were just to NoInfo.  Instead, NoInfo is implied by a Reg not
-// being mapped in |state|.
-
 impl Func {
     // Calculate all the Frags for |bix|.  Add them to |outFEnv| and add to
     // |outMap|, the associated FragIxs, segregated by Reg.  |bix|, |livein|
@@ -1932,48 +1951,74 @@ impl Func {
                            outMap: &mut Map::<Reg, Vec::<FragIx>>,
                            outFEnv: &mut Vec::<Frag>)
     {
-        // State machine entries.  See comment above.
-        enum Frag_SME {
-            // So far we have seen no mention of the Reg, either in the block
-            // proper or in livein.  This state is implied, per comments
-            // above, and not represented.  NoInfo { .. },
+        println!("QQQQ --- block {}", bix.show());
+        // BEGIN ProtoFrag
+        // A ProtoFrag carries information about a write .. read range, within
+        // a Block, which we will later turn into a fully-fledged Frag.  It
+        // basically records the first and last-known InsnPoints for
+        // appearances of a Reg.
+        //
+        // ProtoFrag also keeps count of the number of appearances of the Reg
+        // to which it pertains, using |uses|.  The counts get rolled into the
+        // resulting Frags, and later are used to calculate spill costs.
+        //
+        // The running state of this function is a map from Reg to ProtoFrag.
+        // Only Regs that actually appear in the Block (or are live-in to it)
+        // are mapped.  This has the advantage of economy, since most Regs
+        // will not appear in (or be live-in to) most Blocks.
+        //
+        struct ProtoFrag {
+            // The InsnPoint in this Block at which the associated Reg most
+            // recently became live (when moving forwards though the Block).
+            // If this value is the first InsnPoint for the Block (the U point
+            // for the Block's lowest InsnIx), that indicates the associated
+            // Reg is live-in to the Block.
+            first: InsnPoint,
 
-            // Reg has been written.  Either prior to the block (iow, it is
-            // live-in), if |wp| is None.  Or else |wp| is Some(live_after),
-            // to indicate the defining insn.
-            Written { uses: u16, wp: Option<InsnIx> },
+            // And this is the InsnPoint which is the end point (most recently
+            // observed read, in general) for the current Frag under
+            // construction.  In general we will move |last| forwards as we
+            // discover reads of the associated Reg.  If this is the last
+            // InsnPoint for the Block (the D point for the Block's highest
+            // InsnInx), that indicates that the associated reg is live-out
+            // from the Block.
+            last: InsnPoint,
 
-            // Written, then read.  Meaning of |wp| is same as above.  |rp| is
-            // the most recently observed read point.
-            WrThenRd { uses: u16, wp: Option<InsnIx>, rp: InsnIx }
+            // Number of mentions of the associated Reg in this ProtoFrag.
+            uses: u16
         }
-        // end State machine entries
-
-        // Helper function: compare ordering of frag start points, taking into
-        // account a possible live-in start point.
-        fn precedes(point1: Option<InsnIx>, point2: InsnIx) -> bool {
-            if let Some(point1_iix) = point1 {
-                point1_iix.get() <= point2.get()
-            } else {
-                true
+        impl Show for ProtoFrag {
+            fn show(&self) -> String {
+                self.uses.show() + &"x ".to_string() + &self.first.show()
+                    + &"-".to_string() + &self.last.show()
             }
         }
+        // END ProtoFrag
+
         fn plus1(n: u16) -> u16 { if n == 0xFFFFu16 { n } else { n+1 } }
-        // end Helper functions
+
+        // Some handy constants.
+        let blocks = &self.blocks;
+        let block  = &blocks[bix.get_usize()];
+        debug_assert!(block.len >= 1);
+        let first_iix_in_block = block.start.get();
+        let last_iix_in_block  = first_iix_in_block + block.len - 1;
+        let first_pt_in_block  = InsnPoint_U(mkInsnIx(first_iix_in_block));
+        let last_pt_in_block   = InsnPoint_D(mkInsnIx(last_iix_in_block));
 
         // The running state.
-        let blocks = &self.blocks;
-        let block = &blocks[bix.get_usize()];
-        let mut state = Map::<Reg, Frag_SME>::default();
+        let mut state = Map::<Reg, ProtoFrag>::default();
 
-        // The generated Frag components are initially are dumped in here.  We
-        // group them by Reg at the end of this function.
+        // The generated Frags are initially are dumped in here.  We group
+        // them by Reg at the end of this function.
         let mut tmpResultVec = Vec::<(Reg, Frag)>::new();
 
         // First, set up |state| as if all of |livein| had been written just
         // prior to the block.
         for r in livein.iter() {
-            state.insert(*r, Frag_SME::Written { uses: 0, wp: None });
+            state.insert(*r, ProtoFrag { uses: 0,
+                                         first: first_pt_in_block,
+                                         last:  first_pt_in_block });
         }
 
         // Now visit each instruction in turn, examining first its reads and
@@ -1981,35 +2026,39 @@ impl Func {
         for ix in block.start.get() .. block.start.get() + block.len {
             let iix = mkInsnIx(ix);
             let insn = &self.insns[ix as usize];
+
+            fn id<'a>(x: Vec::<(&'a Reg, &'a ProtoFrag)>)
+                      -> Vec::<(&'a Reg, &'a ProtoFrag)> { x }
+
+            println!("");
+            println!("QQQQ state before {}", id(state.iter().collect()).show());
+            println!("QQQQ insn {} {}", iix.show(), insn.show());
+
             let (regs_d, regs_m, regs_u) = insn.getRegUsage();
 
-            // Examine reads (and reads implied by modifies).  This is pretty
-            // simple.  They simply extend existing fragments.
-            for r in regs_u.iter() /*FIXME.chain(regs_m.iter())*/ {
-                let new_sme: Frag_SME;
+            // Examine reads.  This is pretty simple.  They simply extend
+            // existing fragments.
+            for r in regs_u.iter() {
+                let new_pf: ProtoFrag;
                 match state.get(r) {
-                    // First event for |r| is a read, but it's not listed
-                    // in |livein|.
+                    // First event for |r| is a read, but it's not listed in
+                    // |livein|, since otherwise |state| would have an entry
+                    // for it.
                     None => {
                         panic!("get_Frags_for_block: fail #1");
                     },
-                    // The first read after a write.  Note that the "write"
-                    // can be either a real write, or due to the fact that |r|
-                    // is listed in |livein|.  We don't care here.
-                    Some(Frag_SME::Written { uses, wp }) => {
-                        new_sme = Frag_SME::WrThenRd { uses: plus1(*uses),
-                                                       wp: *wp, rp: iix };
+                    // This the first or subsequent read after a write.  Note
+                    // that the "write" can be either a real write, or due to
+                    // the fact that |r| is listed in |livein|.  We don't care
+                    // here.
+                    Some(ProtoFrag { uses, first, last }) => {
+                        let new_last = InsnPoint_U(iix);
+                        debug_assert!(last <= &new_last);
+                        new_pf = ProtoFrag { uses: plus1(*uses),
+                                             first: *first, last: new_last };
                     },
-                    // A subsequent read (== second or more read after a
-                    // write).  Same comment as above re meaning of "write".
-                    Some(Frag_SME::WrThenRd { uses, wp, rp }) => {
-                        debug_assert!(precedes(*wp, *rp));
-                        debug_assert!(precedes(Some(*rp), iix));
-                        new_sme = Frag_SME::WrThenRd { uses: plus1(*uses),
-                                                       wp: *wp, rp: iix };
-                    }
                 }
-                state.insert(*r, new_sme);
+                state.insert(*r, new_pf);
             }
 
             // Examine writes (but not writes implied by modifies).  The
@@ -2018,55 +2067,43 @@ impl Func {
             // new frag.  But we have to be careful to deal correctly with
             // dead writes.
             for r in regs_d.iter() {
-                let new_sme: Frag_SME;
+                let new_pf: ProtoFrag;
                 match state.get(r) {
                     // First mention of a Reg we've never heard of before.
-                    // Note it and keep going.
+                    // Start a new ProtoFrag for it and keep going.
                     None => {
-                        new_sme = Frag_SME::Written { uses: 1, wp: Some(iix) };
+                        let new_pt = InsnPoint_D(iix);
+                        new_pf = ProtoFrag { uses: 1,
+                                             first: new_pt, last: new_pt };
                     },
-                    // |r| must be in |livein|, but the first event for it is
-                    // a write.  That can't happen -- |livein| must be
-                    // incorrect.
-                    Some(Frag_SME::Written { uses:_, wp: None }) => {
-                        panic!("get_Frags_for_block: fail #2");
-                    },
-                    // |r| has been written before in this block, but not
-                    // subsequently read.  Hence the write is dead.  Emit a
-                    // "point" frag, then note this new write instead.
-                    Some(Frag_SME::Written { uses, wp: Some(wp_iix) }) => {
-                        debug_assert!(*uses == 1);
-                        let frag = mk_Frag_Local(blocks, bix,
-                                                 *wp_iix, *wp_iix, *uses);
-                        tmpResultVec.push((*r, frag));
-                        new_sme = Frag_SME::Written { uses: 1, wp: Some(iix) };
-                    },
-                    // There's already a valid frag for |r|.  This write will
-                    // start a new frag, so flush the existing one and note
+                    // There's already a ProtoFrag for |r|.  This write will
+                    // start a new one, so flush the existing one and note
                     // this write.
-                    Some(Frag_SME::WrThenRd { uses, wp, rp }) => {
-                        let frag: Frag;
-                        if let Some(wr_iix) = wp {
-                            frag = mk_Frag_Local(blocks, bix,
-                                                 *wr_iix, *rp, *uses);
-                        } else {
-                            frag = mk_Frag_LiveIn(blocks, bix, *rp, *uses);
+                    Some(ProtoFrag { uses, first, last }) => {
+                        if first == last {
+                            debug_assert!(*uses == 1);
                         }
+                        let frag = mk_Frag_General(blocks, bix,
+                                                   *first, *last, *uses);
                         tmpResultVec.push((*r, frag));
-                        new_sme = Frag_SME::Written { uses: 1, wp: Some(iix) };
+                        let new_pt = InsnPoint_D(iix);
+                        new_pf = ProtoFrag { uses: 1,
+                                             first: new_pt, last: new_pt };
                     }
                 }
-                state.insert(*r, new_sme);
+                state.insert(*r, new_pf);
             }
+            println!("QQQQ state after  {}", id(state.iter().collect()).show());
         }
 
         // We are at the end of the block.  We still have to deal with
-        // live-out Regs.  We must also deal with fragments in |state| that
+        // live-out Regs.  We must also deal with ProtoFrags in |state| that
         // are for registers not listed as live-out.
 
         // Deal with live-out Regs.  Treat each one as if it is read just
         // after the block.
         for r in liveout.iter() {
+            println!("QQQQ post: liveout:  {}", r.show());
             match state.get(r) {
                 // This can't happen.  It implies that |r| is in |liveout|,
                 // but is neither defined in the block nor present in |livein|.
@@ -2075,16 +2112,11 @@ impl Func {
                 },
                 // |r| is "written", either literally or by virtue of being
                 // present in |livein|, and may or may not subsequently be
-                // read (we don't care).  Create a |LiveOut| or |Thru| frag
-                // accordingly.
-                Some(Frag_SME::Written { uses, wp }) |
-                Some(Frag_SME::WrThenRd { uses, wp, rp:_ }) => {
-                    let frag: Frag;
-                    if let Some(wr_iix) = wp {
-                        frag = mk_Frag_LiveOut(blocks, bix, *wr_iix, *uses);
-                    } else {
-                        frag = mk_Frag_Thru(blocks, bix, *uses);
-                    }
+                // read -- we don't care, because it must be read "after" the
+                // block.  Create a |LiveOut| or |Thru| frag accordingly.
+                Some(ProtoFrag { uses, first, last:_ }) => {
+                    let frag = mk_Frag_General(blocks, bix,
+                                               *first, last_pt_in_block, *uses);
                     tmpResultVec.push((*r, frag));
                 }
             }
@@ -2093,36 +2125,15 @@ impl Func {
             state.remove(r);
         }
 
-        // Finally, round up any remaining valid fragments left in |state|.
-        for (r, st) in state.iter() {
-            match st {
-                // This implies |r| is in |livein| but is neither in |liveout|
-                // nor is it read in the block.  Which can't happen.
-                Frag_SME::Written { uses:_, wp: None } => {
-                    panic!("get_Frags_for_block: fail #4");
-                },
-                // This implies |r| has been written, but was never read,
-                // either directly or by virtue of being in |liveout|.  So
-                // just emit a "point" frag.
-                Frag_SME::Written { uses, wp: Some(wp_iix) } => {
-                    debug_assert!(*uses == 1);
-                    let frag = mk_Frag_Local(blocks, bix,
-                                             *wp_iix, *wp_iix, *uses);
-                    tmpResultVec.push((*r, frag));
-                },
-                // This is a more normal case.  |r| is either in |livein| or
-                // is first written inside the block, and later read, but is
-                // not in |liveout|.
-                Frag_SME::WrThenRd { uses, wp, rp } => {
-                    let frag: Frag;
-                    if let Some(wr_iix) = wp {
-                        frag = mk_Frag_Local(blocks, bix, *wr_iix, *rp, *uses);
-                    } else {
-                        frag = mk_Frag_LiveIn(blocks, bix, *rp, *uses);
-                    }
-                    tmpResultVec.push((*r, frag));
-                }
+        // Finally, round up any remaining ProtoFrags left in |state|.
+        for (r, pf) in state.iter() {
+            println!("QQQQ post: leftover: {} {}", r.show(), pf.show());
+            if pf.first == pf.last {
+                debug_assert!(pf.uses == 1);
             }
+            let frag = mk_Frag_General(blocks, bix, pf.first, pf.last, pf.uses);
+            println!("QQQQ post: leftover: {}", (r,frag).show());
+            tmpResultVec.push((*r, frag));
         }
 
         // Copy the entries in |tmpResultVec| into |outMap| and |outVec|.
