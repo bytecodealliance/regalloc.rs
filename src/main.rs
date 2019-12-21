@@ -1524,7 +1524,7 @@ impl CFGInfo {
 fn calc_dominators(pred_map: &Vec::</*BlockIx, */Set<BlockIx>>,
                    start: BlockIx)
                    -> Vec::</*BlockIx, */Set<BlockIx>> {
-    //
+    // FIXME: nice up the variable names (D, T, etc) a bit.
     let nBlocks = pred_map.len();
     let mut dom_map = Vec::<Set<BlockIx>>::new();
     {
@@ -1638,6 +1638,8 @@ impl Func {
             let mut new_liveins  = Vec::<Set::<Reg>>::new();
             let mut new_liveouts = Vec::<Set::<Reg>>::new();
 
+            // Speedup FIXME: use a sensible ordering (RPO?)  This ordering is
+            // really bad.
             for bix in 0 .. nBlocks {
                 let def = &def_sets_per_block[bix];
                 let uce = &use_sets_per_block[bix];
@@ -1653,6 +1655,8 @@ impl Func {
                     new_liveout.union(&liveins[succ_bix.get_usize()]);
                 }
 
+                // Speedup FIXME: once |changed| has become true, doing
+                // further equality tests is just a time-waster.  Skip them.
                 if !new_livein.equals(&old_livein)
                    || !new_liveout.equals(&old_liveout) {
                     changed = true;
@@ -1847,7 +1851,7 @@ impl Show for FragIx {
 // live ranges to registers.  This the reason for the type InsnPoint.  Note
 // that InsnPoint values have a total ordering, at least within a single basic
 // block: the insn number is used as the primary key, and the Point part is
-// the secondary key, with Reload < Def < Use < Spill.
+// the secondary key, with Reload < Use < Def < Spill.
 //
 // Finally, a Frag has a |count| field, which is a u16 indicating how often
 // the associated storage unit (Reg) is mentioned inside the Frag.  It is
@@ -1973,7 +1977,8 @@ impl Frag {
 // Computation of Frags (Live Range Fragments)
 
 // This is surprisingly complex, in part because of the need to correctly
-// handle dead writes.
+// handle (1) live-in and live-out Regs, (2) dead writes, and (3) instructions
+// that modify registers rather than merely reading or writing them.
 
 impl Func {
     // Calculate all the Frags for |bix|.  Add them to |outFEnv| and add to
@@ -2055,8 +2060,8 @@ impl Func {
                                          last:  first_pt_in_block });
         }
 
-        // Now visit each instruction in turn, examining first its reads and
-        // then its writes.
+        // Now visit each instruction in turn, examining first the registers
+        // it reads, then those it modifies, and finally those it writes.
         for ix in block.start.get() .. block.start.get() + block.len {
             let iix = mkInsnIx(ix);
             let insn = &self.insns[ix as usize];
@@ -2070,8 +2075,8 @@ impl Func {
 
             let (regs_d, regs_m, regs_u) = insn.getRegUsage();
 
-            // Examine reads.  This is pretty simple.  They simply extend
-            // existing fragments to the D point of the reading insn.
+            // Examine reads.  This is pretty simple.  They simply extend an
+            // existing ProtoFrag to the U point of the reading insn.
             for r in regs_u.iter() {
                 let new_pf: ProtoFrag;
                 match state.get(r) {
@@ -2096,8 +2101,8 @@ impl Func {
             }
 
             // Examine modifies.  These are handled almost identically to
-            // read, except that they extend existing fragments down to the U
-            // point of the modifying insn.
+            // reads, except that they extend an existing ProtoFrag down to
+            // the D point of the modifying insn.
             for r in regs_m.iter() {
                 let new_pf: ProtoFrag;
                 match state.get(r) {
@@ -2120,9 +2125,8 @@ impl Func {
 
             // Examine writes (but not writes implied by modifies).  The
             // general idea is that a write causes us to terminate the
-            // existing frag, if any, add it to |tmpResultVec|, and start a
-            // new frag.  But we have to be careful to deal correctly with
-            // dead writes.
+            // existing ProtoFrag, if any, add it to |tmpResultVec|, and start
+            // a new frag.
             for r in regs_d.iter() {
                 let new_pf: ProtoFrag;
                 match state.get(r) {
@@ -2162,15 +2166,17 @@ impl Func {
         for r in liveout.iter() {
             println!("QQQQ post: liveout:  {}", r.show());
             match state.get(r) {
-                // This can't happen.  It implies that |r| is in |liveout|,
-                // but is neither defined in the block nor present in |livein|.
+                // This can't happen.  |r| is in |liveout|, but this implies
+                // that it is neither defined in the block nor present in
+                // |livein|.
                 None => {
                     panic!("get_Frags_for_block: fail #3");
                 },
-                // |r| is "written", either literally or by virtue of being
-                // present in |livein|, and may or may not subsequently be
-                // read -- we don't care, because it must be read "after" the
-                // block.  Create a |LiveOut| or |Thru| frag accordingly.
+                // |r| is written (or modified), either literally or by virtue
+                // of being present in |livein|, and may or may not
+                // subsequently be read -- we don't care, because it must be
+                // read "after" the block.  Create a |LiveOut| or |Thru| frag
+                // accordingly.
                 Some(ProtoFrag { uses, first, last:_ }) => {
                     let frag = mk_Frag_General(blocks, bix,
                                                *first, last_pt_in_block, *uses);
@@ -2300,7 +2306,7 @@ impl SortedFragIxs {
 // virtual regs (VRegs).  VLRs are the fundamental unit of allocation.  Both
 // RLR and VLR pair the relevant kind of Reg with a vector of FragIxs in which
 // it is live.  The FragIxs are indices into some vector of Frags (a "fragment
-// environment, 'fenv'), which is not specified here.  They are sorted so as
+// environment", 'fenv'), which is not specified here.  They are sorted so as
 // to give ascending order to the Frags which they refer to.
 //
 // VLRs contain metrics.  Not all are initially filled in:
