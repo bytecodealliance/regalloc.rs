@@ -217,8 +217,9 @@ impl Reg {
                 let mb_result_U = mapU.get(vreg);
                 // Failure of this is serious and should be investigated.
                 if mb_result_D != mb_result_U {
-                    panic!("Reg::apply_M: inconsistent mappings for {}",
-                           vreg.show());
+                    panic!(
+                        "Reg::apply_M: inconsistent mappings for {}: D={}, U={}",
+                        vreg.show(), mb_result_D.show(), mb_result_U.show());
                 }
                 if let Some(rreg) = mb_result_D {
                     *self = Reg::RReg(*rreg);
@@ -1754,6 +1755,9 @@ struct InsnPoint {
     iix: InsnIx,
     pt: Point
 }
+fn mkInsnPoint(iix: InsnIx, pt: Point) -> InsnPoint {
+    InsnPoint { iix, pt }
+}
 fn InsnPoint_R(iix: InsnIx) -> InsnPoint {
     InsnPoint { iix: iix, pt: Point::R }
 }
@@ -1990,7 +1994,7 @@ impl Func {
                            outMap: &mut Map::<Reg, Vec::<FragIx>>,
                            outFEnv: &mut Vec::<Frag>)
     {
-        println!("QQQQ --- block {}", bix.show());
+        //println!("QQQQ --- block {}", bix.show());
         // BEGIN ProtoFrag
         // A ProtoFrag carries information about a write .. read range, within
         // a Block, which we will later turn into a fully-fledged Frag.  It
@@ -2066,12 +2070,12 @@ impl Func {
             let iix = mkInsnIx(ix);
             let insn = &self.insns[ix as usize];
 
-            fn id<'a>(x: Vec::<(&'a Reg, &'a ProtoFrag)>)
-                      -> Vec::<(&'a Reg, &'a ProtoFrag)> { x }
-
-            println!("");
-            println!("QQQQ state before {}", id(state.iter().collect()).show());
-            println!("QQQQ insn {} {}", iix.show(), insn.show());
+            //fn id<'a>(x: Vec::<(&'a Reg, &'a ProtoFrag)>)
+            //          -> Vec::<(&'a Reg, &'a ProtoFrag)> { x }
+            //println!("");
+            //println!("QQQQ state before {}",
+            //         id(state.iter().collect()).show());
+            //println!("QQQQ insn {} {}", iix.show(), insn.show());
 
             let (regs_d, regs_m, regs_u) = insn.getRegUsage();
 
@@ -2154,7 +2158,8 @@ impl Func {
                 }
                 state.insert(*r, new_pf);
             }
-            println!("QQQQ state after  {}", id(state.iter().collect()).show());
+            //println!("QQQQ state after  {}",
+            //         id(state.iter().collect()).show());
         }
 
         // We are at the end of the block.  We still have to deal with
@@ -2164,7 +2169,7 @@ impl Func {
         // Deal with live-out Regs.  Treat each one as if it is read just
         // after the block.
         for r in liveout.iter() {
-            println!("QQQQ post: liveout:  {}", r.show());
+            //println!("QQQQ post: liveout:  {}", r.show());
             match state.get(r) {
                 // This can't happen.  |r| is in |liveout|, but this implies
                 // that it is neither defined in the block nor present in
@@ -2190,12 +2195,12 @@ impl Func {
 
         // Finally, round up any remaining ProtoFrags left in |state|.
         for (r, pf) in state.iter() {
-            println!("QQQQ post: leftover: {} {}", r.show(), pf.show());
+            //println!("QQQQ post: leftover: {} {}", r.show(), pf.show());
             if pf.first == pf.last {
                 debug_assert!(pf.uses == 1);
             }
             let frag = mk_Frag_General(blocks, bix, pf.first, pf.last, pf.uses);
-            println!("QQQQ post: leftover: {}", (r,frag).show());
+            //println!("QQQQ post: leftover: {}", (r,frag).show());
             tmpResultVec.push((*r, frag));
         }
 
@@ -2945,26 +2950,47 @@ impl PerRReg {
 //=============================================================================
 // Edit list items
 
+// VLRs created by spilling all pertain to a single InsnIx.  But within that
+// InsnIx, there are three kinds of "bridges":
+#[derive(PartialEq)]
+enum BridgeKind {
+    RtoU, // A bridge for a USE.  This connects the reload to the use.
+    RtoS, // a bridge for a MOD.  This connects the reload, the use/def
+          // and the spill, since the value must first be reloade, then
+          // operated on, and finally re-spilled.
+    DtoS  // A bridge for a DEF.  This connects the def to the spill.
+}
+impl Show for BridgeKind {
+    fn show(&self) -> String {
+        match self {
+            BridgeKind::RtoU => "R->U".to_string(),
+            BridgeKind::RtoS => "R->S".to_string(),
+            BridgeKind::DtoS => "D->S".to_string()
+        }
+    }
+}
+
+
 struct EditListItem {
     // This holds enough information to create a spill or reload instruction,
-    // and also specifies where in the instruction stream it should be added.
-    // Note that if the edit list as a whole specifies multiple items for the
-    // same location, then it is assumed that the order in which they execute
-    // isn't important.
+    // or both, and also specifies where in the instruction stream it/they
+    // should be added.  Note that if the edit list as a whole specifies
+    // multiple items for the same location, then it is assumed that the order
+    // in which they execute isn't important.
     //
-    // Some of the relevant info can be found via the VLR link:
+    // Some of the relevant info can be found via the VLRIx link:
     // * the real reg involved
     // * the place where the insn should go, since the VLR should only have
     //   one Frag, and we can deduce the correct location from that.
-    slot:      Slot,
-    vlrix:     VLRIx,
-    is_reload: bool
+    slot:  Slot,
+    vlrix: VLRIx,
+    kind:  BridgeKind
 }
 impl Show for EditListItem {
     fn show(&self) -> String {
-        "for ".to_string() + &self.vlrix.show() + &" add '".to_string()
-            + &(if self.is_reload { "reload " } else { "spill " }).to_string()
-            + &self.slot.show() + &"'".to_string()
+        "ELI { for ".to_string() + &self.vlrix.show() + &" add '".to_string()
+            + &self.kind.show() + &"' ".to_string() + &self.slot.show()
+            + &" }".to_string()
     }
 }
 
@@ -3271,7 +3297,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         // have to spill it, since splitting it isn't yet implemented.
         println!("--   spill");
 
-        // If the live range is already pertains to a spill or restore, then
+        // If the live range already pertains to a spill or restore, then
         // it's Game Over.  The constraints (availability of RRegs vs
         // requirement for them) are impossible to fulfill, and so we cannot
         // generate any valid allocation for this function.
@@ -3280,32 +3306,43 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         }
 
         // Generate a new spill slot number, Slot
-        /* Spilling vreg V with LR to slot S:
-              for each frag F in LR {
+        /* Spilling vreg V with virtual live range VLR to slot S:
+              for each frag F in VLR {
                  for each insn I in F.first.iix .. F.last.iix {
                     if I does not mention V
                        continue
-                    if I mentions V in a Read or Mod role {
-                       add new LR I.reload -> I.use, vreg V, spillcost Inf
+                    if I mentions V in a Read role {
+                       // invar: I cannot mention V in a Mod role
+                       add new VLR I.reload -> I.use, vreg V, spillcost Inf
                        add eli @ I.reload V Slot
                     }
-                    if I mentions V in a Write or Mod role {
-                       add new LR I.def -> I.spill, vreg V, spillcost Inf
+                    if I mentions V in a Mod role {
+                       // invar: I cannot mention V in a Read or Write Role
+                       add new VLR I.reload -> I.spill, Vreg V, spillcost Inf
+                       add eli @ I.reload V Slot
+                       add eli @ I.spill  Slot V
+                    }
+                    if I mentions V in a Write role {
+                       // invar: I cannot mention V in a Mod role
+                       add new VLR I.def -> I.spill, vreg V, spillcost Inf
                        add eli @ I.spill V Slot
                     }
                  }
               }
         */
-        /* We will be spilling vreg |curr_vlr.reg| with LR |curr_vlr| to ..
+        /* We will be spilling vreg |curr_vlr.reg| with VLR |curr_vlr| to ..
            well, we better invent a new spill slot number.  Just hand them out
            sequentially for now. */
 
-        struct SpillOrReloadInfo {
-            is_reload: bool,
-            iix: InsnIx,
-            bix: BlockIx
+        // This holds enough info to create reload or spill (or both)
+        // instructions around an instruction that references a VReg that has
+        // been spilled.
+        struct SpillAndOrReloadInfo {
+            bix:  BlockIx, // that |iix| is in
+            iix:  InsnIx,  // this is the Insn we are spilling/reloading for
+            kind: BridgeKind // says whether to create a spill or reload or both
         }
-        let mut sri_vec = Vec::<SpillOrReloadInfo>::new();
+        let mut sri_vec = Vec::<SpillAndOrReloadInfo>::new();
         let curr_vlr_vreg = curr_vlr.vreg;
         let curr_vlr_reg = Reg_V(curr_vlr_vreg);
 
@@ -3322,25 +3359,38 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
                     continue;
                 }
                 let iix = mkInsnIx(iixNo);
-                // Do we need to create a reload?
-                if (regs_u.contains(curr_vlr_reg)
-                    || regs_m.contains(curr_vlr_reg))
+                // USES: Do we need to create a reload-to-use bridge (VLR) ?
+                if regs_u.contains(curr_vlr_reg)
                    && frag.contains(&InsnPoint_U(iix)) {
+                    debug_assert!(!regs_m.contains(curr_vlr_reg));
                     // Stash enough info that we can create a new VLR and a
                     // new edit list entry for the reload.
-                    let new_sri = SpillOrReloadInfo { is_reload: true,
-                                                      iix: iix, bix: frag.bix };
-                    sri_vec.push(new_sri);
+                    let sri = SpillAndOrReloadInfo { bix: frag.bix, iix: iix,
+                                                     kind: BridgeKind::RtoU };
+                    sri_vec.push(sri);
                 }
-                // Do we need to create a spill?
-                if (regs_d.contains(curr_vlr_reg)
-                    || regs_m.contains(curr_vlr_reg))
+                // MODS: Do we need to create a reload-to-spill bridge?  This
+                // can only happen for instructions which modify a register.
+                // Note this has to be a single VLR, since if it were two (one
+                // for the reload, one for the spill) they could later end up
+                // being assigned to different RRegs, which is obviously
+                // nonsensical.
+                if regs_m.contains(curr_vlr_reg)
+                   && frag.contains(&InsnPoint_U(iix))
                    && frag.contains(&InsnPoint_D(iix)) {
-                    // Stash enough info that we can create a new VLR and a
-                    // new edit list entry for the spill.
-                    let new_sri = SpillOrReloadInfo { is_reload: false,
-                                                      iix: iix, bix: frag.bix };
-                    sri_vec.push(new_sri);
+                    debug_assert!(!regs_u.contains(curr_vlr_reg));
+                    debug_assert!(!regs_d.contains(curr_vlr_reg));
+                    let sri = SpillAndOrReloadInfo { bix: frag.bix, iix: iix,
+                                                     kind: BridgeKind::RtoS };
+                    sri_vec.push(sri);
+                }
+                // DEFS: Do we need to create a def-to-spill bridge?
+                if regs_d.contains(curr_vlr_reg)
+                   && frag.contains(&InsnPoint_D(iix)) {
+                    debug_assert!(!regs_m.contains(curr_vlr_reg));
+                    let sri = SpillAndOrReloadInfo { bix: frag.bix, iix: iix,
+                                                     kind: BridgeKind::DtoS };
+                    sri_vec.push(sri);
                 }
             }
         }
@@ -3349,14 +3399,23 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         // the remainder of this iteration of the main allocation loop, we can
         // actually generate the required spill/reload artefacts.
         for sri in sri_vec {
+            // For a spill for a MOD use, the new value will be referenced
+            // three times.  For DEF and USE uses, it'll only be ref'd twice.
+            // (I think we don't care about metrics for the new Frags, though)
+            let new_vlr_count =
+                if sri.kind == BridgeKind::RtoS { 3 } else { 2 };
+            let (new_vlr_first_pt, new_vlr_last_pt) =
+                match sri.kind {
+                    BridgeKind::RtoU => (Point::R, Point::U),
+                    BridgeKind::RtoS => (Point::R, Point::S),
+                    BridgeKind::DtoS => (Point::D, Point::S)
+                };
             let new_vlr_frag
-                = Frag { bix: sri.bix,
+                = Frag { bix:   sri.bix,
                          kind:  FragKind::Local,
-                         first: if sri.is_reload { InsnPoint_R(sri.iix) }
-                                            else { InsnPoint_D(sri.iix) },
-                         last:  if sri.is_reload { InsnPoint_U(sri.iix) }
-                                            else { InsnPoint_S(sri.iix) },
-                         count: 2 };
+                         first: mkInsnPoint(sri.iix, new_vlr_first_pt),
+                         last:  mkInsnPoint(sri.iix, new_vlr_last_pt),
+                         count: new_vlr_count };
             let new_vlr_fix = mkFragIx(frag_env.len() as u32);
             frag_env.push(new_vlr_frag);
             println!("--     new Frag       {}  :=  {}",
@@ -3372,9 +3431,9 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
             prioQ.add_VLR(new_vlrix);
 
             let new_eli
-                = EditListItem { slot: mkSlot(spillSlotCtr),
+                = EditListItem { slot:  mkSlot(spillSlotCtr),
                                  vlrix: new_vlrix,
-                                 is_reload: sri.is_reload };
+                                 kind:  sri.kind };
             println!("--     new ELI        {}", &new_eli.show());
             editList.push(new_eli);
         }
@@ -3387,7 +3446,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
     // -------- Edit the instruction stream --------
 
-    // Gather up a list of (Frag, VReg, RReg) resulting from the previous
+    // Gather up a vector of (Frag, VReg, RReg) resulting from the previous
     // phase.  This fundamentally is the result of the allocation and tells us
     // how the instruction stream must be edited.  Note it does not take
     // account of spill or reload instructions.  Dealing with those is
@@ -3446,20 +3505,31 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
     }
 
     fn is_sane(frag: &Frag) -> bool {
-        if frag.first.pt.isR() {
-            // Reload frag: if the frag starts at some I.r then it must
-            // run to I.u.
-            frag.last.pt.isU() && frag.last.iix == frag.first.iix
-        } else if frag.last.pt.isS() {
-            // Spill frag: if the frag ends at some I.s then it must have
-            // started at I.d.
-            frag.first.pt.isD() && frag.first.iix == frag.last.iix
-        } else {
-            // "Normal" (non-reload) frag.  No normal frag may start at a
-            // .s or a .r point.
-            frag.first.pt.isUorD() && frag.last.pt.isUorD()
-                && frag.first.iix <= frag.last.iix
+        // "Normal" frag (unrelated to spilling).  No normal frag may start or
+        // end at a .s or a .r point.
+        if frag.first.pt.isUorD() && frag.last.pt.isUorD()
+           && frag.first.iix <= frag.last.iix {
+               return true;
         }
+        // A spill-related ("bridge") frag.  There are three possibilities,
+        // and they correspond exactly to |BridgeKind|.
+        if frag.first.pt.isR() && frag.last.pt.isU()
+           && frag.last.iix == frag.first.iix {
+            // BridgeKind::RtoU
+            return true;
+        }
+        if frag.first.pt.isR() && frag.last.pt.isS()
+           && frag.last.iix == frag.first.iix {
+            // BridgeKind::RtoS
+            return true;
+        }
+        if frag.first.pt.isD() && frag.last.pt.isS()
+           && frag.last.iix == frag.first.iix {
+            // BridgeKind::DtoS
+            return true;
+        }
+        // None of the above apply.  This Frag is insane \o/
+        false
     }
 
     for insnNo in 0u32 .. func.insns.len() as u32 {
@@ -3529,7 +3599,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
             debug_assert!(is_sane(frag));
         }
 
-        // Plan:
+        // Here's the plan, in summary:
         // Update map for I.r:
         //   add frags starting at I.r
         //   no frags should end at I.r (it's a reload insn)
@@ -3633,24 +3703,35 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         debug_assert!(vlr.sfrags.fragIxs.len() == 1);
         let vlr_frag = frag_env[ vlr_sfrags.fragIxs[0].get_usize() ];
         let rreg = vlr.rreg.expect("Gen of spill/reload: reg not assigned?!");
-
-        let insn;
-        let whereTo;
-        if eli.is_reload {
-            debug_assert!(vlr_frag.first.pt.isR());
-            debug_assert!(vlr_frag.last.pt.isU());
-            debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-            insn = i_reload(rreg, eli.slot);
-            whereTo = vlr_frag.first;
-        } else {
-            debug_assert!(vlr_frag.first.pt.isD());
-            debug_assert!(vlr_frag.last.pt.isS());
-            debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-            insn = i_spill(eli.slot, rreg);
-            whereTo = vlr_frag.last;
+        match eli.kind {
+            BridgeKind::RtoU => {
+                debug_assert!(vlr_frag.first.pt.isR());
+                debug_assert!(vlr_frag.last.pt.isU());
+                debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
+                let insnR    = i_reload(rreg, eli.slot);
+                let whereToR = vlr_frag.first;
+                spillsAndReloads.push((whereToR, insnR));
+            },
+            BridgeKind::RtoS => {
+                debug_assert!(vlr_frag.first.pt.isR());
+                debug_assert!(vlr_frag.last.pt.isS());
+                debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
+                let insnR    = i_reload(rreg, eli.slot);
+                let whereToR = vlr_frag.first;
+                let insnS    = i_spill(eli.slot, rreg);
+                let whereToS = vlr_frag.last;
+                spillsAndReloads.push((whereToR, insnR));
+                spillsAndReloads.push((whereToS, insnS));
+            },
+            BridgeKind::DtoS => {
+                debug_assert!(vlr_frag.first.pt.isD());
+                debug_assert!(vlr_frag.last.pt.isS());
+                debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
+                let insnS = i_spill(eli.slot, rreg);
+                let whereToS = vlr_frag.last;
+                spillsAndReloads.push((whereToS, insnS));
+            }
         }
-
-        spillsAndReloads.push((whereTo, insn));
     }
 
     //for pair in &spillsAndReloads {
@@ -3690,7 +3771,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
         // Copy reloads for this insn
         while curSnR < spillsAndReloads.len()
-               && spillsAndReloads[curSnR].0 == InsnPoint_R(iix) {
+              && spillsAndReloads[curSnR].0 == InsnPoint_R(iix) {
             newInsns.push(spillsAndReloads[curSnR].1.clone());
             curSnR += 1;
         }
@@ -3698,7 +3779,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         newInsns.push(func.insns[iixNo as usize].clone());
         // Copy spills for this insn
         while curSnR < spillsAndReloads.len()
-               && spillsAndReloads[curSnR].0 == InsnPoint_S(iix) {
+              && spillsAndReloads[curSnR].0 == InsnPoint_S(iix) {
             newInsns.push(spillsAndReloads[curSnR].1.clone());
             curSnR += 1;
         }
@@ -4239,6 +4320,19 @@ impl Blockifier {
 // Test cases.  The list of them is right at the bottom, function |find_Func|.
 // Add new ones there.
 
+// Whatever the current badness is
+fn test__badness() -> Func {
+    let mut func = Func::new("badness", "start");
+
+    func.block("start", vec![
+        i_print_s("!!Badness!!\n"),
+        i_finish()
+    ]);
+
+    func.finish();
+    func
+}
+
 fn test__straight_line() -> Func {
     let mut func = Func::new("straight_line", "b0");
 
@@ -4547,48 +4641,6 @@ fn test__3_loops() -> Func {
     func
 }
 
-// Whatever the current badness is
-fn test__badness() -> Func {
-    let mut func = Func::new("badness", "Lstart");
-
-    let lo = func.vreg();
-    let hi = func.vreg();
-    let bigN = func.vreg();
-    let hp = func.vreg();
-    let t0 = func.vreg();
-    let zero = func.vreg();
-
-    func.block("Lstart", vec![
-        i_imm(zero, 0),
-        i_imm(t0,   1),        i_store(AM_RI(zero,0),  t0),
-        i_imm(t0,   100),      i_store(AM_RI(zero,1),  t0),
-        i_imm(lo, 5),
-        i_imm(hi, 24),
-        i_sub(t0, hi, RI_R(lo)),
-        i_add(bigN, t0, RI_I(1)),
-        i_imm(hp, 0),
-        i_goto("L11")
-    ]);
-
-    func.block("L11", vec![
-        i_load(t0, AM_R(hp)),
-        i_cmp_gt(t0, t0, RI_R(bigN)),
-        i_goto_ctf(t0, "L20", "L11a")
-    ]);
-
-    func.block("L11a", vec![
-        i_add(hp, hp, RI_I(1)),
-        i_goto("L11")
-    ]);
-
-    func.block("L20", vec![
-        i_finish()
-    ]);
-
-    func.finish();
-    func
-}
-
 fn test__stmts() -> Func {
     let mut bif = Blockifier::new("stmts");
     let vI = bif.vreg();
@@ -4830,7 +4882,7 @@ fn test__needs_splitting2() -> Func {
 // This test has: 56 basic blocks, 215 insns, 36 virtual registers, 17
 // simultaneously live values, 735 live range fragments, 100 vreg live ranges.
 /*
-   Dynamic results by number of regs available, 2018Dec19:
+   Dynamic results by number of regs available, 2019Dec19:
    17  224440 insns, 0 spills, 0 reloads
    16  226241 insns, 1 spills, 1800 reloads
    15  228045 insns, 2 spills, 3603 reloads
@@ -5209,11 +5261,171 @@ fn test__fill_then_sum_2a() -> Func {
     func
 }
 
+// This is a version of ssort that uses some 2-operand insns.
+fn test__ssort_2a() -> Func {
+    let mut func = Func::new("ssort_2a", "Lstart");
+
+    // This is a simple "shellsort" test.  An array of numbers to sort is
+    // placed in mem[5..24] and an increment table is placed in mem[0..4].
+    // mem[5..24] is then sorted and the result is printed.
+    //
+    // This test features 15 basic blocks, 10 virtual registers, at least one
+    // of which has multiple independent live ranges, a 3-deep loop nest, and
+    // some live ranges which span parts of the loop nest.  So it's an
+    // interesting test case.
+
+    let lo = func.vreg();
+    let hi = func.vreg();
+    let i = func.vreg();
+    let j = func.vreg();
+    let h = func.vreg();
+    let bigN = func.vreg();
+    let v = func.vreg();
+    let hp = func.vreg();
+    let t0 = func.vreg();
+    let zero = func.vreg();
+
+    func.block("Lstart", vec![
+        i_imm(zero, 0),
+        // Store the increment table
+        i_imm(t0,   1),        i_store(AM_RI(zero,0),  t0),
+        i_imm(t0,   4),        i_store(AM_RI(zero,1),  t0),
+        i_imm(t0,  13),        i_store(AM_RI(zero,2),  t0),
+        i_imm(t0,  40),        i_store(AM_RI(zero,3),  t0),
+        i_imm(t0, 121),        i_store(AM_RI(zero,4),  t0),
+        // Store the numbers to be sorted
+        i_imm(t0,  30),        i_store(AM_RI(zero,5),  t0),
+        i_imm(t0,  29),        i_store(AM_RI(zero,6),  t0),
+        i_imm(t0,  31),        i_store(AM_RI(zero,7),  t0),
+        i_imm(t0,  29),        i_store(AM_RI(zero,8),  t0),
+        i_imm(t0,  32),        i_store(AM_RI(zero,9),  t0),
+        i_imm(t0,  66),        i_store(AM_RI(zero,10), t0),
+        i_imm(t0,  77),        i_store(AM_RI(zero,11), t0),
+        i_imm(t0,  44),        i_store(AM_RI(zero,12), t0),
+        i_imm(t0,  22),        i_store(AM_RI(zero,13), t0),
+        i_imm(t0,  11),        i_store(AM_RI(zero,14), t0),
+        i_imm(t0,  99),        i_store(AM_RI(zero,15), t0),
+        i_imm(t0,  11),        i_store(AM_RI(zero,16), t0),
+        i_imm(t0,  12),        i_store(AM_RI(zero,17), t0),
+        i_imm(t0,   7),        i_store(AM_RI(zero,18), t0),
+        i_imm(t0,   9),        i_store(AM_RI(zero,19), t0),
+        i_imm(t0,   2),        i_store(AM_RI(zero,20), t0),
+        i_imm(t0,  32),        i_store(AM_RI(zero,21), t0),
+        i_imm(t0,  23),        i_store(AM_RI(zero,22), t0),
+        i_imm(t0,  41),        i_store(AM_RI(zero,23), t0),
+        i_imm(t0,  14),        i_store(AM_RI(zero,24), t0),
+        // The real computation begins here
+        i_imm(lo, 5),  // Lowest address of the range to sort
+        i_imm(hi, 24), // Highest address of the range to sort
+        i_copy(t0, hi),
+        i_subm(t0, RI_R(lo)),
+        i_add(bigN, t0, RI_I(1)),
+        i_imm(hp, 0),
+        i_goto("L11")
+    ]);
+
+    func.block("L11", vec![
+        i_load(t0, AM_R(hp)),
+        i_cmp_gt(t0, t0, RI_R(bigN)),
+        i_goto_ctf(t0, "L20", "L11a")
+    ]);
+
+    func.block("L11a", vec![
+        i_addm(hp, RI_I(1)),
+        i_goto("L11")
+    ]);
+
+    func.block("L20", vec![
+        i_cmp_lt(t0, hp, RI_I(1)),
+        i_goto_ctf(t0, "L60", "L21a"),
+    ]);
+
+    func.block("L21a", vec![
+        i_copy(t0, hp),
+        i_subm(t0, RI_I(1)),
+        i_load(h, AM_R(t0)),
+        //printf("h = %u\n", h),
+        i_copy(i, lo),
+        i_addm(i, RI_R(h)),
+        i_goto("L30"),
+    ]);
+
+    func.block("L30", vec![
+        i_cmp_gt(t0, i, RI_R(hi)),
+        i_goto_ctf(t0, "L50", "L30a"),
+    ]);
+
+    func.block("L30a", vec![
+        i_load(v, AM_R(i)),
+        i_copy(j, i),  // FIXME: is this a coalescable copy?
+        i_goto("L40"),
+    ]);
+
+    func.block("L40", vec![
+        i_copy(t0, j),
+        i_subm(t0, RI_R(h)),
+        i_load(t0, AM_R(t0)),
+        i_cmp_le(t0, t0, RI_R(v)),
+        i_goto_ctf(t0, "L45", "L40a"),
+    ]);
+
+    func.block("L40a", vec![
+        i_copy(t0, j),
+        i_subm(t0, RI_R(h)),
+        i_load(t0, AM_R(t0)),
+        i_store(AM_R(j), t0),
+        i_subm(j, RI_R(h)),
+        i_copy(t0, lo),
+        i_addm(t0, RI_R(h)),
+        i_subm(t0, RI_I(1)),
+        i_cmp_le(t0, j, RI_R(t0)),
+        i_goto_ctf(t0, "L45", "L40"),
+    ]);
+
+    func.block("L45", vec![
+        i_store(AM_R(j), v),
+        i_addm(i, RI_I(1)),
+        i_goto("L30"),
+    ]);
+
+    func.block("L50", vec![
+        i_subm(hp, RI_I(1)),
+        i_goto("L20"),
+    ]);
+
+    func.block("L60", vec![
+        i_copy(i, lo), // FIXME: ditto
+        i_goto("L61")
+    ]);
+
+    func.block("L61", vec![
+        i_cmp_gt(t0, i, RI_R(hi)),
+        i_goto_ctf(t0, "L62", "L61a"),
+    ]);
+
+    func.block("L61a", vec![
+        i_load(t0, AM_R(i)),
+        i_print_i(t0),
+        i_print_s(" "),
+        i_addm(i, RI_I(1)),
+        i_goto("L61"),
+    ]);
+
+    func.block("L62", vec![
+        i_print_s("\n"),
+        i_finish()
+    ]);
+
+    func.finish();
+    func
+}
+
 // This is the list of available tests.  This function returns either the
 // requested Func, or if not found, a list of the available ones.
 fn find_Func(name: &String) -> Result::<Func, Vec::<String>> {
     // This is really stupid.  Fortunately it's not performance critical :)
     let all_Funcs = vec![
+        test__badness(),           // Whatever the current badness is
         test__straight_line(),     // straight_line
         test__fill_then_sum(),     // fill_then_sum
         test__ssort(),             // shellsort
@@ -5221,9 +5433,9 @@ fn find_Func(name: &String) -> Result::<Func, Vec::<String>> {
         test__stmts(),             // a small Stmty test
         test__needs_splitting(),   // LR splitting might help here ..
         test__needs_splitting2(),  // .. same, but with LRs split by hand
-        test__badness(),           // Whatever the current badness is
         test__qsort(),             // big qsort test, 3-operand only
         test__fill_then_sum_2a(),  // 2-operand version of fill_then_sum
+        test__ssort_2a()           // 2-operand version of shellsort
     ];
 
     let mut all_names = Vec::new();
