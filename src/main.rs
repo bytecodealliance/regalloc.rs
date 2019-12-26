@@ -9,8 +9,6 @@ MVP (without these, the implementation is useless in practice):
 
 - add a spill-slot allocation mechanism, even if it is pretty crude
 
-- add support for insns which modify regs (a la x86)
-
 - support multiple register classes
 
 - add a random-Func generator and maybe some way to run it in a loop
@@ -21,6 +19,9 @@ Post-MVP:
 - Live Range Splitting
 
 Tidyings:
+
+- (should do) fn CFGInfo::create::dfs: use an explicit stack instead of
+  recursion.
 
 - (minor) add an LR classifier (Spill/Reload/Normal) and use that instead
   of current in-line tests
@@ -35,17 +36,12 @@ Performance:
 - Collect typical use data for each Set<T> instance and replace with a
   suitable optimised replacement.
 
-- Ditto HashMap (if we have to have it at all)
+- Ditto FxHashMap (if we have to have it at all)
 
 - Replace SortedFragIxs with something more efficient
 
 - Currently we call getRegUsage three times for each insn.  Just do this
   once and cache the results.
-
-- |calc_livein_and_liveout|: use a suitably optimal block sequencing, as
-  described in the literature, so as to minimise iterations to a fixpoint.
-  And/or use a worklist.  2019Dec19: this is important!  As it stands, it
-  takes 30 iterations to reach a fixpoint for the |qsort| test. (!!)
 
 - Insn rewrite loop: don't clone mapD; just use it as soon as it's available.
 
@@ -58,6 +54,7 @@ use std::{fs, io};
 use std::io::BufRead;
 use std::env;
 use std::collections::hash_set::Iter;
+use std::collections::VecDeque;
 use std::hash::Hash;
 use std::convert::TryInto;
 use std::cmp::Ordering;
@@ -1339,6 +1336,12 @@ impl<'a, T> Iterator for SetIter<'a, T> {
 
 
 //=============================================================================
+// Queues
+
+type Queue<T> = VecDeque<T>;
+
+
+//=============================================================================
 // Maps
 
 type Map<K, V> = FxHashMap<K, V>;
@@ -1360,7 +1363,12 @@ struct CFGInfo {
     dom_map:  Vec::</*BlockIx, */Set<BlockIx>>,
 
     // This maps from a Block to the loop depth that it is at
-    depth_map: Vec::</*BlockIx, */u32>
+    depth_map: Vec::</*BlockIx, */u32>,
+
+    // Pre- and post-order sequences.  Iterating forwards through these
+    // vectors enumerates the blocks in preorder and postorder respectively.
+    pre_ord:  Vec::<BlockIx>,
+    post_ord: Vec::<BlockIx>
 }
 
 impl CFGInfo {
@@ -1512,7 +1520,56 @@ impl CFGInfo {
         //
         // END compute loop depth of all Blocks
 
-        CFGInfo { pred_map, succ_map, dom_map, depth_map }
+        // BEGIN compute preord/postord
+        //
+        // This is per Fig 7.12 of Muchnick 1997
+        //
+        let mut pre_ord  = Vec::<BlockIx>::new();
+        let mut post_ord = Vec::<BlockIx>::new();
+
+        let mut visited = Vec::<bool>::new();
+        visited.resize(nBlocks, false);
+
+        // FIXME: change this to use an explicit stack.
+        fn dfs(pre_ord: &mut Vec::<BlockIx>, post_ord: &mut Vec::<BlockIx>,
+               visited: &mut Vec::<bool>,
+               succ_map: &Vec::</*BlockIx, */Set<BlockIx>>,
+               bix: BlockIx) {
+            let ix = bix.get_usize();
+            debug_assert!(!visited[ix]);
+            visited[ix] = true;
+            pre_ord.push(bix);
+            for succ in succ_map[ix].iter() {
+                if !visited[succ.get_usize()] {
+                    dfs(pre_ord, post_ord, visited, succ_map, *succ);
+                }
+            }
+            post_ord.push(bix);
+        }
+
+        dfs(&mut pre_ord, &mut post_ord, &mut visited,
+            &succ_map, func.entry.getBlockIx());
+
+        debug_assert!(pre_ord.len() == post_ord.len());
+        debug_assert!(pre_ord.len() <= nBlocks);
+        if pre_ord.len() < nBlocks {
+            // This can happen if the graph contains nodes unreachable from
+            // the entry point.  In which case, deal with any leftovers.
+            for i in 0 .. nBlocks {
+                if !visited[i] {
+                    dfs(&mut pre_ord, &mut post_ord, &mut visited,
+                        &succ_map, mkBlockIx(i as u32));
+                }
+            }
+        }
+        debug_assert!(pre_ord.len() == nBlocks);
+        debug_assert!(post_ord.len() == nBlocks);
+        //
+        // END compute preord/postord
+
+        //println!("QQQQ pre_ord  {}", pre_ord.show());
+        //println!("QQQQ post_ord {}", post_ord.show());
+        CFGInfo { pred_map, succ_map, dom_map, depth_map, pre_ord, post_ord }
     }
 }
 
@@ -1624,69 +1681,66 @@ impl Func {
                                use_sets_per_block: &Vec::<Set<Reg>>,
                                cfg_info: &CFGInfo
                               ) -> (Vec::<Set<Reg>>, Vec::<Set<Reg>>) {
-        let empty = Set::<Reg>::empty();
-        let mut liveins  = Vec::<Set::<Reg>>::new();
-        let mut liveouts = Vec::<Set::<Reg>>::new();
-
         let nBlocks = self.blocks.len();
-        liveins.resize(nBlocks, empty.clone());
+        let empty = Set::<Reg>::empty();
+
+        let mut nEvals = 0;
+        let mut liveouts = Vec::<Set::<Reg>>::new();
         liveouts.resize(nBlocks, empty.clone());
 
-        let mut iterNo = 0;
+        // Initialise the work queue so as to do a reverse preorder traversal
+        // through the graph, after which blocks are re-evaluated on demand.
+        let mut workQ = Queue::<BlockIx>::new();
+        for i in 0 .. nBlocks {
+            // bixI travels in "reverse preorder"
+            let bixI = cfg_info.pre_ord[nBlocks - 1 - i];
+            workQ.push_back(bixI);
+        }
 
-        loop {
-            let mut changed = false;
-            let mut new_liveins  = Vec::<Set::<Reg>>::new();
-            let mut new_liveouts = Vec::<Set::<Reg>>::new();
-
-            // Speedup FIXME: use a sensible ordering (RPO?)  This ordering is
-            // really bad.
-            for bix in 0 .. nBlocks {
-                let def = &def_sets_per_block[bix];
-                let uce = &use_sets_per_block[bix];
-                let old_livein  = &liveins[bix];
-                let old_liveout = &liveouts[bix];
-
-                let mut new_livein = old_liveout.clone();
-                new_livein.remove(&def);
-                new_livein.union(&uce);
-
-                let mut new_liveout = Set::<Reg>::empty();
-                for succ_bix in cfg_info.succ_map[bix].iter() {
-                    new_liveout.union(&liveins[succ_bix.get_usize()]);
-                }
-
-                // Speedup FIXME: once |changed| has become true, doing
-                // further equality tests is just a time-waster.  Skip them.
-                if !new_livein.equals(&old_livein)
-                   || !new_liveout.equals(&old_liveout) {
-                    changed = true;
-                }
-
-                new_liveins.push(new_livein);
-                new_liveouts.push(new_liveout);
+        while let Some(bixI) = workQ.pop_front() {
+            // Compute a new value for liveouts[bixI]
+            let ixI = bixI.get_usize();
+            let mut set = Set::<Reg>::empty();
+            for bixJ in cfg_info.succ_map[ixI].iter() {
+                let ixJ = bixJ.get_usize();
+                let mut liveinJ = liveouts[ixJ].clone();
+                liveinJ.remove(&def_sets_per_block[ixJ]);
+                liveinJ.union(&use_sets_per_block[ixJ]);
+                set.union(&liveinJ);
             }
+            nEvals += 1;
 
-            liveins = new_liveins;
-            liveouts = new_liveouts;
-
-            ////!!
-            if false {
-                println!("");
-                println!("After  iteration {}", iterNo);
-                iterNo += 1;
-                let mut n = 0;
-                for (livein, liveout) in liveins.iter().zip(&liveouts) {
-                    println!("  block {}:  livein {:<16}  liveout {:<16}",
-                             n, livein.show(), liveout.show());
-                    n += 1;
+            if !set.equals(&liveouts[ixI]) {
+                liveouts[ixI] = set;
+                // Add |bixI|'s successors to the work queue, since their
+                // liveout values might be affected.
+                // FIXME: 'succ'.. is this right?
+                for bixJ in cfg_info.succ_map[ixI].iter() {
+                    workQ.push_back(*bixJ);
                 }
             }
-            ////!!
+        }
 
-            if !changed {
-                break;
+        // The liveout values are done, but we need to compute the liveins
+        // too.
+        let mut liveins = Vec::<Set::<Reg>>::new();
+        liveins.resize(nBlocks, empty.clone());
+        for ixI in 0 .. nBlocks {
+            let mut liveinI = liveouts[ixI].clone();
+            liveinI.remove(&def_sets_per_block[ixI]);
+            liveinI.union(&use_sets_per_block[ixI]);
+            liveins[ixI] = liveinI;
+        }
+
+        if false {
+            let mut sum_card_LI = 0;
+            let mut sum_card_LO = 0;
+            for i in 0 .. nBlocks {
+                sum_card_LI += liveins[i].card();
+                sum_card_LO += liveouts[i].card();
             }
+            println!("QQQQ calc_LI/LO: nEvals {}, tot LI {}, tot LO {}",
+                     nEvals, sum_card_LI, sum_card_LO);
         }
 
         (liveins, liveouts)
@@ -3305,7 +3359,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
             return Err("out of registers".to_string());
         }
 
-        // Generate a new spill slot number, Slot
+        // Generate a new spill slot number, S
         /* Spilling vreg V with virtual live range VLR to slot S:
               for each frag F in VLR {
                  for each insn I in F.first.iix .. F.last.iix {
