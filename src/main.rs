@@ -16,6 +16,8 @@ MVP (without these, the implementation is useless in practice):
 
 Post-MVP:
 
+- Move Coalescing
+
 - Live Range Splitting
 
 Tidyings:
@@ -26,7 +28,7 @@ Tidyings:
 - (minor) add an LR classifier (Spill/Reload/Normal) and use that instead
   of current in-line tests
 
-- Is it really necessary to have both SpillOrReloadInfo and EditListItem?
+- Is it really necessary to have both SpillAndOrReloadInfo and EditListItem?
   Can we get away with just one?
 
 - Use IndexedVec instead of Vec?
@@ -1712,10 +1714,9 @@ impl Func {
 
             if !set.equals(&liveouts[ixI]) {
                 liveouts[ixI] = set;
-                // Add |bixI|'s successors to the work queue, since their
+                // Add |bixI|'s predecessors to the work queue, since their
                 // liveout values might be affected.
-                // FIXME: 'succ'.. is this right?
-                for bixJ in cfg_info.succ_map[ixI].iter() {
+                for bixJ in cfg_info.pred_map[ixI].iter() {
                     workQ.push_back(*bixJ);
                 }
             }
