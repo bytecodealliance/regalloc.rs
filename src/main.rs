@@ -1936,8 +1936,8 @@ impl Show for Frag {
             + &self.first.show() + &"-" + &self.last.show()
     }
 }
-fn mk_Frag_General(blocks: &Vec::<Block>, bix: BlockIx,
-                   first: InsnPoint, last: InsnPoint, count: u16) -> Frag {
+fn mkFrag(blocks: &Vec::<Block>, bix: BlockIx,
+          first: InsnPoint, last: InsnPoint, count: u16) -> Frag {
     let block = &blocks[bix.get_usize()];
     debug_assert!(block.len >= 1);
     debug_assert!(block.containsInsnIx(first.iix));
@@ -1958,60 +1958,6 @@ fn mk_Frag_General(blocks: &Vec::<Block>, bix: BlockIx,
             (true,  true)  => FragKind::Thru
         };
     Frag { bix, kind, first, last, count }
-}
-fn mk_Frag_Local(blocks: &Vec::<Block>, bix: BlockIx,
-                 live_after: InsnIx, dead_after: InsnIx, count: u16) -> Frag {
-    let block = &blocks[bix.get_usize()];
-    debug_assert!(block.containsInsnIx(live_after));
-    debug_assert!(block.containsInsnIx(dead_after));
-    debug_assert!(live_after <= dead_after);
-    if live_after == dead_after {
-        // A dead write, but we must represent it correctly.
-        debug_assert!(count == 1);
-        Frag { bix:   bix,
-               kind:  FragKind::Local,
-               first: InsnPoint_D(live_after),
-               last:  InsnPoint_D(live_after),
-               count: count }
-    } else {
-        debug_assert!(count >= 2);
-        Frag { bix:   bix,
-               kind:  FragKind::Local,
-               first: InsnPoint_D(live_after),
-               last:  InsnPoint_U(dead_after),
-               count: count }
-    }
-}
-fn mk_Frag_LiveIn(blocks: &Vec::<Block>,
-                  bix: BlockIx, dead_after: InsnIx, count: u16) -> Frag {
-    debug_assert!(count >= 1);
-    let block = &blocks[bix.get_usize()];
-    debug_assert!(block.containsInsnIx(dead_after));
-    Frag { bix:   bix,
-           kind:  FragKind::LiveIn,
-           first: InsnPoint_U(block.start),
-           last:  InsnPoint_U(dead_after),
-           count: count }
-}
-fn mk_Frag_LiveOut(blocks: &Vec::<Block>,
-                  bix: BlockIx, live_after: InsnIx, count: u16) -> Frag {
-    debug_assert!(count >= 1);
-    let block = &blocks[bix.get_usize()];
-    debug_assert!(block.containsInsnIx(live_after));
-    Frag { bix:   bix,
-           kind:  FragKind::LiveOut,
-           first: InsnPoint_D(live_after),
-           last:  InsnPoint_D(block.start.plus(block.len - 1)),
-           count: count }
-}
-fn mk_Frag_Thru(blocks: &Vec::<Block>, bix: BlockIx, count: u16) -> Frag {
-    // Count can be any value, zero or more.
-    let block = &blocks[bix.get_usize()];
-    Frag { bix:   bix,
-           kind:  FragKind::Thru,
-           first: InsnPoint_U(block.start),
-           last:  InsnPoint_D(block.start.plus(block.len - 1)),
-           count: count }
 }
 
 
@@ -2203,8 +2149,7 @@ impl Func {
                         if first == last {
                             debug_assert!(*uses == 1);
                         }
-                        let frag = mk_Frag_General(blocks, bix,
-                                                   *first, *last, *uses);
+                        let frag = mkFrag(blocks, bix, *first, *last, *uses);
                         tmpResultVec.push((*r, frag));
                         let new_pt = InsnPoint_D(iix);
                         new_pf = ProtoFrag { uses: 1,
@@ -2238,8 +2183,8 @@ impl Func {
                 // read "after" the block.  Create a |LiveOut| or |Thru| frag
                 // accordingly.
                 Some(ProtoFrag { uses, first, last:_ }) => {
-                    let frag = mk_Frag_General(blocks, bix,
-                                               *first, last_pt_in_block, *uses);
+                    let frag = mkFrag(blocks, bix,
+                                      *first, last_pt_in_block, *uses);
                     tmpResultVec.push((*r, frag));
                 }
             }
@@ -2254,7 +2199,7 @@ impl Func {
             if pf.first == pf.last {
                 debug_assert!(pf.uses == 1);
             }
-            let frag = mk_Frag_General(blocks, bix, pf.first, pf.last, pf.uses);
+            let frag = mkFrag(blocks, bix, pf.first, pf.last, pf.uses);
             //println!("QQQQ post: leftover: {}", (r,frag).show());
             tmpResultVec.push((*r, frag));
         }
@@ -2589,11 +2534,10 @@ fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
             let cost = Some(0.0);
             match *reg {
                 Reg::RReg(rreg) => {
-                    resR.push(RLR { rreg: rreg, sfrags });
+                    resR.push(RLR { rreg, sfrags });
                 }
                 Reg::VReg(vreg) => {
-                    resV.push(VLR { vreg: vreg, rreg: None,
-                                    sfrags, size, cost });
+                    resV.push(VLR { vreg, rreg: None, sfrags, size, cost });
                 }
             }
         }
@@ -3940,7 +3884,7 @@ fn test_SortedFragIxs() {
         res
     }
 
-    fn getFrag(fenv: &'a Vec::<Frag>, fix: FragIx) -> &'a Frag {
+    fn getFrag(fenv: &Vec::<Frag>, fix: FragIx) -> &Frag {
         &fenv[ fix.get_usize() ]
     }
 
