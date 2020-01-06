@@ -31,8 +31,6 @@ Tidyings:
 - Is it really necessary to have both SpillAndOrReloadInfo and EditListItem?
   Can we get away with just one?
 
-- Use IndexedVec instead of Vec?
-
 Performance:
 
 - Collect typical use data for each Set<T> instance and replace with a
@@ -55,13 +53,190 @@ Performance:
 use std::{fs, io};
 use std::io::BufRead;
 use std::env;
-use std::collections::hash_set::Iter;
 use std::collections::VecDeque;
 use std::hash::Hash;
 use std::convert::TryInto;
 use std::cmp::Ordering;
+use std::ops::Index;
+use std::ops::IndexMut;
+use std::ops::Range;
+use std::slice::{Iter, IterMut};
+use std::marker::PhantomData;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
+
+
+//=============================================================================
+// Iteration boilerplate for entities.  The only purpose of this is to support
+// constructions of the form
+//
+//   for ent in startEnt .dotdot( endPlus1Ent ) {
+//   }
+//
+// until such time as |trait Step| is available in stable Rust.  At that point
+// |fn dotdot| and all of the following can be removed, and the loops rewritten
+// using the standard syntax:
+//
+//   for ent in startEnt .. endPlus1Ent {
+//   }
+
+trait PlusOne {
+    fn plus_one(&self) -> Self;
+}
+
+#[derive(Clone, Copy)]
+struct MyRange<T> {
+    first:     T,
+    lastPlus1: T
+}
+impl<T: Copy + PartialOrd + PlusOne> IntoIterator for MyRange<T> {
+    type Item = T;
+    type IntoIter = MyIterator<T>;
+    fn into_iter(self) -> Self::IntoIter {
+        MyIterator { range: self, next: self.first }
+    }
+}
+
+struct MyIterator<T> {
+    range: MyRange<T>,
+    next:  T
+}
+impl<T: Copy + PartialOrd + PlusOne> Iterator for MyIterator<T> {
+    type Item = T;
+    fn next(&mut self) -> Option::<Self::Item> {
+        if self.next >= self.range.lastPlus1 {
+            None
+        } else {
+            let res = Some(self.next);
+            self.next = self.next.plus_one();
+            res
+        }
+    }
+}
+
+
+//=============================================================================
+// Vectors where both the index and element types can be specified (and at
+// most 2^32-1 elems can be stored.  What if this overflows?)
+
+struct TVec<TyIx, Ty> {
+    vek: Vec<Ty>,
+    ty_ix: PhantomData<TyIx>
+}
+impl<TyIx, Ty> TVec<TyIx, Ty>
+where Ty: Clone {
+    fn new() -> Self {
+        Self {
+            vek: Vec::new(),
+            ty_ix: PhantomData::<TyIx>
+        }
+    }
+    fn append(&mut self, other: &mut TVec<TyIx, Ty>) {
+        // FIXME what if this overflows?
+        self.vek.append(&mut other.vek);
+    }
+    fn iter(&self) -> Iter<Ty> {
+        self.vek.iter()
+    }
+    fn iter_mut(&mut self) -> IterMut<Ty> {
+        self.vek.iter_mut()
+    }
+    fn len(&self) -> u32 {
+        // FIXME what if this overflows?
+        self.vek.len() as u32
+    }
+    fn push(&mut self, item: Ty) {
+        // FIXME what if this overflows?
+        self.vek.push(item);
+    }
+    fn resize(&mut self, new_len: u32, value: Ty) {
+        self.vek.resize(new_len as usize, value);
+    }
+}
+impl<TyIx, Ty> Index<TyIx> for TVec<TyIx, Ty>
+where TyIx: IntoU32 {
+    type Output = Ty;
+    fn index(&self, ix: TyIx) -> &Ty {
+        &self.vek[ix.into_u32() as usize]
+    }
+}
+impl<TyIx, Ty> IndexMut<TyIx> for TVec<TyIx, Ty>
+where TyIx: IntoU32 {
+    fn index_mut(&mut self, ix: TyIx) -> &mut Ty {
+        &mut self.vek[ix.into_u32() as usize]
+    }
+}
+impl<TyIx, Ty> Clone for TVec<TyIx, Ty>
+where Ty: Clone {
+    // This is only needed for debug printing.
+    fn clone(&self) -> Self {
+        Self { vek: self.vek.clone(), ty_ix: PhantomData::<TyIx> }
+    }
+}
+
+trait IntoU32 {
+    fn into_u32(&self) -> u32;
+}
+
+
+//=============================================================================
+
+macro_rules! generate_boilerplate {
+    ($TypeIx:ident, $mkTypeIx: ident,
+     $Type:ident,
+     $Vec_Type:ident, $mk_Vec_Type:ident,
+     $PrintingPrefix:expr) => {
+        #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+        // Firstly, the indexing type (TypeIx)
+        enum $TypeIx {
+            $TypeIx(u32)
+        }
+        fn $mkTypeIx(n: u32) -> $TypeIx { $TypeIx::$TypeIx(n) }
+        impl $TypeIx {
+            fn get(self) -> u32 { match self { $TypeIx::$TypeIx(n) => n } }
+            fn get_usize(self) -> usize { self.get() as usize }
+            fn plus(self, delta: u32) -> $TypeIx {
+                $TypeIx::$TypeIx(self.get() + delta)
+            }
+            fn minus(self, delta: u32) -> $TypeIx {
+                $TypeIx::$TypeIx(self.get() - delta)
+            }
+            fn dotdot(&self, lastPlus1: $TypeIx) -> MyRange<$TypeIx> {
+                MyRange { first: *self, lastPlus1: lastPlus1 }
+            }
+        }
+        impl Show for $TypeIx {
+            fn show(&self) -> String { $PrintingPrefix.to_string()
+                                       + &self.get().to_string() }
+        }
+        impl PlusOne for $TypeIx {
+            fn plus_one(&self) -> Self {
+                self.plus(1)
+            }
+        }
+        impl IntoU32 for $TypeIx {
+            fn into_u32(&self) -> u32 {
+                self.get()
+            }
+        }
+        // Secondly, the vector of the actual type (Type) as indexed only by
+        // the indexing type (TypeIx)
+        type $Vec_Type = TVec<$TypeIx, $Type>;
+        fn $mk_Vec_Type(vek: Vec<$Type>) -> $Vec_Type {
+            TVec { vek, ty_ix: PhantomData::<$TypeIx> }
+        }
+    }
+}
+
+generate_boilerplate!(InsnIx, mkInsnIx, Insn, Vec_Insn, mk_Vec_Insn, "i");
+
+generate_boilerplate!(BlockIx, mkBlockIx, Block, Vec_Block, mk_Vec_Block, "b");
+
+generate_boilerplate!(FragIx, mkFragIx, Frag, Vec_Frag, mk_Vec_Frag, "f");
+
+generate_boilerplate!(VLRIx, mkVLRIx, VLR, Vec_VLR, mk_Vec_VLR, "vlr");
+
+generate_boilerplate!(RLRIx, mkRLRIx, RLR, Vec_RLR, mk_Vec_RLR, "rlr");
 
 
 //=============================================================================
@@ -105,6 +280,13 @@ impl<T: Show> Show for Vec<T> {
         res + &"]".to_string()
     }
 }
+impl<TyIx, Ty: Show> Show for TVec<TyIx, Ty> {
+    // This is something of a hack in the sense that it doesn't show the
+    // indices, but oh well ..
+    fn show(&self) -> String {
+        self.vek.show()
+    }
+}
 impl<T: Show> Show for Option<T> {
     fn show(&self) -> String {
         match self {
@@ -128,8 +310,7 @@ impl<A: Show, B: Show, C: Show> Show for (A, B, C) {
 
 
 //=============================================================================
-// Definitions of things which are wrappers around integers,
-// and printing thereof
+// Definitions of registers and stack slots, and printing thereof.
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 enum RReg {
@@ -244,37 +425,6 @@ impl Show for Slot {
     fn show(&self) -> String {
         "S".to_string() + &self.get().to_string()
     }
-}
-
-
-// The absolute index of a Block (in Func::blocks[]).
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-enum BlockIx {
-    BlockIx(u32)
-}
-fn mkBlockIx(n: u32) -> BlockIx { BlockIx::BlockIx(n) }
-impl BlockIx {
-    fn get(self) -> u32 { match self { BlockIx::BlockIx(n) => n } }
-    fn get_usize(self) -> usize { self.get() as usize }
-}
-impl Show for BlockIx {
-    fn show(&self) -> String { "b".to_string() + &self.get().to_string() }
-}
-
-
-// The absolute index of an Insn (in Func::insns[]).
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-enum InsnIx {
-    InsnIx(u32)
-}
-fn mkInsnIx(n: u32) -> InsnIx { InsnIx::InsnIx(n) }
-impl InsnIx {
-    fn get(self) -> u32 { match self { InsnIx::InsnIx(n) => n } }
-    fn get_usize(self) -> usize { self.get() as usize }
-    fn plus(self, delta: u32) -> Self { InsnIx::InsnIx(self.get() + delta) }
-}
-impl Show for InsnIx {
-    fn show(&self) -> String { "i".to_string() + &self.get().to_string() }
 }
 
 
@@ -843,8 +993,8 @@ struct Func {
     name:   String,
     entry:  Label,
     nVRegs: u32,
-    insns:  Vec::</*InsnIx, */Insn>,    // indexed by InsnIx
-    blocks: Vec::</*BlockIx, */Block>   // indexed by BlockIx
+    insns:  Vec_Insn,    // indexed by InsnIx
+    blocks: Vec_Block    // indexed by BlockIx
     // Note that |blocks| must be in order of increasing |Block::start|
     // fields.  Code that wants to traverse the blocks in some other order
     // must represent the ordering some other way; rearranging Func::blocks is
@@ -862,7 +1012,7 @@ impl Clone for Func {
 }
 
 // Find a block Ix for a block name
-fn lookup(blocks: &Vec::<Block>, name: String) -> BlockIx {
+fn lookup(blocks: &Vec_Block, name: String) -> BlockIx {
     let mut bix = 0;
     for b in blocks.iter() {
         if b.name == name {
@@ -879,8 +1029,8 @@ impl Func {
             name: name.to_string(),
             entry: Label::Unresolved { name: entry.to_string() },
             nVRegs: 0,
-            insns: Vec::<Insn>::new(),
-            blocks: Vec::<Block>::new()
+            insns: Vec_Insn::new(),
+            blocks: Vec_Block::new()
         }
     }
 
@@ -895,8 +1045,9 @@ impl Func {
             }
             println!("  {}:{}", mkBlockIx(ix).show(), b.name);
             for i in b.start.get() .. b.start.get() + b.len {
-                println!("      {:<3}   {}"
-                         , mkInsnIx(i).show(), self.insns[i as usize].show());
+                let ixI = mkInsnIx(i);
+                println!("      {:<3}   {}",
+                         ixI.show(), self.insns[ixI].show());
             }
             ix += 1;
         }
@@ -911,8 +1062,8 @@ impl Func {
     }
 
     // Add a block to the Func
-    fn block<'a>(&mut self, name: &'a str, mut insns: Vec::<Insn>) {
-        let start = self.insns.len() as u32;
+    fn block<'a>(&mut self, name: &'a str, mut insns: Vec_Insn) {
+        let start = self.insns.len();
         let len = insns.len() as u32;
         self.insns.append(&mut insns);
         let b = mkBlock(name.to_string(), mkInsnIx(start), len);
@@ -929,23 +1080,23 @@ impl Func {
           - convert references to block numbers
     */
     fn finish(&mut self) {
-        for bixNo in 0 .. self.blocks.len() {
-            let b = &self.blocks[bixNo];
+        for bix in mkBlockIx(0) .dotdot( mkBlockIx(self.blocks.len()) ) {
+            let b = &self.blocks[bix];
             if b.len == 0 {
                 panic!("Func::done: a block is empty");
             }
-            if bixNo > 0
-                && self.blocks[bixNo - 1].start >= self.blocks[bixNo].start {
+            if bix > mkBlockIx(0)
+                && self.blocks[bix.minus(1)].start >= self.blocks[bix].start {
                 panic!("Func: blocks are not in increasing order of InsnIx");
             }
             for i in 0 .. b.len {
-                let iix = mkInsnIx(b.start.get() + i);
+                let iix = b.start.plus(i);
                 if i == b.len - 1 &&
-                    !is_control_flow_insn(&self.insns[iix.get_usize()]) {
+                    !is_control_flow_insn(&self.insns[iix]) {
                     panic!("Func: block must end in control flow insn");
                 }
                 if i != b.len -1 &&
-                    is_control_flow_insn(&self.insns[iix.get_usize()]) {
+                    is_control_flow_insn(&self.insns[iix]) {
                     panic!("Func: block contains control flow insn not at end");
                 }
             }
@@ -981,8 +1132,7 @@ impl<'a> IState<'a> {
         let mut state =
             IState {
                 func:      func,
-                nia:       func.blocks[func.entry.getBlockIx().get_usize()]
-                               .start,
+                nia:       func.blocks[func.entry.getBlockIx()].start,
                 vregs:     Vec::new(),
                 rregs:     Vec::new(),
                 mem:       Vec::new(),
@@ -1116,11 +1266,11 @@ impl<'a> IState<'a> {
     fn step(&mut self) -> bool {
         let mut done = false;
 
-        let iix = self.nia.get();
-        self.nia = mkInsnIx(iix + 1);
+        let iix = self.nia;
+        self.nia = iix.plus(1);
         self.n_insns += 1;
 
-        let insn = &self.func.insns[iix as usize];
+        let insn = &self.func.insns[iix];
         match insn {
             Insn::Imm { dst, imm } =>
                 self.setReg(*dst, *imm),
@@ -1159,13 +1309,11 @@ impl<'a> IState<'a> {
                 self.n_reloads += 1;
             },
             Insn::Goto { target } =>
-                self.nia = self.func.blocks[target.getBlockIx().get_usize()]
-                               .start,
+                self.nia = self.func.blocks[target.getBlockIx()].start,
             Insn::GotoCTF { cond, targetT, targetF } => {
                 let target =
                        if self.getReg(*cond) != 0 { targetT } else { targetF };
-                self.nia = self.func.blocks[target.getBlockIx().get_usize()]
-                               .start;
+                self.nia = self.func.blocks[target.getBlockIx()].start;
             },
             Insn::PrintS { str } =>
                 print!("{}", str),
@@ -1322,7 +1470,7 @@ impl<T: Eq + Ord + Hash + Copy + Show + Clone> Clone for Set<T> {
 
 
 struct SetIter<'a, T> {
-    set_iter: Iter<'a, T>
+    set_iter: std::collections::hash_set::Iter<'a, T>
 }
 impl<T> Set<T> {
     fn iter(&self) -> SetIter<T> {
@@ -1355,17 +1503,17 @@ type Map<K, V> = FxHashMap<K, V>;
 
 // CFGInfo contains CFG-related info computed from a Func.
 struct CFGInfo {
-    // All these vectors contain one element per Block in the Func.
+    // All these TVecs contain one element per Block in the Func.
 
     // Predecessor and successor maps.
-    pred_map: Vec::</*BlockIx, */Set<BlockIx>>,
-    succ_map: Vec::</*BlockIx, */Set<BlockIx>>,
+    pred_map: TVec::<BlockIx, Set<BlockIx>>,
+    succ_map: TVec::<BlockIx, Set<BlockIx>>,
 
     // This maps from a Block to the set of Blocks it is dominated by
-    dom_map:  Vec::</*BlockIx, */Set<BlockIx>>,
+    dom_map:  TVec::<BlockIx, Set<BlockIx>>,
 
     // This maps from a Block to the loop depth that it is at
-    depth_map: Vec::</*BlockIx, */u32>,
+    depth_map: TVec::<BlockIx, u32>,
 
     // Pre- and post-order sequences.  Iterating forwards through these
     // vectors enumerates the blocks in preorder and postorder respectively.
@@ -1384,10 +1532,9 @@ impl CFGInfo {
         // Func::finish() ensures that all blocks are non-empty, and that only
         // the last instruction is a control flow transfer.  Hence the
         // following won't miss any edges.
-        let mut succ_map = Vec::<Set<BlockIx>>::new();
+        let mut succ_map = TVec::<BlockIx, Set<BlockIx>>::new();
         for b in func.blocks.iter() {
-            let last_insn = &func.insns[ b.start.get_usize()
-                                         + b.len as usize - 1 ];
+            let last_insn = &func.insns[ b.start.plus(b.len).minus(1) ];
             let succs = last_insn.getTargets();
             let mut bixSet = Set::<BlockIx>::empty();
             for bix in succs.iter() {
@@ -1397,11 +1544,11 @@ impl CFGInfo {
         }
 
         // Now invert the mapping
-        let mut pred_map = Vec::<Set<BlockIx>>::new();
+        let mut pred_map = TVec::<BlockIx, Set<BlockIx>>::new();
         pred_map.resize(nBlocks, Set::empty());
-        for (src, dst_set) in (0..).zip(&succ_map) {
+        for (src, dst_set) in (0..).zip(succ_map.iter()) {
             for dst in dst_set.iter() {
-                pred_map[dst.get_usize()].insert(mkBlockIx(src));
+                pred_map[*dst].insert(mkBlockIx(src));
             }
         }
 
@@ -1427,10 +1574,9 @@ impl CFGInfo {
         // more than once.
         let mut back_edges = Set::<(BlockIx, BlockIx)>::empty(); // (m->n)
         // Iterate over all edges
-        for ixnoM in 0 .. nBlocks as u32 {
-            let bixM = mkBlockIx(ixnoM);
-            for bixN in succ_map[bixM.get_usize()].iter() {
-                if dom_map[bixM.get_usize()].contains(*bixN) {
+        for bixM in mkBlockIx(0) .dotdot( mkBlockIx(nBlocks) ) {
+            for bixN in succ_map[bixM].iter() {
+                if dom_map[bixM].contains(*bixN) {
                     //println!("QQQQ back edge {} -> {}",
                     //         bixM.show(), bixN.show());
                     back_edges.insert((bixM, *bixN));
@@ -1456,7 +1602,7 @@ impl CFGInfo {
                 // Without it the algorithm doesn't make any sense, though.
                 Stack.push(*bixM);
                 while let Some(bixP) = Stack.pop() {
-                    for bixQ in pred_map[bixP.get_usize()].iter() {
+                    for bixQ in pred_map[bixP].iter() {
                         if !Loop.contains(*bixQ) {
                             Loop.insert(*bixQ);
                             Stack.push(*bixQ);
@@ -1506,13 +1652,13 @@ impl CFGInfo {
 
         // Now that we have a depth for each loop, we can finally compute the
         // depth for each block.
-        let mut depth_map = Vec::<u32>::new();
+        let mut depth_map = TVec::<BlockIx, u32>::new();
         depth_map.resize(nBlocks, 0);
         for (loopBixs, depth) in natural_loops.iter().zip(loop_depths) {
             //println!("QQQQ4 {} {}", depth.show(), loopBixs.show());
             for loopBix in loopBixs.iter() {
-                if depth_map[loopBix.get_usize()] < depth {
-                    depth_map[loopBix.get_usize()] = depth;
+                if depth_map[*loopBix] < depth {
+                    depth_map[*loopBix] = depth;
                 }
             }
         }
@@ -1529,20 +1675,19 @@ impl CFGInfo {
         let mut pre_ord  = Vec::<BlockIx>::new();
         let mut post_ord = Vec::<BlockIx>::new();
 
-        let mut visited = Vec::<bool>::new();
+        let mut visited = TVec::<BlockIx, bool>::new();
         visited.resize(nBlocks, false);
 
         // FIXME: change this to use an explicit stack.
         fn dfs(pre_ord: &mut Vec::<BlockIx>, post_ord: &mut Vec::<BlockIx>,
-               visited: &mut Vec::<bool>,
-               succ_map: &Vec::</*BlockIx, */Set<BlockIx>>,
+               visited: &mut TVec::<BlockIx, bool>,
+               succ_map: &TVec::<BlockIx, Set<BlockIx>>,
                bix: BlockIx) {
-            let ix = bix.get_usize();
-            debug_assert!(!visited[ix]);
-            visited[ix] = true;
+            debug_assert!(!visited[bix]);
+            visited[bix] = true;
             pre_ord.push(bix);
-            for succ in succ_map[ix].iter() {
-                if !visited[succ.get_usize()] {
+            for succ in succ_map[bix].iter() {
+                if !visited[*succ] {
                     dfs(pre_ord, post_ord, visited, succ_map, *succ);
                 }
             }
@@ -1553,19 +1698,19 @@ impl CFGInfo {
             &succ_map, func.entry.getBlockIx());
 
         debug_assert!(pre_ord.len() == post_ord.len());
-        debug_assert!(pre_ord.len() <= nBlocks);
-        if pre_ord.len() < nBlocks {
+        debug_assert!(pre_ord.len() <= nBlocks as usize);
+        if pre_ord.len() < nBlocks as usize {
             // This can happen if the graph contains nodes unreachable from
             // the entry point.  In which case, deal with any leftovers.
-            for i in 0 .. nBlocks {
-                if !visited[i] {
+            for bix in mkBlockIx(0) .dotdot( mkBlockIx(nBlocks) ) {
+                if !visited[bix] {
                     dfs(&mut pre_ord, &mut post_ord, &mut visited,
-                        &succ_map, mkBlockIx(i as u32));
+                        &succ_map, bix);
                 }
             }
         }
-        debug_assert!(pre_ord.len() == nBlocks);
-        debug_assert!(post_ord.len() == nBlocks);
+        debug_assert!(pre_ord.len() == nBlocks as usize);
+        debug_assert!(post_ord.len() == nBlocks as usize);
         //
         // END compute preord/postord
 
@@ -1581,12 +1726,12 @@ impl CFGInfo {
 // dominate it. This algorithm is from Fig 7.14 of Muchnick 1997. The
 // algorithm is described as simple but not as performant as some others.
 #[inline(never)]
-fn calc_dominators(pred_map: &Vec::</*BlockIx, */Set<BlockIx>>,
+fn calc_dominators(pred_map: &TVec::<BlockIx, Set<BlockIx>>,
                    start: BlockIx)
-                   -> Vec::</*BlockIx, */Set<BlockIx>> {
+                   -> TVec::<BlockIx, Set<BlockIx>> {
     // FIXME: nice up the variable names (D, T, etc) a bit.
     let nBlocks = pred_map.len();
-    let mut dom_map = Vec::<Set<BlockIx>>::new();
+    let mut dom_map = TVec::<BlockIx, Set<BlockIx>>::new();
     {
         let r: BlockIx = start;
         let N: Set<BlockIx> =
@@ -1598,29 +1743,28 @@ fn calc_dominators(pred_map: &Vec::</*BlockIx, */Set<BlockIx>>,
         let mut p: BlockIx;
         let mut change = true;
         dom_map.resize(nBlocks, Set::<BlockIx>::empty());
-        dom_map[r.get_usize()] = Set::unit(r);
+        dom_map[r] = Set::unit(r);
         for ixnoN in 0 .. nBlocks as u32 {
             let bixN = mkBlockIx(ixnoN);
             if bixN != r {
-                dom_map[bixN.get_usize()] = N.clone();
+                dom_map[bixN] = N.clone();
             }
         }
         loop {
             change = false;
-            for ixnoN in 0 .. nBlocks as u32 {
-                let bixN = mkBlockIx(ixnoN);
+            for bixN in mkBlockIx(0) .dotdot( mkBlockIx(nBlocks) ) {
                 if bixN == r {
                     continue;
                 }
                 T = N.clone();
-                for bixP in pred_map[bixN.get_usize()].iter() {
-                    T.intersect(&dom_map[bixP.get_usize()]);
+                for bixP in pred_map[bixN].iter() {
+                    T.intersect(&dom_map[*bixP]);
                 }
                 D = T.clone();
                 D.insert(bixN);
-                if !D.equals(&dom_map[bixN.get_usize()]) {
+                if !D.equals(&dom_map[bixN]) {
                     change = true;
-                    dom_map[bixN.get_usize()] = D;
+                    dom_map[bixN] = D;
                 }
             }
             if !change {
@@ -1636,16 +1780,16 @@ fn calc_dominators(pred_map: &Vec::</*BlockIx, */Set<BlockIx>>,
 // Computation of live-in and live-out sets
 
 impl Func {
-    // Returned vectors contain one element per block
+    // Returned TVecs contain one element per block
     #[inline(never)]
-    fn calc_def_and_use(&self) -> (Vec::<Set<Reg>>, Vec::<Set<Reg>>) {
-        let mut def_sets = Vec::new();
-        let mut use_sets = Vec::new();
+    fn calc_def_and_use(&self) -> (TVec::<BlockIx, Set<Reg>>,
+                                   TVec::<BlockIx, Set<Reg>>) {
+        let mut def_sets = TVec::new();
+        let mut use_sets = TVec::new();
         for b in self.blocks.iter() {
             let mut def = Set::empty();
             let mut uce = Set::empty();
-            for iix in b.start.get_usize() .. b.start.get_usize()
-                                              + b.len as usize {
+            for iix in b.start .dotdot( b.start.plus(b.len) ) {
                 let insn = &self.insns[iix];
                 let (regs_d, regs_m, regs_u) = insn.getRegUsage();
                 // Add to |uce|, any registers for which the first event
@@ -1679,15 +1823,16 @@ impl Func {
     // Returned vectors contain one element per block
     #[inline(never)]
     fn calc_livein_and_liveout(&self,
-                               def_sets_per_block: &Vec::<Set<Reg>>,
-                               use_sets_per_block: &Vec::<Set<Reg>>,
+                               def_sets_per_block: &TVec::<BlockIx, Set<Reg>>,
+                               use_sets_per_block: &TVec::<BlockIx, Set<Reg>>,
                                cfg_info: &CFGInfo
-                              ) -> (Vec::<Set<Reg>>, Vec::<Set<Reg>>) {
+                              ) -> (TVec::<BlockIx, Set<Reg>>,
+                                    TVec::<BlockIx, Set<Reg>>) {
         let nBlocks = self.blocks.len();
         let empty = Set::<Reg>::empty();
 
         let mut nEvals = 0;
-        let mut liveouts = Vec::<Set::<Reg>>::new();
+        let mut liveouts = TVec::<BlockIx, Set::<Reg>>::new();
         liveouts.resize(nBlocks, empty.clone());
 
         // Initialise the work queue so as to do a reverse preorder traversal
@@ -1695,28 +1840,26 @@ impl Func {
         let mut workQ = Queue::<BlockIx>::new();
         for i in 0 .. nBlocks {
             // bixI travels in "reverse preorder"
-            let bixI = cfg_info.pre_ord[nBlocks - 1 - i];
+            let bixI = cfg_info.pre_ord[(nBlocks - 1 - i) as usize];
             workQ.push_back(bixI);
         }
 
         while let Some(bixI) = workQ.pop_front() {
             // Compute a new value for liveouts[bixI]
-            let ixI = bixI.get_usize();
             let mut set = Set::<Reg>::empty();
-            for bixJ in cfg_info.succ_map[ixI].iter() {
-                let ixJ = bixJ.get_usize();
-                let mut liveinJ = liveouts[ixJ].clone();
-                liveinJ.remove(&def_sets_per_block[ixJ]);
-                liveinJ.union(&use_sets_per_block[ixJ]);
+            for bixJ in cfg_info.succ_map[bixI].iter() {
+                let mut liveinJ = liveouts[*bixJ].clone();
+                liveinJ.remove(&def_sets_per_block[*bixJ]);
+                liveinJ.union(&use_sets_per_block[*bixJ]);
                 set.union(&liveinJ);
             }
             nEvals += 1;
 
-            if !set.equals(&liveouts[ixI]) {
-                liveouts[ixI] = set;
+            if !set.equals(&liveouts[bixI]) {
+                liveouts[bixI] = set;
                 // Add |bixI|'s predecessors to the work queue, since their
                 // liveout values might be affected.
-                for bixJ in cfg_info.pred_map[ixI].iter() {
+                for bixJ in cfg_info.pred_map[bixI].iter() {
                     workQ.push_back(*bixJ);
                 }
             }
@@ -1724,21 +1867,21 @@ impl Func {
 
         // The liveout values are done, but we need to compute the liveins
         // too.
-        let mut liveins = Vec::<Set::<Reg>>::new();
+        let mut liveins = TVec::<BlockIx, Set::<Reg>>::new();
         liveins.resize(nBlocks, empty.clone());
-        for ixI in 0 .. nBlocks {
-            let mut liveinI = liveouts[ixI].clone();
-            liveinI.remove(&def_sets_per_block[ixI]);
-            liveinI.union(&use_sets_per_block[ixI]);
-            liveins[ixI] = liveinI;
+        for bixI in mkBlockIx(0) .dotdot( mkBlockIx(nBlocks) ) {
+            let mut liveinI = liveouts[bixI].clone();
+            liveinI.remove(&def_sets_per_block[bixI]);
+            liveinI.union(&use_sets_per_block[bixI]);
+            liveins[bixI] = liveinI;
         }
 
         if false {
             let mut sum_card_LI = 0;
             let mut sum_card_LO = 0;
-            for i in 0 .. nBlocks {
-                sum_card_LI += liveins[i].card();
-                sum_card_LO += liveouts[i].card();
+            for bix in mkBlockIx(0) .dotdot( mkBlockIx(nBlocks) ) {
+                sum_card_LI += liveins[bix].card();
+                sum_card_LO += liveouts[bix].card();
             }
             println!("QQQQ calc_LI/LO: nEvals {}, tot LI {}, tot LO {}",
                      nEvals, sum_card_LI, sum_card_LO);
@@ -1870,23 +2013,6 @@ impl Show for FragKind {
 }
 
 
-// Indices into vectors of Frags (see below).
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-enum FragIx {
-    FragIx(u32)
-}
-fn mkFragIx(n: u32) -> FragIx { FragIx::FragIx(n) }
-impl FragIx {
-    fn get(self) -> u32 { match self { FragIx::FragIx(n) => n } }
-    fn get_usize(self) -> usize { self.get() as usize }
-}
-impl Show for FragIx {
-    fn show(&self) -> String {
-        "f".to_string() + &self.get().to_string()
-    }
-}
-
-
 // A Live Range Fragment (Frag) describes a consecutive sequence of one or
 // more instructions, in which a Reg is "live".  The sequence must exist
 // entirely inside only one basic block.
@@ -1936,9 +2062,9 @@ impl Show for Frag {
             + &self.first.show() + &"-" + &self.last.show()
     }
 }
-fn mkFrag(blocks: &Vec::<Block>, bix: BlockIx,
+fn mkFrag(blocks: &Vec_Block, bix: BlockIx,
           first: InsnPoint, last: InsnPoint, count: u16) -> Frag {
-    let block = &blocks[bix.get_usize()];
+    let block = &blocks[bix];
     debug_assert!(block.len >= 1);
     debug_assert!(block.containsInsnIx(first.iix));
     debug_assert!(block.containsInsnIx(last.iix));
@@ -1993,7 +2119,7 @@ impl Func {
     fn get_Frags_for_block(&self, bix: BlockIx,
                            livein: &Set::<Reg>, liveout: &Set::<Reg>,
                            outMap: &mut Map::<Reg, Vec::<FragIx>>,
-                           outFEnv: &mut Vec::<Frag>)
+                           outFEnv: &mut Vec_Frag)
     {
         //println!("QQQQ --- block {}", bix.show());
         // BEGIN ProtoFrag
@@ -2043,7 +2169,7 @@ impl Func {
 
         // Some handy constants.
         let blocks = &self.blocks;
-        let block  = &blocks[bix.get_usize()];
+        let block  = &blocks[bix];
         debug_assert!(block.len >= 1);
         let first_iix_in_block = block.start.get();
         let last_iix_in_block  = first_iix_in_block + block.len - 1;
@@ -2067,9 +2193,8 @@ impl Func {
 
         // Now visit each instruction in turn, examining first the registers
         // it reads, then those it modifies, and finally those it writes.
-        for ix in block.start.get() .. block.start.get() + block.len {
-            let iix = mkInsnIx(ix);
-            let insn = &self.insns[ix as usize];
+        for iix in block.start .dotdot( block.start.plus(block.len) ) {
+            let insn = &self.insns[iix];
 
             //fn id<'a>(x: Vec::<(&'a Reg, &'a ProtoFrag)>)
             //          -> Vec::<(&'a Reg, &'a ProtoFrag)> { x }
@@ -2219,16 +2344,16 @@ impl Func {
 
     #[inline(never)]
     fn get_Frags(&self,
-                 livein_sets_per_block:  &Vec::<Set<Reg>>,
-                 liveout_sets_per_block: &Vec::<Set<Reg>>
-                ) -> (Map::<Reg, Vec<FragIx>>, Vec::<Frag>)
+                 livein_sets_per_block:  &TVec::<BlockIx, Set<Reg>>,
+                 liveout_sets_per_block: &TVec::<BlockIx, Set<Reg>>
+                ) -> (Map::<Reg, Vec<FragIx>>, Vec_Frag)
     {
         debug_assert!(livein_sets_per_block.len()  == self.blocks.len());
         debug_assert!(liveout_sets_per_block.len() == self.blocks.len());
         let mut resMap  = Map::<Reg, Vec<FragIx>>::default();
-        let mut resFEnv = Vec::<Frag>::new();
-        for bix in 0 .. self.blocks.len() {
-            self.get_Frags_for_block(mkBlockIx(bix.try_into().unwrap()),
+        let mut resFEnv = Vec_Frag::new();
+        for bix in mkBlockIx(0) .dotdot( mkBlockIx(self.blocks.len()) ) {
+            self.get_Frags_for_block(bix,
                                      &livein_sets_per_block[bix],
                                      &liveout_sets_per_block[bix],
                                      &mut resMap, &mut resFEnv);
@@ -2254,19 +2379,19 @@ impl SortedFragIxs {
         self.fragIxs.show()
     }
 
-    fn show_with_fenv(&self, fenv: &Vec::<Frag>) -> String {
-        let mut frags = Vec::<Frag>::new();
+    fn show_with_fenv(&self, fenv: &Vec_Frag) -> String {
+        let mut frags = Vec_Frag::new();
         for fix in &self.fragIxs {
-            frags.push(fenv[fix.get_usize()]);
+            frags.push(fenv[*fix]);
         }
         "SFIxs_".to_string() + &frags.show()
     }
 
-    fn check(&self, fenv: &Vec::<Frag>) {
+    fn check(&self, fenv: &Vec_Frag) {
         let mut ok = true;
         for i in 1 .. self.fragIxs.len() {
-            let prev_frag = &fenv[self.fragIxs[i-1].get_usize()];
-            let this_frag = &fenv[self.fragIxs[i-0].get_usize()];
+            let prev_frag = &fenv[self.fragIxs[i-1]];
+            let this_frag = &fenv[self.fragIxs[i-0]];
             if cmpFrags(prev_frag, this_frag) != FCR::LT {
                 ok = false;
                 break;
@@ -2277,13 +2402,12 @@ impl SortedFragIxs {
         }
     }
 
-    fn new(source: &Vec::<FragIx>, fenv: &Vec::<Frag>) -> Self {
+    fn new(source: &Vec::<FragIx>, fenv: &Vec_Frag) -> Self {
         let mut res = SortedFragIxs { fragIxs: source.clone() };
         // check the source is ordered, and clone (or sort it)
         res.fragIxs.sort_unstable_by(
             |fix_a, fix_b| {
-                match cmpFrags(&fenv[fix_a.get_usize()],
-                               &fenv[fix_b.get_usize()]) {
+                match cmpFrags(&fenv[*fix_a], &fenv[*fix_b]) {
                     FCR::LT => Ordering::Less,
                     FCR::GT => Ordering::Greater,
                     FCR::EQ | FCR::UN =>
@@ -2294,7 +2418,7 @@ impl SortedFragIxs {
         res
     }
 
-    fn unit(fix: FragIx, fenv: &Vec::<Frag>) -> Self {
+    fn unit(fix: FragIx, fenv: &Vec_Frag) -> Self {
         let mut res = SortedFragIxs { fragIxs: Vec::<FragIx>::new() };
         res.fragIxs.push(fix);
         res.check(fenv);
@@ -2343,7 +2467,7 @@ impl SortedFragIxs {
 //   be FragKind::LiveOut, at least one must be FragKind::LiveIn, and there
 //   may be zero or more FragKind::Thrus.
 
-
+#[derive(Clone)]
 struct RLR {
     rreg:   RReg,
     sfrags: SortedFragIxs
@@ -2359,6 +2483,7 @@ impl Show for RLR {
 // VLRs are live ranges for virtual regs (VRegs).  These do carry metrics info
 // and also the identity of the RReg to which they eventually got allocated.
 
+#[derive(Clone)]
 struct VLR {
     vreg:   VReg,
     rreg:   Option<RReg>,
@@ -2389,51 +2514,17 @@ impl Show for VLR {
 }
 
 
-// Indices into vectors of RLRs.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RLRIx {
-    RLRIx(u32)
-}
-fn mkRLRIx(n: u32) -> RLRIx { RLRIx::RLRIx(n) }
-impl RLRIx {
-    fn get(self) -> u32 { match self { RLRIx::RLRIx(n) => n } }
-    fn get_usize(self) -> usize { self.get() as usize }
-}
-impl Show for RLRIx {
-    fn show(&self) -> String {
-        "rlr".to_string() + &self.get().to_string()
-    }
-}
-
-
-// Indices into vectors of VLRs.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum VLRIx {
-    VLRIx(u32)
-}
-fn mkVLRIx(n: u32) -> VLRIx { VLRIx::VLRIx(n) }
-impl VLRIx {
-    fn get(self) -> u32 { match self { VLRIx::VLRIx(n) => n } }
-    fn get_usize(self) -> usize { self.get() as usize }
-}
-impl Show for VLRIx {
-    fn show(&self) -> String {
-        "vlr".to_string() + &self.get().to_string()
-    }
-}
-
-
 //=============================================================================
 // Merging of Frags, producing the final LRs, minus metrics
 
 #[inline(never)]
 fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
-               frag_env: &Vec::</*FragIx, */Frag>,
+               frag_env: &Vec_Frag,
                cfg_info: &CFGInfo)
-               -> (Vec::<RLR>, Vec::<VLR>)
+               -> (Vec_RLR, Vec_VLR)
 {
-    let mut resR = Vec::<RLR>::new();
-    let mut resV = Vec::<VLR>::new();
+    let mut resR = Vec_RLR::new();
+    let mut resV = Vec_VLR::new();
     for (reg, all_fragIxs_for_reg) in fragIx_vecs_per_reg.iter() {
 
         // BEGIN merge |all_fragIxs_for_reg| entries as much as possible.
@@ -2459,9 +2550,9 @@ fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
         for fix in all_fragIxs_for_reg {
             let mut live_in_blocks = Set::<BlockIx>::empty();
             let mut succs_of_live_out_blocks = Set::<BlockIx>::empty();
-            let frag = &frag_env[fix.get_usize()];
+            let frag = &frag_env[*fix];
             let frag_bix = frag.bix;
-            let frag_succ_bixes = &cfg_info.succ_map[frag_bix.get_usize()];
+            let frag_succ_bixes = &cfg_info.succ_map[frag_bix];
             match frag.kind {
                 FragKind::Local => {
                 },
@@ -2565,17 +2656,17 @@ fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
 //
 // all the while being very careful to avoid overflow.
 #[inline(never)]
-fn set_VLR_metrics(vlrs: &mut Vec::<VLR>,
-                   fenv: &Vec::<Frag>, blocks: &Vec::<Block>)
+fn set_VLR_metrics(vlrs: &mut Vec_VLR,
+                   fenv: &Vec_Frag, blocks: &Vec_Block)
 {
-    for vlr in vlrs {
+    for vlr in vlrs.iter_mut() {
         debug_assert!(vlr.size == 0 && vlr.cost == Some(0.0));
         debug_assert!(vlr.rreg.is_none());
         let mut tot_size: u32 = 0;
         let mut tot_cost: f32 = 0.0;
 
         for fix in &vlr.sfrags.fragIxs {
-            let frag = &fenv[fix.get_usize()];
+            let frag = &fenv[*fix];
 
             // Add on the size of this fragment, but make sure we can't
             // overflow a u32 no matter how many fragments there are.
@@ -2588,8 +2679,7 @@ fn set_VLR_metrics(vlrs: &mut Vec::<VLR>,
             if tot_size > 0xFFFF { tot_size = 0xFFFF; }
 
             // tot_cost is a float, so no such paranoia there.
-            tot_cost += frag.count as f32
-                        * blocks[frag.bix.get_usize()].eef as f32;
+            tot_cost += frag.count as f32 * blocks[frag.bix].eef as f32;
         }
 
         debug_assert!(tot_cost >= 0.0);
@@ -2637,7 +2727,7 @@ impl SortedFragIxs {
         true
     }
 
-    fn add(&mut self, to_add: &Self, fenv: &Vec::<Frag>) {
+    fn add(&mut self, to_add: &Self, fenv: &Vec_Frag) {
         self.check(fenv);
         to_add.check(fenv);
         let sfixs_x = &self;
@@ -2646,8 +2736,8 @@ impl SortedFragIxs {
         let mut iy = 0;
         let mut res = Vec::<FragIx>::new();
         while ix < sfixs_x.fragIxs.len() && iy < sfixs_y.fragIxs.len() {
-            let fx = fenv[ sfixs_x.fragIxs[ix].get_usize() ];
-            let fy = fenv[ sfixs_y.fragIxs[iy].get_usize() ];
+            let fx = fenv[ sfixs_x.fragIxs[ix] ];
+            let fy = fenv[ sfixs_y.fragIxs[iy] ];
             match cmpFrags(&fx, &fy) {
                 FCR::LT => { res.push(sfixs_x.fragIxs[ix]); ix += 1; },
                 FCR::GT => { res.push(sfixs_y.fragIxs[iy]); iy += 1; },
@@ -2672,7 +2762,7 @@ impl SortedFragIxs {
         self.check(fenv);
     }
 
-    fn can_add(&self, to_add: &Self, fenv: &Vec::<Frag>) -> bool {
+    fn can_add(&self, to_add: &Self, fenv: &Vec_Frag) -> bool {
         // This is merely a partial evaluation of add() which returns |false|
         // exactly in the cases where add() would have panic'd.
         self.check(fenv);
@@ -2682,8 +2772,8 @@ impl SortedFragIxs {
         let mut ix = 0;
         let mut iy = 0;
         while ix < sfixs_x.fragIxs.len() && iy < sfixs_y.fragIxs.len() {
-            let fx = fenv[ sfixs_x.fragIxs[ix].get_usize() ];
-            let fy = fenv[ sfixs_y.fragIxs[iy].get_usize() ];
+            let fx = fenv[ sfixs_x.fragIxs[ix] ];
+            let fy = fenv[ sfixs_y.fragIxs[iy] ];
             match cmpFrags(&fx, &fy) {
                 FCR::LT => { ix += 1; },
                 FCR::GT => { iy += 1; },
@@ -2697,7 +2787,7 @@ impl SortedFragIxs {
         true
     }
 
-    fn del(&mut self, to_del: &Self, fenv: &Vec::<Frag>) {
+    fn del(&mut self, to_del: &Self, fenv: &Vec_Frag) {
         self.check(fenv);
         to_del.check(fenv);
         let sfixs_x = &self;
@@ -2706,8 +2796,8 @@ impl SortedFragIxs {
         let mut iy = 0;
         let mut res = Vec::<FragIx>::new();
         while ix < sfixs_x.fragIxs.len() && iy < sfixs_y.fragIxs.len() {
-            let fx = fenv[ sfixs_x.fragIxs[ix].get_usize() ];
-            let fy = fenv[ sfixs_y.fragIxs[iy].get_usize() ];
+            let fx = fenv[ sfixs_x.fragIxs[ix] ];
+            let fy = fenv[ sfixs_y.fragIxs[iy] ];
             match cmpFrags(&fx, &fy) {
                 FCR::LT => { res.push(sfixs_x.fragIxs[ix]); ix += 1; },
                 FCR::EQ => { ix += 1; iy += 1; }
@@ -2728,7 +2818,7 @@ impl SortedFragIxs {
     }
 
     fn can_add_if_we_first_del(&self, to_del: &Self, to_add: &Self,
-                               fenv: &Vec::<Frag>) -> bool {
+                               fenv: &Vec_Frag) -> bool {
         // For now, just do this the stupid way.  It would be possible to do
         // it without any allocation, but that sounds complex.
         let mut after_del = self.clone();
@@ -2749,11 +2839,11 @@ struct VLRPrioQ {
     unallocated: Vec::<VLRIx>
 }
 impl VLRPrioQ {
-    fn new(vlr_env: &Vec::<VLR>) -> Self {
+    fn new(vlr_env: &Vec_VLR) -> Self {
         let mut res = Self { unallocated: Vec::new() };
-        for ix in 0 .. vlr_env.len() {
-            assert!(vlr_env[ix].size > 0);
-            res.unallocated.push(mkVLRIx(ix as u32));
+        for vlrix in mkVLRIx(0) .dotdot( mkVLRIx(vlr_env.len()) ) {
+            assert!(vlr_env[vlrix].size > 0);
+            res.unallocated.push(vlrix);
         }
         res
     }
@@ -2773,7 +2863,7 @@ impl VLRPrioQ {
     // largest |size| value.  Remove the ref from |unallocated| and return the
     // LRIx for said entry.
     #[inline(never)]
-    fn get_longest_VLR(&mut self, vlr_env: &Vec::<VLR>) -> Option<VLRIx> {
+    fn get_longest_VLR(&mut self, vlr_env: &Vec_VLR) -> Option<VLRIx> {
         if self.unallocated.len() == 0 {
             return None;
         }
@@ -2781,7 +2871,7 @@ impl VLRPrioQ {
         let mut largestSize = 0; /*INVALID*/
         for i in 0 .. self.unallocated.len() {
             let cand_vlrix = self.unallocated[i];
-            let cand_vlr = &vlr_env[cand_vlrix.get_usize()];
+            let cand_vlr = &vlr_env[cand_vlrix];
             if cand_vlr.size > largestSize {
                 largestSize = cand_vlr.size;
                 largestIx   = i;
@@ -2801,14 +2891,14 @@ impl VLRPrioQ {
     }
 
     #[inline(never)]
-    fn show_with_envs(&self, vlr_env: &Vec::<VLR>) -> String {
+    fn show_with_envs(&self, vlr_env: &Vec_VLR) -> String {
         let mut res = "".to_string();
         let mut first = true;
         for vlrix in self.unallocated.iter() {
             if !first { res += &"\n".to_string(); }
             first = false;
             res += &"TODO  ".to_string();
-            res += &vlr_env[vlrix.get_usize()].show();
+            res += &vlr_env[*vlrix].show();
         }
         res
     }
@@ -2832,7 +2922,7 @@ struct PerRReg {
     vlrixs_assigned: Vec::<VLRIx>
 }
 impl PerRReg {
-    fn new(fenv: &Vec::<Frag>) -> Self {
+    fn new(fenv: &Vec_Frag) -> Self {
         Self {
             frags_in_use: SortedFragIxs::new(&vec![], fenv),
             vlrixs_assigned: Vec::<VLRIx>::new()
@@ -2840,7 +2930,7 @@ impl PerRReg {
     }
 
     #[inline(never)]
-    fn add_RLR(&mut self, to_add: &RLR, fenv: &Vec::<Frag>) {
+    fn add_RLR(&mut self, to_add: &RLR, fenv: &Vec_Frag) {
         // Commit this register to |to_add|, irrevocably.  Don't add it to
         // |vlrixs_assigned| since we will never want to later evict the
         // assignment.
@@ -2849,21 +2939,21 @@ impl PerRReg {
 
     #[inline(never)]
     fn can_add_VLR_without_eviction(&self, to_add: &VLR,
-                                    fenv: &Vec::<Frag>) -> bool {
+                                    fenv: &Vec_Frag) -> bool {
         self.frags_in_use.can_add(&to_add.sfrags, fenv)
     }
 
     #[inline(never)]
     fn add_VLR(&mut self, to_add_vlrix: VLRIx,
-               vlr_env: &Vec::<VLR>, fenv: &Vec::<Frag>) {
-        let vlr = &vlr_env[to_add_vlrix.get_usize()];
+               vlr_env: &Vec_VLR, fenv: &Vec_Frag) {
+        let vlr = &vlr_env[to_add_vlrix];
         self.frags_in_use.add(&vlr.sfrags, fenv);
         self.vlrixs_assigned.push(to_add_vlrix);
     }
 
     #[inline(never)]
     fn del_VLR(&mut self, to_del_vlrix: VLRIx,
-               vlr_env: &Vec::<VLR>, fenv: &Vec::<Frag>) {
+               vlr_env: &Vec_VLR, fenv: &Vec_Frag) {
         debug_assert!(self.vlrixs_assigned.len() > 0);
         // Remove it from |vlrixs_assigned|
         let mut found = None;
@@ -2881,14 +2971,14 @@ impl PerRReg {
             panic!("PerRReg: del_VLR on VLR that isn't in vlrixs_assigned");
         }
         // Remove it from |frags_in_use|
-        let vlr = &vlr_env[to_del_vlrix.get_usize()];
+        let vlr = &vlr_env[to_del_vlrix];
         self.frags_in_use.del(&vlr.sfrags, fenv);
     }
 
     #[inline(never)]
     fn find_best_evict_VLR(&self, would_like_to_add: &VLR,
-                           vlr_env: &Vec::<VLR>,
-                           frag_env: &Vec::<Frag>)
+                           vlr_env: &Vec_VLR,
+                           frag_env: &Vec_Frag)
                            -> Option<(VLRIx, f32)> {
         // |would_like_to_add| presumably doesn't fit here.  See if eviction
         // of any of the existing LRs would make it allocable, and if so
@@ -2903,7 +2993,7 @@ impl PerRReg {
         //   (otherwise all this is pointless)
         let mut best_so_far: Option<(VLRIx, f32)> = None;
         for cand_vlrix in &self.vlrixs_assigned {
-            let cand_vlr = &vlr_env[cand_vlrix.get_usize()];
+            let cand_vlr = &vlr_env[*cand_vlrix];
             if cand_vlr.cost.is_none() {
                 continue;
             }
@@ -2936,11 +3026,11 @@ impl PerRReg {
     }
 
     #[inline(never)]
-    fn show1_with_envs(&self, fenv: &Vec::<Frag>) -> String {
+    fn show1_with_envs(&self, fenv: &Vec_Frag) -> String {
         "in_use:   ".to_string() + &self.frags_in_use.show_with_fenv(&fenv)
     }
     #[inline(never)]
-    fn show2_with_envs(&self, fenv: &Vec::<Frag>) -> String {
+    fn show2_with_envs(&self, fenv: &Vec_Frag) -> String {
         "assigned: ".to_string() + &self.vlrixs_assigned.show()
     }
 }
@@ -3003,7 +3093,7 @@ fn print_RA_state(who: &str,
                   prioQ: &VLRPrioQ, perRReg: &Vec::<PerRReg>,
                   editList: &Vec::<EditListItem>,
                   // The context (environment)
-                  vlr_env: &Vec::<VLR>, frag_env: &Vec::<Frag>)
+                  vlr_env: &Vec_VLR, frag_env: &Vec_Frag)
 {
     println!("<<<<====---- RA state at '{}' ----====", who);
     for ix in 0 .. perRReg.len() {
@@ -3046,7 +3136,7 @@ fn print_RA_state(who: &str,
 /*
 fn show_commit_tab(commit_tab: &Vec::<SortedFragIxs>,
                    who: &str,
-                   context: &Vec::<Frag>) -> String {
+                   context: &Vec_Frag) -> String {
     let mut res = "Commit Table at '".to_string()
                   + &who.to_string() + &"'\n".to_string();
     let mut rregNo = 0;
@@ -3075,7 +3165,8 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
     let mut n = 0;
     println!("");
-    for (def, uce) in def_sets_per_block.iter().zip(&use_sets_per_block) {
+    for (def, uce) in def_sets_per_block.iter()
+                                        .zip(use_sets_per_block.iter()) {
         println!("{:<3}   def {:<16}  use {}",
                  mkBlockIx(n).show(), def.show(), uce.show());
         n += 1;
@@ -3085,7 +3176,8 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
     n = 0;
     println!("");
-    for (preds, succs) in cfg_info.pred_map.iter().zip(&cfg_info.succ_map) {
+    for (preds, succs) in cfg_info.pred_map.iter()
+                                           .zip(cfg_info.succ_map.iter()) {
         println!("{:<3}   preds {:<16}  succs {}",
                  mkBlockIx(n).show(), preds.show(), succs.show());
         n += 1;
@@ -3093,21 +3185,22 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
     n = 0;
     println!("");
-    for (depth, dom_by) in cfg_info.depth_map.iter().zip(&cfg_info.dom_map) {
+    for (depth, dom_by) in cfg_info.depth_map.iter()
+                                             .zip(cfg_info.dom_map.iter()) {
         println!("{:<3}   depth {}   dom_by {:<16}",
                  mkBlockIx(n).show(), depth, dom_by.show());
         n += 1;
     }
 
     // Annotate each Block with its estimated execution count
-    for bixNo in 0 .. func.blocks.len() {
+    for bix in mkBlockIx(0) .dotdot( mkBlockIx(func.blocks.len()) ) {
         let mut eef = 1;
-        let mut depth = cfg_info.depth_map[bixNo];
+        let mut depth = cfg_info.depth_map[bix];
         if depth > 3 { depth = 3; }
         for i in 0 .. depth {
             eef *= 10;
         }
-        func.blocks[bixNo].eef = eef;
+        func.blocks[bix].eef = eef;
     }
 
     let (livein_sets_per_block, liveout_sets_per_block) =
@@ -3118,14 +3211,15 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
     n = 0;
     println!("");
-    for (livein, liveout) in livein_sets_per_block.iter()
-                                                  .zip(&liveout_sets_per_block) {
+    for (livein, liveout) in livein_sets_per_block
+                             .iter()
+                             .zip(liveout_sets_per_block.iter()) {
         println!("{:<3}   livein {:<16}  liveout {:<16}",
                  mkBlockIx(n).show(), livein.show(), liveout.show());
         n += 1;
     }
 
-    if !livein_sets_per_block[func.entry.getBlockIx().get_usize()].is_empty() {
+    if !livein_sets_per_block[func.entry.getBlockIx()].is_empty() {
         return Err("entry block has live-in values".to_string());
     }
 
@@ -3134,7 +3228,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
     println!("");
     n = 0;
-    for frag in &frag_env {
+    for frag in frag_env.iter() {
         println!("{:<3}   {}", mkFragIx(n).show(), frag.show());
         n += 1;
     }
@@ -3150,15 +3244,15 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
     println!("");
     n = 0;
-    for lr in &rlr_env {
-        println!("{:<4}   {}", mkRLRIx(n).show(), lr.show());
+    for rlr in rlr_env.iter() {
+        println!("{:<4}   {}", mkRLRIx(n).show(), rlr.show());
         n += 1;
     }
 
     println!("");
     n = 0;
-    for lr in &vlr_env {
-        println!("{:<4}   {}", mkVLRIx(n).show(), lr.show());
+    for vlr in vlr_env.iter() {
+        println!("{:<4}   {}", mkVLRIx(n).show(), vlr.show());
         n += 1;
     }
 
@@ -3176,7 +3270,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         // Doing this instead of simply .resize avoids needing Clone for PerRReg
         perRReg.push(PerRReg::new(&frag_env));
     }
-    for rlr in &rlr_env {
+    for rlr in rlr_env.iter() {
         let rregNo = rlr.rreg.get_usize();
         // Ignore RLRs for RRegs outside its allocation domain.  As far as the
         // allocator is concerned, such RRegs simply don't exist.
@@ -3207,7 +3301,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
     println!("");
     println!("-- MAIN ALLOCATION LOOP:");
     while let Some(curr_vlrix) = prioQ.get_longest_VLR(&vlr_env) {
-        let curr_vlr = &vlr_env[curr_vlrix.get_usize()];
+        let curr_vlr = &vlr_env[curr_vlrix];
 
         println!("-- considering        {}:  {}",
                  curr_vlrix.show(), curr_vlr.show());
@@ -3230,7 +3324,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
             // Directly modify bits of vlr_env.  This means we have to abandon
             // the immutable borrow for curr_vlr, but that's OK -- we won't
             // need it again (in this loop iteration).
-            vlr_env[curr_vlrix.get_usize()].rreg = Some(rreg);
+            vlr_env[curr_vlrix].rreg = Some(rreg);
             continue;
         }
 
@@ -3274,11 +3368,11 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
             // Evict ..
             println!("--   evict            {}:  {}",
                      vlrix_to_evict.show(),
-                     &vlr_env[vlrix_to_evict.get_usize()].show());
+                     &vlr_env[vlrix_to_evict].show());
             debug_assert!(vlrix_to_evict != curr_vlrix);
             perRReg[rregNo].del_VLR(vlrix_to_evict, &vlr_env, &frag_env);
             prioQ.add_VLR(vlrix_to_evict);
-            debug_assert!(vlr_env[vlrix_to_evict.get_usize()].rreg.is_some());
+            debug_assert!(vlr_env[vlrix_to_evict].rreg.is_some());
             // .. and reassign.
             let rreg = mkRReg(rregNo as u32);
             println!("--   then alloc to    {}", rreg.show());
@@ -3287,8 +3381,8 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
             // Directly modify bits of vlr_env.  This means we have to abandon
             // the immutable borrow for curr_vlr, but that's OK -- we won't
             // need it again again (in this loop iteration).
-            vlr_env[curr_vlrix.get_usize()].rreg = Some(rreg);
-            vlr_env[vlrix_to_evict.get_usize()].rreg = None;
+            vlr_env[curr_vlrix].rreg = Some(rreg);
+            vlr_env[vlrix_to_evict].rreg = None;
             continue;
         }
 
@@ -3346,9 +3440,9 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         let curr_vlr_reg = Reg_V(curr_vlr_vreg);
 
         for fix in &curr_vlr.sfrags.fragIxs {
-            let frag: &Frag = &frag_env[fix.get_usize()];
-            for iixNo in frag.first.iix.get() .. frag.last.iix.get() + 1 {
-                let insn: &Insn = &func.insns[iixNo as usize];
+            let frag: &Frag = &frag_env[*fix];
+            for iix in frag.first.iix .dotdot( frag.last.iix.plus(1) ) {
+                let insn: &Insn = &func.insns[iix];
                 let (regs_d, regs_m, regs_u) = insn.getRegUsage();
                 // If this insn doesn't mention the vreg we're spilling for,
                 // move on.
@@ -3357,7 +3451,6 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
                    && !regs_u.contains(curr_vlr_reg) {
                     continue;
                 }
-                let iix = mkInsnIx(iixNo);
                 // USES: Do we need to create a reload-to-use bridge (VLR) ?
                 if regs_u.contains(curr_vlr_reg)
                    && frag.contains(&InsnPoint_U(iix)) {
@@ -3462,13 +3555,13 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         let rreg = mkRReg(i as u32);
         // .. look at all the VLRs assigned to it.  And for each such VLR ..
         for vlrix_assigned in &perRReg[i].vlrixs_assigned {
-            let vlr_assigned = &vlr_env[vlrix_assigned.get_usize()];
+            let vlr_assigned = &vlr_env[*vlrix_assigned];
             // All the Frags in |vlr_assigned| require |vlr_assigned.reg| to
             // be mapped to the real reg |i|
             let vreg = vlr_assigned.vreg;
             // .. collect up all its constituent Frags.
             for fix in &vlr_assigned.sfrags.fragIxs {
-                let frag = &frag_env[fix.get_usize()];
+                let frag = &frag_env[*fix];
                 fragMapsByStart.push((*fix, vreg, rreg));
                 fragMapsByEnd.push((*fix, vreg, rreg));
             }
@@ -3477,15 +3570,13 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
     fragMapsByStart.sort_unstable_by(
         |(fixNo1, _, _), (fixNo2, _, _)|
-        frag_env[fixNo1.get_usize()].first.iix
-            .partial_cmp(&frag_env[fixNo2.get_usize()].first.iix)
-            .unwrap());
+        frag_env[*fixNo1].first.iix.partial_cmp(&frag_env[*fixNo2].first.iix)
+                         .unwrap());
 
     fragMapsByEnd.sort_unstable_by(
         |(fixNo1, _, _), (fixNo2, _, _)|
-        frag_env[fixNo1.get_usize()].last.iix
-            .partial_cmp(&frag_env[fixNo2.get_usize()].last.iix)
-            .unwrap());
+        frag_env[*fixNo1].last.iix.partial_cmp(&frag_env[*fixNo2].last.iix)
+                         .unwrap());
 
     //println!("Firsts: {}", fragMapsByStart.show());
     //println!("Lasts:  {}", fragMapsByEnd.show());
@@ -3531,36 +3622,34 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         false
     }
 
-    for insnNo in 0u32 .. func.insns.len() as u32 {
+    for insnIx in mkInsnIx(0) .dotdot( mkInsnIx(func.insns.len()) ) {
         //println!("");
         //println!("QQQQ insn {}: {}",
-        //         insnNo, func.insns[insnNo as usize].show());
+        //         insnIx, func.insns[insnIx].show());
         //println!("QQQQ init map {}", showMap(&map));
-        // advance [cursorStarts, +numStarts) to the group for insnNo
+        // advance [cursorStarts, +numStarts) to the group for insnIx
         while cursorStarts < fragMapsByStart.len()
-              && frag_env[ fragMapsByStart[cursorStarts].0.get_usize() ]
-                 .first.iix.get() < insnNo {
+              && frag_env[ fragMapsByStart[cursorStarts].0 ]
+                 .first.iix < insnIx {
             cursorStarts += 1;
         }
         numStarts = 0;
         while cursorStarts + numStarts < fragMapsByStart.len()
-              && frag_env[ fragMapsByStart[cursorStarts + numStarts]
-                           .0.get_usize() ]
-                 .first.iix.get() == insnNo {
+              && frag_env[ fragMapsByStart[cursorStarts + numStarts].0 ]
+                 .first.iix == insnIx {
             numStarts += 1;
         }
 
-        // advance [cursorEnds, +numEnds) to the group for insnNo
+        // advance [cursorEnds, +numEnds) to the group for insnIx
         while cursorEnds < fragMapsByEnd.len()
-              && frag_env[ fragMapsByEnd[cursorEnds].0.get_usize() ]
-                 .last.iix.get() < insnNo {
+              && frag_env[ fragMapsByEnd[cursorEnds].0 ]
+                 .last.iix < insnIx {
             cursorEnds += 1;
         }
         numEnds = 0;
         while cursorEnds + numEnds < fragMapsByEnd.len()
-              && frag_env[ fragMapsByEnd[cursorEnds + numEnds]
-                           .0.get_usize() ]
-                 .last.iix.get() == insnNo {
+              && frag_env[ fragMapsByEnd[cursorEnds + numEnds].0 ]
+                 .last.iix == insnIx {
             numEnds += 1;
         }
 
@@ -3569,32 +3658,32 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         // order.  And fragMapsByEnd[cursorEnd, +numEnd) are the FragIxs for
         // fragments that end at this instruction.
 
-        //println!("insn no {}:", insnNo);
+        //println!("insn no {}:", insnIx);
         //for j in cursorStarts .. cursorStarts + numStarts {
         //    println!("   s: {} {}",
         //             (fragMapsByStart[j].1, fragMapsByStart[j].2).show(),
-        //             frag_env[ fragMapsByStart[j].0.get_usize() ]
+        //             frag_env[ fragMapsByStart[j].0 ]
         //             .show());
         //}
         //for j in cursorEnds .. cursorEnds + numEnds {
         //    println!("   e: {} {}",
         //             (fragMapsByEnd[j].1, fragMapsByEnd[j].2).show(),
-        //             frag_env[ fragMapsByEnd[j].0.get_usize() ]
+        //             frag_env[ fragMapsByEnd[j].0 ]
         //             .show());
         //}
 
         // Sanity check all frags.  In particular, reload and spill frags are
         // heavily constrained.  No functional effect.
         for j in cursorStarts .. cursorStarts + numStarts {
-            let frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
+            let frag = &frag_env[ fragMapsByStart[j].0 ];
             // "It really starts here, as claimed."
-            debug_assert!(frag.first.iix.get() == insnNo);
+            debug_assert!(frag.first.iix == insnIx);
             debug_assert!(is_sane(&frag));
         }
         for j in cursorEnds .. cursorEnds + numEnds {
-            let frag = &frag_env[ fragMapsByEnd[j].0.get_usize() ];
+            let frag = &frag_env[ fragMapsByEnd[j].0 ];
             // "It really ends here, as claimed."
-            debug_assert!(frag.last.iix.get() == insnNo);
+            debug_assert!(frag.last.iix == insnIx);
             debug_assert!(is_sane(frag));
         }
 
@@ -3619,7 +3708,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         //   add frags starting at I.r
         //   no frags should end at I.r (it's a reload insn)
         for j in cursorStarts .. cursorStarts + numStarts {
-            let frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
+            let frag = &frag_env[ fragMapsByStart[j].0 ];
             if frag.first.pt.isR() { //////// STARTS at I.r
                 map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
             }
@@ -3630,14 +3719,14 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         //   mapU := map
         //   remove frags ending at I.u
         for j in cursorStarts .. cursorStarts + numStarts {
-            let frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
+            let frag = &frag_env[ fragMapsByStart[j].0 ];
             if frag.first.pt.isU() { //////// STARTS at I.u
                 map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
             }
         }
         let mapU = map.clone();
         for j in cursorEnds .. cursorEnds + numEnds {
-            let frag = &frag_env[ fragMapsByEnd[j].0.get_usize() ];
+            let frag = &frag_env[ fragMapsByEnd[j].0 ];
             if frag.last.pt.isU() { //////// ENDS at I.U
                 map.remove(&fragMapsByEnd[j].1);
             }
@@ -3648,14 +3737,14 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         //   mapD := map
         //   remove frags ending at I.d
         for j in cursorStarts .. cursorStarts + numStarts {
-            let frag = &frag_env[ fragMapsByStart[j].0.get_usize() ];
+            let frag = &frag_env[ fragMapsByStart[j].0 ];
             if frag.first.pt.isD() { //////// STARTS at I.d
                 map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
             }
         }
         let mapD = map.clone();
         for j in cursorEnds .. cursorEnds + numEnds {
-            let frag = &frag_env[ fragMapsByEnd[j].0.get_usize() ];
+            let frag = &frag_env[ fragMapsByEnd[j].0 ];
             if frag.last.pt.isD() { //////// ENDS at I.d
                 map.remove(&fragMapsByEnd[j].1);
             }
@@ -3665,7 +3754,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         //   no frags should start at I.s (it's a spill insn)
         //   remove frags ending at I.s
         for j in cursorEnds .. cursorEnds + numEnds {
-            let frag = &frag_env[ fragMapsByEnd[j].0.get_usize() ];
+            let frag = &frag_env[ fragMapsByEnd[j].0 ];
             if frag.last.pt.isS() { //////// ENDS at I.s
                 map.remove(&fragMapsByEnd[j].1);
             }
@@ -3676,13 +3765,13 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
         // Finally, we have mapU/mapD set correctly for this instruction.
         // Apply it.
-        func.insns[insnNo as usize].mapRegs_D_U(&mapD, &mapU);
+        func.insns[insnIx].mapRegs_D_U(&mapD, &mapU);
 
         // Update cursorStarts and cursorEnds for the next iteration
         cursorStarts += numStarts;
         cursorEnds += numEnds;
 
-        if func.blocks.iter().any(|b| b.start.get() + b.len - 1 == insnNo) {
+        if func.blocks.iter().any(|b| b.start.plus(b.len).minus(1) == insnIx) {
             //println!("Block end");
             debug_assert!(map.is_empty());
         }
@@ -3697,10 +3786,10 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
     // insert them.
     let mut spillsAndReloads = Vec::<(InsnPoint, Insn)>::new();
     for eli in &editList {
-        let vlr = &vlr_env[eli.vlrix.get_usize()];
+        let vlr = &vlr_env[eli.vlrix];
         let vlr_sfrags = &vlr.sfrags;
         debug_assert!(vlr.sfrags.fragIxs.len() == 1);
-        let vlr_frag = frag_env[ vlr_sfrags.fragIxs[0].get_usize() ];
+        let vlr_frag = frag_env[ vlr_sfrags.fragIxs[0] ];
         let rreg = vlr.rreg.expect("Gen of spill/reload: reg not assigned?!");
         match eli.kind {
             BridgeKind::RtoU => {
@@ -3748,17 +3837,16 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         |(ip1, _), (ip2, _)| ip1.partial_cmp(ip2).unwrap());
 
     let mut curSnR = 0; // cursor in |spillsAndReloads|
-    let mut curB = 0; // cursor in Func::blocks
+    let mut curB = mkBlockIx(0); // cursor in Func::blocks
 
-    let mut newInsns = Vec::<Insn>::new();
-    let mut newBlocks = Vec::<Block>::new();
+    let mut newInsns = Vec_Insn::new();
+    let mut newBlocks = Vec_Block::new();
 
-    for iixNo in 0 .. func.insns.len() {
-        let iix = mkInsnIx(iixNo as u32);
+    for iix in mkInsnIx(0) .dotdot( mkInsnIx(func.insns.len()) ) {
 
-        // Is |iixNo| the first instruction in a block?  Meaning, are we
+        // Is |iix| the first instruction in a block?  Meaning, are we
         // starting a new block?
-        debug_assert!(curB < func.blocks.len());
+        debug_assert!(curB.get() < func.blocks.len());
         if func.blocks[curB].start == iix {
             let oldBlock = &func.blocks[curB];
             let newBlock = Block { name: oldBlock.name.clone(),
@@ -3775,7 +3863,7 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
             curSnR += 1;
         }
         // And the insn itself
-        newInsns.push(func.insns[iixNo as usize].clone());
+        newInsns.push(func.insns[iix].clone());
         // Copy spills for this insn
         while curSnR < spillsAndReloads.len()
               && spillsAndReloads[curSnR].0 == InsnPoint_S(iix) {
@@ -3783,21 +3871,20 @@ fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
             curSnR += 1;
         }
 
-        // Is |iixNo| the last instruction in a block?
-        if iixNo + 1 == func.blocks[curB].start.get_usize()
-                        + func.blocks[curB].len as usize {
-            debug_assert!(curB < func.blocks.len());
+        // Is |iix| the last instruction in a block?
+        if iix.plus(1) == func.blocks[curB].start.plus(func.blocks[curB].len) {
+            debug_assert!(curB.get() < func.blocks.len());
             debug_assert!(newBlocks.len() > 0);
-            debug_assert!(curB == newBlocks.len() - 1);
+            debug_assert!(curB.get() == newBlocks.len() - 1);
             newBlocks[curB].len = newInsns.len() as u32
                                   - newBlocks[curB].start.get();
-            curB += 1;
+            curB = curB.plus(1);
         }
     }
 
     debug_assert!(curSnR == spillsAndReloads.len());
-    debug_assert!(curB == func.blocks.len());
-    debug_assert!(curB == newBlocks.len());
+    debug_assert!(curB.get() == func.blocks.len());
+    debug_assert!(curB.get() == newBlocks.len());
 
     func.insns = newInsns;
     func.blocks = newBlocks;
@@ -3874,7 +3961,7 @@ fn main() {
 fn test_SortedFragIxs() {
 
     // Create a Frag and FragIx from two InsnPoints.
-    fn gen_fix(fenv: &mut Vec::<Frag>,
+    fn gen_fix(fenv: &mut Vec_Frag,
                first: InsnPoint, last: InsnPoint) -> FragIx {
         assert!(first <= last);
         let res = mkFragIx(fenv.len() as u32);
@@ -3884,8 +3971,8 @@ fn test_SortedFragIxs() {
         res
     }
 
-    fn getFrag(fenv: &Vec::<Frag>, fix: FragIx) -> &Frag {
-        &fenv[ fix.get_usize() ]
+    fn getFrag(fenv: &Vec_Frag, fix: FragIx) -> &Frag {
+        &fenv[fix]
     }
 
     let iix3  = mkInsnIx(3);
@@ -3915,7 +4002,7 @@ fn test_SortedFragIxs() {
     let fp_12u = InsnPoint_U(iix12);
     let fp_15u = InsnPoint_U(iix15);
 
-    let mut fenv = Vec::<Frag>::new();
+    let mut fenv = Vec_Frag::new();
 
     let fix_3u    = gen_fix(&mut fenv, fp_3u, fp_3u);
     let fix_3d    = gen_fix(&mut fenv, fp_3d, fp_3d);
@@ -3959,24 +4046,24 @@ fn test_SortedFragIxs() {
             == FCR::UN);
 
     // Create a SortedFragIxs from a bunch of Frag indices
-    fn genSMF(fenv: &Vec::<Frag>, frags: &Vec::<FragIx>) -> SortedFragIxs {
+    fn genSFI(fenv: &Vec_Frag, frags: &Vec::<FragIx>) -> SortedFragIxs {
         SortedFragIxs::new(&frags, fenv)
     }
 
     // Construction tests
     // These fail due to overlap
-    //let _ = genSMF(&fenv, &vec![fix_3u_3u, fix_3u_3u]);
-    //let _ = genSMF(&fenv, &vec![fix_3u_5u, fix_3d_5d]);
+    //let _ = genSFI(&fenv, &vec![fix_3u_3u, fix_3u_3u]);
+    //let _ = genSFI(&fenv, &vec![fix_3u_5u, fix_3d_5d]);
 
     // These fail due to not being in order
-    //let _ = genSMF(&fenv, &vec![fix_4u_4u, fix_3u_3u]);
+    //let _ = genSFI(&fenv, &vec![fix_4u_4u, fix_3u_3u]);
 
     // Simple non-overlap tests for add()
 
-    let smf_empty  = genSMF(&fenv, &vec![]);
-    let smf_6_7_10 = genSMF(&fenv, &vec![fix_6u_6d, fix_7u_7d, fix_10u]);
-    let smf_3_12   = genSMF(&fenv, &vec![fix_3u, fix_12u]);
-    let smf_3_6_7_10_12 = genSMF(&fenv, &vec![fix_3u, fix_6u_6d, fix_7u_7d,
+    let smf_empty  = genSFI(&fenv, &vec![]);
+    let smf_6_7_10 = genSFI(&fenv, &vec![fix_6u_6d, fix_7u_7d, fix_10u]);
+    let smf_3_12   = genSFI(&fenv, &vec![fix_3u, fix_12u]);
+    let smf_3_6_7_10_12 = genSFI(&fenv, &vec![fix_3u, fix_6u_6d, fix_7u_7d,
                                              fix_10u, fix_12u]);
     let mut tmp;
 
@@ -4006,10 +4093,10 @@ fn test_SortedFragIxs() {
     assert!(true == smf_3_12 .can_add( &smf_6_7_10, &fenv ));
 
     // Tests for del()
-    let smf_6_7  = genSMF(&fenv, &vec![fix_6u_6d, fix_7u_7d]);
-    let smf_6_10 = genSMF(&fenv, &vec![fix_6u_6d, fix_10u]);
-    let smf_7    = genSMF(&fenv, &vec![fix_7u_7d]);
-    let smf_10   = genSMF(&fenv, &vec![fix_10u]);
+    let smf_6_7  = genSFI(&fenv, &vec![fix_6u_6d, fix_7u_7d]);
+    let smf_6_10 = genSFI(&fenv, &vec![fix_6u_6d, fix_10u]);
+    let smf_7    = genSFI(&fenv, &vec![fix_7u_7d]);
+    let smf_10   = genSFI(&fenv, &vec![fix_10u]);
 
     tmp = smf_empty. clone() ; tmp.del(&smf_empty, &fenv);
     assert!(tmp .equals( &smf_empty ));
@@ -4036,7 +4123,7 @@ fn test_SortedFragIxs() {
     assert!(tmp .equals( &smf_6_10 ));
 
     // Tests for can_add_if_we_first_del()
-    let smf_10_12 = genSMF(&fenv, &vec![fix_10u, fix_12u]);
+    let smf_10_12 = genSFI(&fenv, &vec![fix_10u, fix_12u]);
 
     assert!(true == smf_6_7_10
                     .can_add_if_we_first_del( /*d=*/&smf_10_12,
@@ -4143,7 +4230,7 @@ fn s_subm(dst: Reg, srcR: RI) -> Stmt {
 
 struct Blockifier {
     name:    String,
-    blocks:  Vec::< Vec<Insn> >,
+    blocks:  Vec::<Vec_Insn>,
     currBNo: usize,  // index into |blocks|
     nVRegs:  u32
 }
@@ -4174,7 +4261,7 @@ impl Blockifier {
     fn blockify(&mut self, stmts: Vec::<Stmt>) -> (usize, usize) {
         let entryBNo = self.blocks.len();
         let mut currBNo = entryBNo;
-        self.blocks.push(vec![]);
+        self.blocks.push(Vec_Insn::new());
         for s in stmts {
             match s {
                 Stmt::Vanilla { insn } => {
@@ -4184,7 +4271,7 @@ impl Blockifier {
                     let (t_ent, t_exit) = self.blockify(stmts_t);
                     let (e_ent, e_exit) = self.blockify(stmts_e);
                     let cont = self.blocks.len();
-                    self.blocks.push(vec![]);
+                    self.blocks.push(Vec_Insn::new());
                     self.blocks[t_exit].push(i_goto(&mkTextLabel(cont)));
                     self.blocks[e_exit].push(i_goto(&mkTextLabel(cont)));
                     self.blocks[currBNo].push(i_goto_ctf(cond,
@@ -4196,7 +4283,7 @@ impl Blockifier {
                     let (s_ent, s_exit) = self.blockify(stmts);
                     self.blocks[currBNo].push(i_goto(&mkTextLabel(s_ent)));
                     let cont = self.blocks.len();
-                    self.blocks.push(vec![]);
+                    self.blocks.push(Vec_Insn::new());
                     self.blocks[s_exit].push(i_goto_ctf(cond,
                                                         &mkTextLabel(cont),
                                                         &mkTextLabel(s_ent)));
@@ -4204,12 +4291,12 @@ impl Blockifier {
                 },
                 Stmt::WhileDo { cond, stmts } => {
                     let condblock = self.blocks.len();
-                    self.blocks.push(vec![]);
+                    self.blocks.push(Vec_Insn::new());
                     self.blocks[currBNo].push(i_goto(&mkTextLabel(condblock)));
                     let (s_ent, s_exit) = self.blockify(stmts);
                     self.blocks[s_exit].push(i_goto(&mkTextLabel(condblock)));
                     let cont = self.blocks.len();
-                    self.blocks.push(vec![]);
+                    self.blocks.push(Vec_Insn::new());
                     self.blocks[condblock].push(i_goto_ctf(cond,
                                                            &mkTextLabel(s_ent),
                                                            &mkTextLabel(cont)));
@@ -4227,11 +4314,11 @@ impl Blockifier {
         let (ent_bno, exit_bno) = self.blockify(stmts);
         self.blocks[exit_bno].push(i_finish());
 
-        let mut blockz = Vec::<Vec<Insn>>::new();
+        let mut blockz = Vec::<Vec_Insn>::new();
         std::mem::swap(&mut self.blocks, &mut blockz);
 
         // BEGIN optionally, short out blocks that merely jump somewhere else
-        let mut cleanedUp = Vec::<Option<Vec<Insn>>>::new();
+        let mut cleanedUp = Vec::<Option<Vec_Insn>>::new();
         for ivec in blockz {
             cleanedUp.push(Some(ivec));
         }
@@ -4255,7 +4342,7 @@ impl Blockifier {
 
                 debug_assert!(b.len() > 0);
                 if b.len() == 1 {
-                    if let Some(targetLabel) = is_goto_insn(&b[0]) {
+                    if let Some(targetLabel) = is_goto_insn(&b[mkInsnIx(0)]) {
                         if let Label::Unresolved { name } = targetLabel {
                             redir = Some((n - 1, name));
                             break;
@@ -4277,7 +4364,7 @@ impl Blockifier {
                             None => { },
                             Some(ref mut insns) => {
                                 let mmm = insns.len();
-                                for j in 0 .. mmm {
+                                for j in mkInsnIx(0) .dotdot( mkInsnIx(mmm) ) {
                                     remapControlFlowTarget(&mut insns[j],
                                                            &mkTextLabel(from),
                                                            &to);
@@ -4323,10 +4410,10 @@ impl Blockifier {
 fn test__badness() -> Func {
     let mut func = Func::new("badness", "start");
 
-    func.block("start", vec![
+    func.block("start", mk_Vec_Insn(vec![
         i_print_s("!!Badness!!\n"),
         i_finish()
-    ]);
+    ]));
 
     func.finish();
     func
@@ -4338,18 +4425,18 @@ fn test__straight_line() -> Func {
     // Regs, virtual and real, that we want to use.
     let vA = func.vreg();
 
-    func.block("b0", vec![
+    func.block("b0", mk_Vec_Insn(vec![
         i_print_s("Start\n"),
         i_imm(vA, 10),
         i_add(vA, vA, RI_I(7)),
         i_goto("b1"),
-    ]);
-    func.block("b1", vec![
+    ]));
+    func.block("b1", mk_Vec_Insn(vec![
         i_print_s("Result = "),
         i_print_i(vA),
         i_print_s("\n"),
         i_finish()
-    ]);
+    ]));
 
     func.finish();
     func
@@ -4367,43 +4454,43 @@ fn test__fill_then_sum() -> Func {
 
     // Loop pre-header for filling array with numbers.
     // This is also the entry point.
-    func.block("set-loop-pre", vec![
+    func.block("set-loop-pre", mk_Vec_Insn(vec![
         i_imm (vNENT, 10),
         i_imm (vI,    0),
         i_goto("set-loop")
-    ]);
+    ]));
 
     // Filling loop
-    func.block("set-loop", vec![
+    func.block("set-loop", mk_Vec_Insn(vec![
         i_store   (AM_R(vI), vI),
         i_add     (vI,   vI, RI_I(1)),
         i_cmp_lt  (rTMP, vI, RI_R(vNENT)),
         i_goto_ctf(rTMP, "set-loop", "sum-loop-pre")
-    ]);
+    ]));
 
     // Loop pre-header for summing them
-    func.block("sum-loop-pre", vec![
+    func.block("sum-loop-pre", mk_Vec_Insn(vec![
         i_imm(vSUM, 0),
         i_imm(vI,   0),
         i_goto("sum-loop")
-    ]);
+    ]));
 
     // Summing loop
-    func.block("sum-loop", vec![
+    func.block("sum-loop", mk_Vec_Insn(vec![
         i_load  (rTMP,  AM_R(vI)),
         i_add   (vSUM,  vSUM, RI_R(rTMP)),
         i_add   (vI,    vI,   RI_I(1)),
         i_cmp_lt(vTMP2, vI,   RI_R(vNENT)),
         i_goto_ctf(vTMP2, "sum-loop", "print-result")
-    ]);
+    ]));
 
     // After loop.  Print result and stop.
-    func.block("print-result", vec![
+    func.block("print-result", mk_Vec_Insn(vec![
         i_print_s("Sum = "),
         i_print_i(vSUM),
         i_print_s("\n"),
         i_finish()
-    ]);
+    ]));
 
     func.finish();
     func
@@ -4432,7 +4519,7 @@ fn test__ssort() -> Func {
     let t0 = func.vreg();
     let zero = func.vreg();
 
-    func.block("Lstart", vec![
+    func.block("Lstart", mk_Vec_Insn(vec![
         i_imm(zero, 0),
         // Store the increment table
         i_imm(t0,   1),        i_store(AM_RI(zero,0),  t0),
@@ -4468,51 +4555,51 @@ fn test__ssort() -> Func {
         i_add(bigN, t0, RI_I(1)),
         i_imm(hp, 0),
         i_goto("L11")
-    ]);
+    ]));
 
-    func.block("L11", vec![
+    func.block("L11", mk_Vec_Insn(vec![
         i_load(t0, AM_R(hp)),
         i_cmp_gt(t0, t0, RI_R(bigN)),
         i_goto_ctf(t0, "L20", "L11a")
-    ]);
+    ]));
 
-    func.block("L11a", vec![
+    func.block("L11a", mk_Vec_Insn(vec![
         i_add(hp, hp, RI_I(1)),
         i_goto("L11")
-    ]);
+    ]));
 
-    func.block("L20", vec![
+    func.block("L20", mk_Vec_Insn(vec![
         i_cmp_lt(t0, hp, RI_I(1)),
         i_goto_ctf(t0, "L60", "L21a"),
-    ]);
+    ]));
 
-    func.block("L21a", vec![
+    func.block("L21a", mk_Vec_Insn(vec![
         i_sub(t0, hp, RI_I(1)),
         i_load(h, AM_R(t0)),
         //printf("h = %u\n", h),
         i_add(i, lo, RI_R(h)),
         i_goto("L30"),
-    ]);
+    ]));
 
-    func.block("L30", vec![
+    func.block("L30", mk_Vec_Insn(vec![
         i_cmp_gt(t0, i, RI_R(hi)),
         i_goto_ctf(t0, "L50", "L30a"),
-    ]);
+    ]));
 
-    func.block("L30a", vec![
+    func.block("L30a", mk_Vec_Insn(vec![
         i_load(v, AM_R(i)),
         i_add(j, i, RI_I(0)),  // FIXME: is this a coalescable copy?
         i_goto("L40"),
-    ]);
+    ]));
 
-    func.block("L40", vec![
+    func.block("L40", mk_Vec_Insn(vec![
         i_sub(t0, j, RI_R(h)),
         i_load(t0, AM_R(t0)),
         i_cmp_le(t0, t0, RI_R(v)),
         i_goto_ctf(t0, "L45", "L40a"),
-    ]);
+    ]));
 
-    func.block("L40a", vec![
+    func.block("L40a", mk_Vec_Insn(vec![
         i_sub(t0, j, RI_R(h)),
         i_load(t0, AM_R(t0)),
         i_store(AM_R(j), t0),
@@ -4521,41 +4608,41 @@ fn test__ssort() -> Func {
         i_sub(t0, t0, RI_I(1)),
         i_cmp_le(t0, j, RI_R(t0)),
         i_goto_ctf(t0, "L45", "L40"),
-    ]);
+    ]));
 
-    func.block("L45", vec![
+    func.block("L45", mk_Vec_Insn(vec![
         i_store(AM_R(j), v),
         i_add(i, i, RI_I(1)),
         i_goto("L30"),
-    ]);
+    ]));
 
-    func.block("L50", vec![
+    func.block("L50", mk_Vec_Insn(vec![
         i_sub(hp, hp, RI_I(1)),
         i_goto("L20"),
-    ]);
+    ]));
 
-    func.block("L60", vec![
+    func.block("L60", mk_Vec_Insn(vec![
         i_add(i, lo, RI_I(0)), // FIXME: ditto
         i_goto("L61")
-    ]);
+    ]));
 
-    func.block("L61", vec![
+    func.block("L61", mk_Vec_Insn(vec![
         i_cmp_gt(t0, i, RI_R(hi)),
         i_goto_ctf(t0, "L62", "L61a"),
-    ]);
+    ]));
 
-    func.block("L61a", vec![
+    func.block("L61a", mk_Vec_Insn(vec![
         i_load(t0, AM_R(i)),
         i_print_i(t0),
         i_print_s(" "),
         i_add(i, i, RI_I(1)),
         i_goto("L61"),
-    ]);
+    ]));
 
-    func.block("L62", vec![
+    func.block("L62", mk_Vec_Insn(vec![
         i_print_s("\n"),
         i_finish()
-    ]);
+    ]));
 
     func.finish();
     func
@@ -4583,7 +4670,7 @@ fn test__3_loops() -> Func {
 
     // Loop pre-header for filling array with numbers.
     // This is also the entry point.
-    func.block("start", vec![
+    func.block("start", mk_Vec_Insn(vec![
         i_imm(v00, 0),
         i_imm(v01, 0),
         i_imm(v02, 0),
@@ -4598,25 +4685,25 @@ fn test__3_loops() -> Func {
         i_imm(v11, 0),
         i_imm(vI, 0),
         i_goto("outer-loop-cond")
-    ]);
+    ]));
 
     // Outer loop
-    func.block("outer-loop-cond", vec![
+    func.block("outer-loop-cond", mk_Vec_Insn(vec![
         i_add     (vI,   vI, RI_I(1)),
         i_cmp_le  (vTMP, vI, RI_I(20)),
         i_goto_ctf(vTMP, "outer-loop-1", "after-outer-loop")
-    ]);
+    ]));
 
-    func.block("outer-loop-1", vec![
+    func.block("outer-loop-1", mk_Vec_Insn(vec![
         i_add(v00, v00, RI_I(1)),
         i_add(v01, v01, RI_I(1)),
         i_add(v02, v02, RI_I(1)),
         i_add(v03, v03, RI_I(1)),
         i_goto("outer-loop-cond")
-    ]);
+    ]));
 
     // After loop.  Print result and stop.
-    func.block("after-outer-loop", vec![
+    func.block("after-outer-loop", mk_Vec_Insn(vec![
         i_imm(vSUM, 0),
         i_add(vSUM, vSUM, RI_R(v00)),
         i_add(vSUM, vSUM, RI_R(v01)),
@@ -4634,7 +4721,7 @@ fn test__3_loops() -> Func {
         i_print_i(vSUM),
         i_print_s("\n"),
         i_finish()
-    ]);
+    ]));
 
     func.finish();
     func
@@ -5218,43 +5305,43 @@ fn test__fill_then_sum_2a() -> Func {
 
     // Loop pre-header for filling array with numbers.
     // This is also the entry point.
-    func.block("set-loop-pre", vec![
+    func.block("set-loop-pre", mk_Vec_Insn(vec![
         i_imm (vNENT, 10),
         i_imm (vI,    0),
         i_goto("set-loop")
-    ]);
+    ]));
 
     // Filling loop
-    func.block("set-loop", vec![
+    func.block("set-loop", mk_Vec_Insn(vec![
         i_store   (AM_R(vI), vI),
         i_addm    (vI,   RI_I(1)),
         i_cmp_lt  (rTMP, vI, RI_R(vNENT)),
         i_goto_ctf(rTMP, "set-loop", "sum-loop-pre")
-    ]);
+    ]));
 
     // Loop pre-header for summing them
-    func.block("sum-loop-pre", vec![
+    func.block("sum-loop-pre", mk_Vec_Insn(vec![
         i_imm(vSUM, 0),
         i_imm(vI,   0),
         i_goto("sum-loop")
-    ]);
+    ]));
 
     // Summing loop
-    func.block("sum-loop", vec![
+    func.block("sum-loop", mk_Vec_Insn(vec![
         i_load  (rTMP,  AM_R(vI)),
         i_addm  (vSUM,  RI_R(rTMP)),
         i_addm  (vI,    RI_I(1)),
         i_cmp_lt(vTMP2, vI,   RI_R(vNENT)),
         i_goto_ctf(vTMP2, "sum-loop", "print-result")
-    ]);
+    ]));
 
     // After loop.  Print result and stop.
-    func.block("print-result", vec![
+    func.block("print-result", mk_Vec_Insn(vec![
         i_print_s("Sum = "),
         i_print_i(vSUM),
         i_print_s("\n"),
         i_finish()
-    ]);
+    ]));
 
     func.finish();
     func
@@ -5284,7 +5371,7 @@ fn test__ssort_2a() -> Func {
     let t0 = func.vreg();
     let zero = func.vreg();
 
-    func.block("Lstart", vec![
+    func.block("Lstart", mk_Vec_Insn(vec![
         i_imm(zero, 0),
         // Store the increment table
         i_imm(t0,   1),        i_store(AM_RI(zero,0),  t0),
@@ -5321,25 +5408,25 @@ fn test__ssort_2a() -> Func {
         i_add(bigN, t0, RI_I(1)),
         i_imm(hp, 0),
         i_goto("L11")
-    ]);
+    ]));
 
-    func.block("L11", vec![
+    func.block("L11", mk_Vec_Insn(vec![
         i_load(t0, AM_R(hp)),
         i_cmp_gt(t0, t0, RI_R(bigN)),
         i_goto_ctf(t0, "L20", "L11a")
-    ]);
+    ]));
 
-    func.block("L11a", vec![
+    func.block("L11a", mk_Vec_Insn(vec![
         i_addm(hp, RI_I(1)),
         i_goto("L11")
-    ]);
+    ]));
 
-    func.block("L20", vec![
+    func.block("L20", mk_Vec_Insn(vec![
         i_cmp_lt(t0, hp, RI_I(1)),
         i_goto_ctf(t0, "L60", "L21a"),
-    ]);
+    ]));
 
-    func.block("L21a", vec![
+    func.block("L21a", mk_Vec_Insn(vec![
         i_copy(t0, hp),
         i_subm(t0, RI_I(1)),
         i_load(h, AM_R(t0)),
@@ -5347,28 +5434,28 @@ fn test__ssort_2a() -> Func {
         i_copy(i, lo),
         i_addm(i, RI_R(h)),
         i_goto("L30"),
-    ]);
+    ]));
 
-    func.block("L30", vec![
+    func.block("L30", mk_Vec_Insn(vec![
         i_cmp_gt(t0, i, RI_R(hi)),
         i_goto_ctf(t0, "L50", "L30a"),
-    ]);
+    ]));
 
-    func.block("L30a", vec![
+    func.block("L30a", mk_Vec_Insn(vec![
         i_load(v, AM_R(i)),
         i_copy(j, i),  // FIXME: is this a coalescable copy?
         i_goto("L40"),
-    ]);
+    ]));
 
-    func.block("L40", vec![
+    func.block("L40", mk_Vec_Insn(vec![
         i_copy(t0, j),
         i_subm(t0, RI_R(h)),
         i_load(t0, AM_R(t0)),
         i_cmp_le(t0, t0, RI_R(v)),
         i_goto_ctf(t0, "L45", "L40a"),
-    ]);
+    ]));
 
-    func.block("L40a", vec![
+    func.block("L40a", mk_Vec_Insn(vec![
         i_copy(t0, j),
         i_subm(t0, RI_R(h)),
         i_load(t0, AM_R(t0)),
@@ -5379,41 +5466,41 @@ fn test__ssort_2a() -> Func {
         i_subm(t0, RI_I(1)),
         i_cmp_le(t0, j, RI_R(t0)),
         i_goto_ctf(t0, "L45", "L40"),
-    ]);
+    ]));
 
-    func.block("L45", vec![
+    func.block("L45", mk_Vec_Insn(vec![
         i_store(AM_R(j), v),
         i_addm(i, RI_I(1)),
         i_goto("L30"),
-    ]);
+    ]));
 
-    func.block("L50", vec![
+    func.block("L50", mk_Vec_Insn(vec![
         i_subm(hp, RI_I(1)),
         i_goto("L20"),
-    ]);
+    ]));
 
-    func.block("L60", vec![
+    func.block("L60", mk_Vec_Insn(vec![
         i_copy(i, lo), // FIXME: ditto
         i_goto("L61")
-    ]);
+    ]));
 
-    func.block("L61", vec![
+    func.block("L61", mk_Vec_Insn(vec![
         i_cmp_gt(t0, i, RI_R(hi)),
         i_goto_ctf(t0, "L62", "L61a"),
-    ]);
+    ]));
 
-    func.block("L61a", vec![
+    func.block("L61a", mk_Vec_Insn(vec![
         i_load(t0, AM_R(i)),
         i_print_i(t0),
         i_print_s(" "),
         i_addm(i, RI_I(1)),
         i_goto("L61"),
-    ]);
+    ]));
 
-    func.block("L62", vec![
+    func.block("L62", mk_Vec_Insn(vec![
         i_print_s("\n"),
         i_finish()
-    ]);
+    ]));
 
     func.finish();
     func
