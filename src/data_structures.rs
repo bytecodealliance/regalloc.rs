@@ -334,6 +334,12 @@ macro_rules! generate_boilerplate {
       $TypeIx::$TypeIx(n)
     }
     impl $TypeIx {
+      pub fn max_value() -> Self {
+        Self::$TypeIx(u32::max_value())
+      }
+      pub fn min_value() -> Self {
+        Self::$TypeIx(u32::min_value())
+      }
       pub fn get(self) -> u32 {
         match self {
           $TypeIx::$TypeIx(n) => n,
@@ -852,6 +858,12 @@ pub enum Point {
   Spill,
 }
 impl Point {
+  pub fn min_value() -> Self {
+    Self::Reload
+  }
+  pub fn max_value() -> Self {
+    Self::Spill
+  }
   pub fn isReload(self) -> bool {
     match self {
       Point::Reload => true,
@@ -932,6 +944,7 @@ impl PartialOrd for InstPoint {
     }
   }
 }
+
 impl fmt::Debug for InstPoint {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     write!(
@@ -945,6 +958,15 @@ impl fmt::Debug for InstPoint {
         Point::Spill => "/s",
       }
     )
+  }
+}
+
+impl InstPoint {
+  pub fn max_value() -> Self {
+    Self { iix: InstIx::max_value(), pt: Point::max_value() }
+  }
+  pub fn min_value() -> Self {
+    Self { iix: InstIx::min_value(), pt: Point::min_value() }
   }
 }
 
@@ -1068,7 +1090,7 @@ pub fn mkRangeFrag<F: Function>(
 
 // Comparison of RangeFrags.  They form a partial order.
 
-fn cmpRangeFrags(f1: &RangeFrag, f2: &RangeFrag) -> Option<Ordering> {
+pub fn cmpRangeFrags(f1: &RangeFrag, f2: &RangeFrag) -> Option<Ordering> {
   if f1.last < f2.first {
     return Some(Ordering::Less);
   }
@@ -1153,6 +1175,10 @@ impl SortedRangeFragIxs {
     res.fragIxs.push(fix);
     res.check(fenv);
     res
+  }
+
+  pub fn len(&self) -> usize {
+    self.fragIxs.len()
   }
 }
 
