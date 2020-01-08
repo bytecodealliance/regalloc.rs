@@ -51,6 +51,7 @@ Performance:
 mod analysis;
 mod backtracking;
 mod data_structures;
+mod linear_scan;
 mod tests;
 
 use std::{fs, io};
@@ -308,10 +309,15 @@ impl Func {
 //=============================================================================
 // Top level
 
+enum RegAlloc {
+    Backtracking,
+    LinearScan,
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 3 {
-        println!("usage: {} <name of Func to use> <num real regs>", args[0]);
+    if args.len() < 3 || args.len() > 4 {
+        println!("usage: {} <name of Func to use> <num real regs> <reg_alloc_kind?>", args[0]);
         return;
     }
 
@@ -335,6 +341,24 @@ fn main() {
         }
     };
 
+    let reg_alloc_kind = if args.len() == 4 {
+        match args[3].as_str() {
+            "bt" => {
+                RegAlloc::Backtracking
+            },
+            "lsra" => {
+                RegAlloc::LinearScan
+            },
+            _ => {
+                println!("Unknown register allocation algorithm: possible values are bt (backtracking) / lsra (linear scan).");
+                return;
+            }
+        }
+    } else {
+        // Default is backtracking
+        RegAlloc::Backtracking
+    };
+
     func.print("Initial");
 
     func.run("Before allocation", nRRegs);
@@ -342,7 +366,17 @@ fn main() {
     // Just so we can run it later.  Not needed for actual allocation.
     let original_func = func.clone();
 
-    let alloc_res = crate::backtracking::alloc_main(&mut func, nRRegs);
+    let alloc_res = match reg_alloc_kind {
+        RegAlloc::Backtracking => {
+            println!("Using the backtracking allocator");
+            crate::backtracking::alloc_main(&mut func, nRRegs)
+        }
+        RegAlloc::LinearScan => {
+            println!("Using the linear scan allocator.");
+            crate::linear_scan::alloc_main(&mut func, nRRegs)
+        }
+    };
+
     match alloc_res {
         Err(s) => {
             println!("{}: allocation failed: {}", args[0], s);
