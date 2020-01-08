@@ -477,31 +477,28 @@ fn main() {
   // Just so we can run it later.  Not needed for actual allocation.
   let original_func = func.clone();
 
-  match reg_alloc_kind {
+  let result = match reg_alloc_kind {
     RegAllocAlgorithm::Backtracking => {
       info!("Using the backtracking allocator");
-      let result = match backtracking::alloc_main(&mut func, &reg_universe) {
-        Err(e) => {
-          error!("{}: allocation failed: {}", args[0], e);
-          return;
-        }
-        Ok(r) => r,
-      };
-      // Update the function itself. This bridges the gap from the generic
-      // interface to our specific test ISA.
-      func.update_from_alloc(result);
+      backtracking::alloc_main(&mut func, &reg_universe)
     }
     RegAllocAlgorithm::LinearScan => {
       info!("Using the linear scan allocator.");
-      match linear_scan::alloc_main(&mut func, &reg_universe) {
-        Err(e) => {
-          error!("{}: allocation failed: {}", args[0], e);
-          return;
-        }
-        Ok(_) => {}
-      }
+      linear_scan::run(&mut func, &reg_universe)
     }
-  }
+  };
+
+  let result = match result {
+    Err(e) => {
+      error!("{}: allocation failed: {}", args[0], e);
+      return;
+    }
+    Ok(r) => r,
+  };
+
+  // Update the function itself. This bridges the gap from the generic
+  // interface to our specific test ISA.
+  func.update_from_alloc(result);
 
   func.print("after allocation");
 
@@ -525,6 +522,17 @@ mod test_utils {
     let reg_universe = make_universe(num_gpr, num_fpu);
     let result = backtracking::alloc_main(&mut func, &reg_universe)
       .unwrap_or_else(|err| {
+        panic!("allocation failed: {}", err);
+      });
+    func.update_from_alloc(result);
+    run_func(&func, "After allocation", &reg_universe, RunStage::AfterRegalloc);
+  }
+
+  pub fn lsra(func_name: &str, num_gpr: usize, num_fpu: usize) {
+    let mut func = tests::find_Func(func_name).unwrap();
+    let reg_universe = make_universe(num_gpr, num_fpu);
+    let result =
+      linear_scan::run(&mut func, &reg_universe).unwrap_or_else(|err| {
         panic!("allocation failed: {}", err);
       });
     func.update_from_alloc(result);
@@ -585,4 +593,61 @@ fn bt_fill_then_sum_2a() {
 #[test]
 fn bt_ssort_2a() {
   test_utils::bt("ssort_2a", 8, 8);
+}
+
+#[test]
+fn lsra_badness() {
+  test_utils::lsra("badness", 1, 0);
+}
+
+#[test]
+fn lsra_straight_line() {
+  test_utils::lsra("straight_line", 2, 0);
+}
+
+#[test]
+fn lsra_fill_then_sum() {
+  test_utils::lsra("fill_then_sum", 32, 32);
+  //test_utils::lsra("fill_then_sum", 8, 8);
+}
+
+#[test]
+fn lsra_ssort() {
+  test_utils::lsra("ssort", 10, 10);
+  //test_utils::lsra("ssort", 8, 8);
+}
+
+#[test]
+fn lsra_3_loops() {
+  test_utils::lsra("3_loops", 8, 8);
+}
+
+#[test]
+fn lsra_stmts() {
+  test_utils::lsra("stmts", 8, 8);
+}
+
+#[test]
+fn lsra_needs_splitting() {
+  test_utils::lsra("needs_splitting", 8, 8);
+}
+
+#[test]
+fn lsra_needs_splitting2() {
+  test_utils::lsra("needs_splitting2", 8, 8);
+}
+
+#[test]
+fn lsra_qsort() {
+  test_utils::lsra("qsort", 8, 8);
+}
+
+#[test]
+fn lsra_2a_fill_then_sum() {
+  test_utils::lsra("fill_then_sum_2a", 8, 8);
+}
+
+#[test]
+fn lsra_2a_ssort() {
+  test_utils::lsra("ssort_2a", 8, 8);
 }
