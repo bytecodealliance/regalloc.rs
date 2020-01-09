@@ -1178,12 +1178,12 @@ impl PartialOrd for InsnPoint {
 }
 impl Show for InsnPoint {
     fn show(&self) -> String {
-        match self.pt {
-            Point::R => self.iix.get().show() + &".r".to_string(),
-            Point::U => self.iix.get().show() + &".u".to_string(),
-            Point::D => self.iix.get().show() + &".d".to_string(),
-            Point::S => self.iix.get().show() + &".s".to_string()
-        }
+        self.iix.show() + &match self.pt {
+            Point::R => "/r",
+            Point::U => "/u",
+            Point::D => "/d",
+            Point::S => "/s"
+        }.to_string()
     }
 }
 
@@ -1199,11 +1199,11 @@ pub enum FragKind {
 impl Show for FragKind {
     fn show(&self) -> String {
         match self {
-            FragKind::Local   => "Loc".to_string(),
-            FragKind::LiveIn  => "LIN".to_string(),
-            FragKind::LiveOut => "LOU".to_string(),
-            FragKind::Thru    => "THR".to_string()
-        }
+            FragKind::Local   => "Local",
+            FragKind::LiveIn  => "LiveIn",
+            FragKind::LiveOut => "LiveOut",
+            FragKind::Thru    => "Thru"
+        }.to_string()
     }
 }
 
@@ -1275,10 +1275,10 @@ pub struct Frag {
 }
 impl Show for Frag {
     fn show(&self) -> String {
-        self.bix.show() + &"-".to_string()
-            + &self.count.to_string() + &"x-".to_string()
-            + &self.kind.show() + &"-".to_string()
-            + &self.first.show() + &"-" + &self.last.show()
+        self.bix.show() + &"; count=".to_string()
+            + &self.count.to_string() + &"; ".to_string()
+            + &self.kind.show() + &" [".to_string()
+            + &self.first.show() + &", " + &self.last.show() + &"]"
     }
 }
 pub fn mkFrag(blocks: &Vec_Block, bix: BlockIx,
