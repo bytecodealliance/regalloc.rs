@@ -857,7 +857,7 @@ fn set_VLR_metrics(vlrs: &mut Vec_VLR,
 }
 
 #[inline(never)]
-pub fn run_analysis(func: &mut Func, nRRegs: usize) -> Result<(Vec_RLR, Vec_VLR, Vec_Frag), String> {
+pub fn run_analysis(func: &mut Func) -> Result<(Vec_RLR, Vec_VLR, Vec_Frag), String> {
     let (def_sets_per_block, use_sets_per_block) = func.calc_def_and_use();
     debug_assert!(def_sets_per_block.len() == func.blocks.len());
     debug_assert!(use_sets_per_block.len() == func.blocks.len());

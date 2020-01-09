@@ -348,7 +348,7 @@ fn show_commit_tab(commit_tab: &Vec::<SortedFragIxs>,
 // function appears to have any undefined VReg/RReg uses.
 #[inline(never)]
 pub fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
-    let (rlr_env, mut vlr_env, mut frag_env) = run_analysis(func, nRRegs)?;
+    let (rlr_env, mut vlr_env, mut frag_env) = run_analysis(func)?;
 
     // -------- Alloc main --------
 
