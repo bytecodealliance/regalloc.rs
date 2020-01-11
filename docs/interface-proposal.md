@@ -15,30 +15,19 @@ been updated to add more detail, describe concrete Rust definitions,
 etc.
 
 A few design decisions should be highlighted. First, the input to the
-register allocator is a list of machine instructions with *virtual
-registers*. Importantly, this is *not SSA*. In other words, a
-particular virtual register may be defined in several places. It is
-expected that the client (rest of compiler backend) will lower any
-preceding SSA IR's phi-nodes into explicit moves beforehand. (The
-register allocator will often be able to eliminate these moves, so it
-is alright to initially use a lowering strategy that
-naively/unconditionally inserts many moves.)
+register allocator is a list of machine instructions with *virtual or
+real registers* (mostly virtual registers in the common case; real
+registers only for ABI reasons or instruction operand
+constraints). Importantly, this is *not SSA*. In other words, a
+particular virtual or real register may be defined in several
+places. It is expected that the client (rest of compiler backend) will
+lower any preceding SSA IR's phi-nodes into explicit moves
+beforehand. (The register allocator will often be able to eliminate
+these moves, so it is alright to initially use a lowering strategy
+that naively/unconditionally inserts many moves.)
 
 Second, the register allocator does not track or manage stack layout,
 so its spill slots are abstractions.
-
-Finally, the register allocator is designed as a *pure computation*:
-the input function is immutable, and the output is a new sequence of
-instructions along with some metadata (like which registers were
-actually used). This is likely to be nearly as efficient as a
-mutate-in-place approach, if not more so, because the allocator will
-need to splice many instructions into the function body in any case;
-if it performs this rewrite in one final pass, writing a new sequence
-of instructions as it goes, it might as well return the new sequence
-separately. Incidentally, taking a completely immutable &Function
-(rather than &mut Function) is nice in the future if we want to do
-things like parallel codegen -- slightly lower friction in idiomatic
-Rust.
 
 Register file descriptions
 --------------------------
@@ -51,22 +40,27 @@ encoded compactly.
 The register allocator allocates registers from one or more *register
 classes*. There are expected to be only a small number of classes on a
 given machine: e.g., all integer registers and all floating-point
-registers. Unlike some other compiler designs, we do not expect to
-define special register classes for, e.g., overlapping narrow subsets
-of registers (low half or low byte registers), or subsets of the
-register file usable by certain instructions; overlapping classes
-complicate the allocator's job. Instead, we have a few major, disjoint
-classes, and deal with instruction-specific constraints by simply
-specifying a specific real register at instruction selection time.
+registers. (Let us name the classes by type, so we can speak of
+e.g. the I64 register class for GPRs and V128 for
+floating-point/vector registers.)
+
+Unlike some other compiler designs, we do not expect to define special
+register classes for, e.g., overlapping narrow subsets of registers
+(low half or low byte registers), or subsets of the register file
+usable by certain instructions; overlapping classes complicate the
+allocator's job. Instead, we have a few major, disjoint classes, and
+deal with instruction-specific constraints by simply specifying a
+specific real register at instruction selection time.
 
 In our proposed encoding, up to 8 classes (chosen by 3 bits) can be
-supported. As an example, on ARM64, there will initially be a GPR
-class (I64, x0..x30 minus special registers) and an FP/vector class
-(F64 / V128, v0..v31). x86-64 is similar: the GPR class is
-rax/.../r8..r15 and the FP/vector class is xmm0..xmm15.
+supported. As an example, on ARM64, there will initially be an I64
+class (x0..x30 minus special registers) and a V128 class
+(v0..v31). x86-64 is similar: the I64 class is rax/.../r8..r15 and the
+V128 class is xmm0..xmm15.
 
-All registers, in all register classes, live in one contiguous index
-space. Each class corresponds to a range within this index space.
+All real registers, in all register classes, live in one contiguous
+index space. Each class corresponds to a range within this index
+space.
 
 Thus, the machine backend provides to the regalloc the following
 information (the name `RRegUniverse` is borrowed from Valgrind, which
@@ -231,7 +225,7 @@ is provided with two functions in the `Function` trait.
     
         // Provide the defined, used, and modified registers for
         // an instruction.
-        fn regs(&self, insn: &Insn) -> InsnRegUses;
+        fn get_regs(&self, insn: &Insn) -> InsnRegUses;
         
         // Map each register slot through a virt -> phys mapping indexed
         // by virtual register. The two separate maps provide the
@@ -239,9 +233,8 @@ is provided with two functions in the `Function` trait.
         // to the instruction's effect) and defs (which semantically occur
         // just after the instruction's effect). Regs that were "modified"
         // can use either map; the vreg should be the same in both.
-        fn map_regs(&self, insn: &Insn,
-                    pre_map: &RegMap, post_map: &RegMap)
-            -> Insn;  // see below.
+        fn map_regs(&self, insn: &mut Insn,
+                    pre_map: &RegMap, post_map: &RegMap);
         
         // Allow the regalloc to query whether this is a move.
         fn is_move(&self, insn: &Insn) -> Option<(Reg, Reg)>;
@@ -256,6 +249,9 @@ The `RegMap` provides a mapping from virtual to real registers:
     // virtual register number. We could wrap this to provide
     // a type-safe translation that indexes Reg::VReg through
     // the mapping and passes Reg::RReg straight through.
+    //
+    // TODO: we may also want to consider a sparse data structure
+    // (HashMap<Reg, Reg> for example) if warranted by data.
     type RegMap = Vec<Reg>;
 
 The information for each instruction is provided as a few register
@@ -266,7 +262,8 @@ A note on semantics: uses are considered to happen prior to the
 instruction's effect, and defs are considered to happen after it. A
 register in the `modify` set, in contrast, is potentially both read
 and written (so it is both an use and a def), but additionally, the
-value cannot move between the start and end of the instruction.
+value cannot change registers between the start and end of the
+instruction.
 
 A note on real registers at pre-alloc time: the register allocator
 works by computing the possible dataflow between defs (or modifies)
@@ -284,10 +281,6 @@ to allow updating individual register slots, we instead just provide
 virtual->real mappings to the machine backend per instruction. Note
 that we must pass a "pre" map and a "post" map: a virtual register
 could have changed mappings across the instruction.
-
-Note that this function `map_regs` returns a new `Insn`, because the
-regalloc produces a new sequence of instructions as its final output;
-the original instructions are immutable. See below for more on this.
 
 Interface from RA to instructions: spills/fills/moves
 -----------------------------------------------------
@@ -347,14 +340,14 @@ left-hand operand) can participate and become `add [spillslot], rM` if
 reg == rN and rN != rM, or `add rN, [spillslot]` if reg == rM and rN
 != rM.
 
-Spill slots here are indices in an abstract spill space, not concrete
-stack offsets. They are allocated by the register allocator as needed,
-according to the size needed for a given regclass (as indicated by
-`get_spillslot_size`) and part of the returned regalloc result type is
-an indication of how many slots were used. The machine backend is then
-free to compute the stack layout and fill in concrete memory-address
-expressions (e.g., `[frame pointer reg + off + 8*idx]`) from
-`SpillSlot` values.
+Spill slots here are indices in a spill space with slots of an
+abstract size. THey are not concrete byte offsets. They are allocated
+by the register allocator as needed, according to the size needed for
+a given regclass (as indicated by `get_spillslot_size`) and part of
+the returned regalloc result type is an indication of how many slots
+were used. The machine backend is then free to compute the stack
+layout and fill in concrete memory-address expressions (e.g., `[frame
+pointer reg + off + 8*idx]`) from `SpillSlot` values.
 
 Splicing and rewriting the instruction sequence
 -----------------------------------------------
@@ -414,11 +407,12 @@ arguments and return values.
    do not hinder register allocation.
    
    For callsites, likewise, the code generator should move args from
-   virtual to real registers, def'ing the real registers, and the call
-   instruction uses the corresponding real registers. Conversely, for
-   the return value, the call instruction def's the ABI's return value
-   register and the code generator inserts a move that uses this real
-   register and moves the value into a virtual register.
+   virtual to real registers (thus creating a new definition of each
+   real register), and the call instruction uses the corresponding
+   real registers. Conversely, for the return value, the call
+   instruction def's the ABI's return value register and the code
+   generator inserts a move that uses this real register and moves the
+   value into a virtual register.
 
 Copy elision and use of copies
 ------------------------------
