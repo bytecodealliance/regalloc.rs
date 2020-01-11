@@ -1,24 +1,17 @@
 //! Core implementation of the backtracking allocator.
 
 use crate::data_structures::{
-    BlockIx, Set, Func, Map, TVec, mkBlockIx, Reg, FragIx, Vec_Frag, InsnPoint, Show, mkInsnIx, InsnPoint_U, InsnPoint_D, Frag, mkFrag, mkFragIx, Vec_RLR, Vec_VLR, FragKind,
+    BlockIx, Set, Func, Map, TVec, mkBlockIx, Reg, FragIx, Vec_Frag,
+    InsnPoint, Show, mkInsnIx, InsnPoint_U, InsnPoint_D, Frag, mkFrag,
+    mkFragIx, Vec_RLR, Vec_VLR, FragKind,
     SortedFragIxs, RLR, VLR, Vec_Block,
-    VLRIx, mkVLRIx, Slot, mkRReg, InsnIx, Reg_V, Insn, Point, mkInsnPoint, mkSlot, RReg, VReg, i_spill, i_reload, Vec_Insn, Block, InsnPoint_R, InsnPoint_S
+    VLRIx, mkVLRIx, Slot, mkRReg, InsnIx, Insn, Point, mkInsnPoint,
+    mkSlot, RReg, VReg, i_spill, i_reload, Vec_Insn, Block, InsnPoint_R,
+    InsnPoint_S,
+    RRegUniverse, rc_from_u32
 };
 use crate::analysis::run_analysis;
 
-fn cost_is_less(cost1: Option<f32>, cost2: Option<f32>) -> bool {
-    // None denotes "infinity", while Some(_) is some number less than
-    // infinity.  No matter that the enclosed f32 can denote its own infinity
-    // :-/ (they never actually should be infinity, nor negative, nor any
-    // denormal either).
-    match (cost1, cost2) {
-        (None,     None)     => false,
-        (Some(_),  None)     => true,
-        (None,     Some(_))  => false,
-        (Some(f1), Some(f2)) => f1 < f2
-    }
-}
 
 //=============================================================================
 // The as-yet-unallocated VReg LR prio queue
@@ -95,6 +88,7 @@ impl VLRPrioQ {
         res
     }
 }
+
 
 //=============================================================================
 // The per-real-register state
@@ -226,6 +220,21 @@ impl PerRReg {
     }
 }
 
+// Helper function, to compare spill costs
+fn cost_is_less(cost1: Option<f32>, cost2: Option<f32>) -> bool {
+    // None denotes "infinity", while Some(_) is some number less than
+    // infinity.  No matter that the enclosed f32 can denote its own infinity
+    // :-/ (they never actually should be infinity, nor negative, nor any
+    // denormal either).
+    match (cost1, cost2) {
+        (None,     None)     => false,
+        (Some(_),  None)     => true,
+        (None,     Some(_))  => false,
+        (Some(f1), Some(f2)) => f1 < f2
+    }
+}
+
+
 //=============================================================================
 // Edit list items
 
@@ -273,11 +282,13 @@ impl Show for EditListItem {
     }
 }
 
+
 //=============================================================================
 // Printing the allocator's top level state
 
 #[inline(never)]
 fn print_RA_state(who: &str,
+                  universe: &RRegUniverse,
                   // State components
                   prioQ: &VLRPrioQ, perRReg: &Vec::<PerRReg>,
                   editList: &Vec::<EditListItem>,
@@ -286,8 +297,8 @@ fn print_RA_state(who: &str,
 {
     println!("<<<<====---- RA state at '{}' ----====", who);
     for ix in 0 .. perRReg.len() {
-        println!("{:<3}   {}\n      {}",
-                 mkRReg(ix as u32).show(),
+        println!("{:<4}   {}\n      {}",
+                 universe.regs[ix].1,
                  &perRReg[ix].show1_with_envs(&frag_env),
                  &perRReg[ix].show2_with_envs(&frag_env));
         println!("");
@@ -300,6 +311,7 @@ fn print_RA_state(who: &str,
     }
     println!(">>>>");
 }
+
 
 //=============================================================================
 // Allocator top level
@@ -341,13 +353,16 @@ fn show_commit_tab(commit_tab: &Vec::<SortedFragIxs>,
 */
 
 
-
 // Allocator top level.  |func| is modified so that, when this function
 // returns, it will contain no VReg uses.  Allocation can fail if there are
 // insufficient registers to even generate spill/reload code, or if the
 // function appears to have any undefined VReg/RReg uses.
+
 #[inline(never)]
-pub fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
+pub fn alloc_main(func: &mut Func,
+                  reg_universe: &RRegUniverse) -> Result<(), String> {
+
+    // Note that the analysis phase can fail; hence we propagate any error.
     let (rlr_env, mut vlr_env, mut frag_env) = run_analysis(func)?;
 
     // -------- Alloc main --------
@@ -357,25 +372,27 @@ pub fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
     // This is fully populated by the ::new call.
     let mut prioQ = VLRPrioQ::new(&vlr_env);
 
-    // Whereas this is empty.  We have to populate it "by hand".
+    // Whereas this is empty.  We have to populate it "by hand", by
+    // effectively cloning the allocatable part (prefix) of the universe.
     let mut perRReg = Vec::<PerRReg>::new();
-    for _ in 0 .. nRRegs {
+    for rreg in 0 .. reg_universe.allocable {
         // Doing this instead of simply .resize avoids needing Clone for PerRReg
         perRReg.push(PerRReg::new(&frag_env));
     }
     for rlr in rlr_env.iter() {
-        let rregNo = rlr.rreg.get_usize();
-        // Ignore RLRs for RRegs outside its allocation domain.  As far as the
-        // allocator is concerned, such RRegs simply don't exist.
-        if rregNo >= nRRegs {
+        let rregIndex = rlr.rreg.getIndex();
+        // Ignore RLRs for RRegs that are not part of the allocatable set.  As
+        // far as the allocator is concerned, such RRegs simply don't exist.
+        if rregIndex >= reg_universe.allocable {
             continue;
         }
-        perRReg[rregNo].add_RLR(&rlr, &frag_env);
+        perRReg[rregIndex].add_RLR(&rlr, &frag_env);
     }
 
     let mut editList = Vec::<EditListItem>::new();
     println!("");
-    print_RA_state("Initial", &prioQ, &perRReg, &editList, &vlr_env, &frag_env);
+    print_RA_state("Initial", &reg_universe,
+                   &prioQ, &perRReg, &editList, &vlr_env, &frag_env);
 
     // This is technically part of the running state, at least for now.
     let mut spillSlotCtr: u32 = 0;
@@ -399,10 +416,25 @@ pub fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         println!("-- considering        {}:  {}",
                  curr_vlrix.show(), curr_vlr.show());
 
+        debug_assert!(curr_vlr.vreg.toReg().isVirtual());
+        let curr_vlr_rc = curr_vlr.vreg.getClass().rc_to_usize();
+
+        let (first_in_rc,
+             last_in_rc) = match reg_universe.allocable_by_class[curr_vlr_rc] {
+            None => {
+                // Urk.  This is very ungood.  Game over.
+                let s = format!("no available registers for class {}",
+                                rc_from_u32(curr_vlr_rc as u32).show());
+                return Err(s);
+            },
+            Some((first, last))
+                => (first, last)
+        };
+
         // See if we can find a RReg to which we can assign this VLR without
         // evicting any previous assignment.
         let mut rreg_to_use = None;
-        for i in 0 .. nRRegs {
+        for i in first_in_rc .. last_in_rc + 1 {
             if perRReg[i].can_add_VLR_without_eviction(curr_vlr, &frag_env) {
                 rreg_to_use = Some(i);
                 break;
@@ -410,7 +442,7 @@ pub fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         }
         if let Some(rregNo) = rreg_to_use {
             // Yay!
-            let rreg = mkRReg(rregNo as u32);
+            let rreg = reg_universe.regs[rregNo].0;
             println!("--   direct alloc to  {}", rreg.show());
             perRReg[rregNo].add_VLR(curr_vlrix, &vlr_env, &frag_env);
             debug_assert!(curr_vlr.rreg.is_none());
@@ -428,7 +460,7 @@ pub fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
 
         // (rregNo for best cand, its VLRIx, and its spill cost)
         let mut best_so_far: Option<(usize, VLRIx, f32)> = None;
-        for i in 0 .. nRRegs {
+        for i in first_in_rc .. last_in_rc + 1 {
             let mb_better_cand: Option<(VLRIx, f32)>;
             mb_better_cand =
                 perRReg[i].find_best_evict_VLR(&curr_vlr, &vlr_env, &frag_env);
@@ -467,7 +499,7 @@ pub fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
             prioQ.add_VLR(vlrix_to_evict);
             debug_assert!(vlr_env[vlrix_to_evict].rreg.is_some());
             // .. and reassign.
-            let rreg = mkRReg(rregNo as u32);
+            let rreg = reg_universe.regs[rregNo].0;
             println!("--   then alloc to    {}", rreg.show());
             perRReg[rregNo].add_VLR(curr_vlrix, &vlr_env, &frag_env);
             debug_assert!(curr_vlr.rreg.is_none());
@@ -530,7 +562,7 @@ pub fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
         }
         let mut sri_vec = Vec::<SpillAndOrReloadInfo>::new();
         let curr_vlr_vreg = curr_vlr.vreg;
-        let curr_vlr_reg = Reg_V(curr_vlr_vreg);
+        let curr_vlr_reg = curr_vlr_vreg.toReg();
 
         for fix in &curr_vlr.sfrags.fragIxs {
             let frag: &Frag = &frag_env[*fix];
@@ -627,7 +659,8 @@ pub fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
     }
 
     println!("");
-    print_RA_state("Final", &prioQ, &perRReg, &editList, &vlr_env, &frag_env);
+    print_RA_state("Final", &reg_universe,
+                   &prioQ, &perRReg, &editList, &vlr_env, &frag_env);
 
     // -------- Edit the instruction stream --------
 
@@ -644,8 +677,9 @@ pub fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
     let mut fragMapsByStart = Vec::<(FragIx, VReg, RReg)>::new();
     let mut fragMapsByEnd   = Vec::<(FragIx, VReg, RReg)>::new();
     // For each real register ..
-    for i in 0 .. nRRegs {
-        let rreg = mkRReg(i as u32);
+    // For each real register under our control ..
+    for i in 0 .. reg_universe.allocable {
+        let rreg = reg_universe.regs[i].0;
         // .. look at all the VLRs assigned to it.  And for each such VLR ..
         for vlrix_assigned in &perRReg[i].vlrixs_assigned {
             let vlr_assigned = &vlr_env[*vlrix_assigned];

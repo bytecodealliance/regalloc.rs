@@ -15,10 +15,12 @@ use std::slice::{Iter, IterMut};
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 
+
 //=============================================================================
 // Maps
 
 pub type Map<K, V> = FxHashMap<K, V>;
+
 
 //=============================================================================
 // Sets of things
@@ -329,6 +331,7 @@ generate_boilerplate!(VLRIx, mkVLRIx, VLR, Vec_VLR, mk_Vec_VLR, "vlr");
 
 generate_boilerplate!(RLRIx, mkRLRIx, RLR, Vec_RLR, mk_Vec_RLR, "rlr");
 
+
 //=============================================================================
 // A simple trait for printing things, a.k.a. "Let's play 'Spot the ex-Haskell
 // programmer'".
@@ -347,6 +350,16 @@ impl Show for u16 {
     }
 }
 impl Show for u32 {
+    fn show(&self) -> String {
+        self.to_string()
+    }
+}
+impl Show for usize {
+    fn show(&self) -> String {
+        self.to_string()
+    }
+}
+impl Show for f32 {
     fn show(&self) -> String {
         self.to_string()
     }
@@ -398,80 +411,188 @@ impl<A: Show, B: Show, C: Show> Show for (A, B, C) {
     }
 }
 
+
 //=============================================================================
-// Definitions of registers and stack slots, and printing thereof.
+// Definitions of register classes, registers and stack slots, and printing
+// thereof.
 
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RReg {
-    RReg(u32)
+#[derive(PartialEq)]
+pub enum RC {
+    I32, F32
 }
-pub fn mkRReg(n: u32) -> RReg { RReg::RReg(n) }
-impl RReg {
-    pub fn get(self) -> u32 { match self { RReg::RReg(n) => n } }
-    pub fn get_usize(self) -> usize { self.get() as usize }
-}
-impl Show for RReg {
-    fn show(&self) -> String {
-        "R".to_string() + &self.get().to_string()
-    }
-}
+const N_REGCLASSES: usize = 2;
 
-
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum VReg {
-    VReg(u32)
-}
-pub fn mkVReg(n: u32) -> VReg { VReg::VReg(n) }
-impl VReg {
-    pub fn get(self) -> u32 { match self { VReg::VReg(n) => n } }
-    pub fn get_usize(self) -> usize { self.get() as usize }
-}
-impl Show for VReg {
-    fn show(&self) -> String {
-        "v".to_string() + &self.get().to_string()
-    }
-}
-
-
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Reg {
-    RReg(RReg),
-    VReg(VReg)
-}
-pub fn Reg_R(rreg: RReg) -> Reg { Reg::RReg(rreg) }
-pub fn Reg_V(vreg: VReg) -> Reg { Reg::VReg(vreg) }
-impl Show for Reg {
+impl Show for RC {
     fn show(&self) -> String {
         match self {
-            Reg::RReg(rreg) => rreg.show(),
-            Reg::VReg(vreg) => vreg.show()
+            RC::I32 => "I".to_string(),
+            RC::F32 => "F".to_string()
         }
     }
+}
+impl RC {
+    fn rc_to_u32(self) -> u32 {
+        match self { RC::I32 => 0, RC::F32 => 1 }
+    }
+    pub fn rc_to_usize(self) -> usize {
+        self.rc_to_u32() as usize
+    }
+}
+pub fn rc_from_u32(rc: u32) -> RC {
+    match rc { 0 => RC::I32, 1 => RC::F32, _ => panic!("rc_from_u32") }
+}
+
+
+// Reg represents both real and virtual registers.  For compactness and speed,
+// these fields are packed into a single u32.  The format is:
+//
+// Virtual Reg:   1  rc:3                index:28
+// Real Reg:      0  rc:3  uu:12  enc:8  index:8
+//
+// |rc| is the register class.  |uu| means "unused".  |enc| is the hardware
+// encoding for the reg.  |index| is a zero based index which has the
+// following meanings:
+//
+// * for a Virtual Reg, |index| is just the virtual register number.
+// * for a Real Reg, |index| is the entry number in the associated
+//   |RRegUniverse|.
+//
+// This scheme gives us:
+//
+// * a compact (32-bit) representation for registers
+// * fast equality tests for registers
+// * ability to handle up to 2^28 (268.4 million) virtual regs per function
+// * ability to handle up to 8 register classes
+// * ability to handle targets with up to 256 real registers
+// * ability to emit instructions containing real regs without having to
+//   look up encodings in any side tables, since a real reg carries its
+//   encoding
+// * efficient bitsets and arrays of virtual registers, since each has a
+//   zero-based index baked in
+// * efficient bitsets and arrays of real registers, for the same reason
+//
+// This scheme makes it impossible to represent overlapping register classes,
+// but that doesn't seem important.  AFAIK only ARM32 VFP/Neon has that.
+
+#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Reg {
+    do_not_access_this_directly: u32
 }
 impl Reg {
-    fn getRReg(&self) -> RReg {
-        match self {
-            Reg::RReg(rreg) => *rreg,
-            Reg::VReg(_)    => panic!("Reg::getRReg: is not a RReg!")
+    pub fn isVirtual(self) -> bool {
+        (self.do_not_access_this_directly & 0x8000_0000) != 0
+    }
+    pub fn getClass(self) -> RC {
+        rc_from_u32((self.do_not_access_this_directly >> 28) & 0x7)
+    }
+    pub fn getIndex(self) -> usize {
+        // Return type is usize because typically we will want to use the
+        // result for indexing into a Vec
+        if self.isVirtual() {
+            (self.do_not_access_this_directly & ((1 << 28) - 1)) as usize
+        } else {
+            (self.do_not_access_this_directly & ((1 << 8) - 1)) as usize
         }
     }
-    fn getVReg(&self) -> VReg {
-        match self {
-            Reg::RReg(_)     => panic!("Reg::getRReg: is not a VReg!"),
-            Reg::VReg(vreg)  => *vreg
+    pub fn getEnc(self) -> u8 {
+        if self.isVirtual() {
+            panic!("Reg::getEnc on virtual register")
+        } else {
+            ((self.do_not_access_this_directly >> 8) & ((1 << 8) - 1)) as u8
         }
     }
+    pub fn asVReg(self) -> Option<VReg> {
+        if self.isVirtual() {
+            Some(VReg { reg: self })
+        } else {
+            None
+        }
+    }
+}
+impl Show for Reg {
+    fn show(&self) -> String {
+        (if self.isVirtual() { "v" } else { "R" }).to_string()
+        + &self.getClass().show()
+        + &self.getIndex().show()
+    }
+}
+pub fn mkRReg(rc: RC, enc: u8, index: u8) -> Reg {
+    let n = (0 << 31)
+            | (rc.rc_to_u32() << 28)
+            | ((enc as u32)   << 8)
+            | ((index as u32) << 0);
+    Reg { do_not_access_this_directly: n }
+}
+pub fn mkVReg(rc: RC, index: u32) -> Reg {
+    if index >= (1 << 28) {
+        panic!("mkVReg(): index too large");
+     }
+    let n = (1 << 31)
+            | (rc.rc_to_u32() << 28)
+            | (index          << 0);
+    Reg { do_not_access_this_directly: n }
+}
+
+
+// RReg and VReg are merely wrappers around Reg, which try to dynamically
+// ensure that they are really wrapping the correct flavour of register.
+
+#[derive(Copy, Clone, /*Hash,*/ PartialEq, /*Eq, PartialOrd, Ord*/)]
+pub struct RReg {
+    reg: Reg
+}
+impl Reg /* !!not RReg!! */ {
+    pub fn toRReg(self) -> RReg {
+        if self.isVirtual() {
+            panic!("Reg::toRReg: this is a virtual register")
+        } else {
+            RReg { reg: self }
+        }
+    }
+}
+impl RReg {
+    pub fn getClass(self) -> RC { self.reg.getClass() }
+    pub fn getIndex(self) -> usize { self.reg.getIndex() }
+    pub fn toReg(self) -> Reg { self.reg }
+}
+impl Show for RReg {
+    fn show(&self) -> String { self.reg.show() }
+}
+
+
+#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, /* Ord*/)]
+pub struct VReg {
+    reg: Reg
+}
+impl Reg /* !!not VReg!! */ {
+    pub fn toVReg(self) -> VReg {
+        if self.isVirtual() {
+            VReg { reg: self }
+        } else {
+            panic!("Reg::toVReg: this is a real register")
+        }
+    }
+}
+impl VReg {
+    pub fn getClass(self) -> RC { self.reg.getClass() }
+    pub fn getIndex(self) -> usize { self.reg.getIndex() }
+    pub fn toReg(self) -> Reg { self.reg }
+}
+impl Show for VReg {
+    fn show(&self) -> String { self.reg.show() }
+}
+
+
+impl Reg {
     // Apply a vreg-rreg mapping to a Reg.  This used for registers used in
     // either a read- or a write-role.
     fn apply_D_or_U(&mut self, map: &Map::<VReg, RReg>) {
-        match self {
-            Reg::RReg(_) => {},
-            Reg::VReg(vreg) => {
-                if let Some(rreg) = map.get(vreg) {
-                    *self = Reg::RReg(*rreg);
-                } else {
-                    panic!("Reg::apply_D_or_U: no mapping for {}", vreg.show());
-                }
+        if let Some(vreg) = self.asVReg() {
+            if let Some(rreg) = map.get(&vreg) {
+                debug_assert!(rreg.getClass() == vreg.getClass());
+                *self = rreg.toReg();
+            } else {
+                panic!("Reg::apply_D_or_U: no mapping for {}", self.show());
             }
         }
     }
@@ -479,22 +600,20 @@ impl Reg {
     // agree!  This seems a bit strange at first.  It is used for registers
     // used in a modify-role.
     fn apply_M(&mut self, mapD: &Map::<VReg, RReg>, mapU: &Map::<VReg, RReg>) {
-        match self {
-            Reg::RReg(_) => {},
-            Reg::VReg(vreg) => {
-                let mb_result_D = mapD.get(vreg);
-                let mb_result_U = mapU.get(vreg);
-                // Failure of this is serious and should be investigated.
-                if mb_result_D != mb_result_U {
-                    panic!(
-                        "Reg::apply_M: inconsistent mappings for {}: D={}, U={}",
-                        vreg.show(), mb_result_D.show(), mb_result_U.show());
-                }
-                if let Some(rreg) = mb_result_D {
-                    *self = Reg::RReg(*rreg);
-                } else {
-                    panic!("Reg::apply: no mapping for {}", vreg.show());
-                }
+        if let Some(vreg) = self.asVReg() {
+            let mb_result_D = mapD.get(&vreg);
+            let mb_result_U = mapU.get(&vreg);
+            // Failure of this is serious and should be investigated.
+            if mb_result_D != mb_result_U {
+                panic!(
+                    "Reg::apply_M: inconsistent mappings for {}: D={}, U={}",
+                    vreg.show(), mb_result_D.show(), mb_result_U.show());
+            }
+            if let Some(rreg) = mb_result_D {
+                debug_assert!(rreg.getClass() == vreg.getClass());
+                *self = rreg.toReg();
+            } else {
+                panic!("Reg::apply: no mapping for {}", vreg.show());
             }
         }
     }
@@ -518,6 +637,189 @@ impl Show for Slot {
 
 
 //=============================================================================
+// Definitions of the "real register universe".
+
+// A "Real Register Universe" is a read-only structure that contains all
+// information about real registers on a given host.  It serves several
+// purposes:
+//
+// * defines the mapping from real register indices to the registers
+//   themselves
+//
+// * defines the size of the initial section of that mapping that is available
+//   to the register allocator for use, so that it can treat the registers under
+//   its control as a zero based, contiguous array.  This is important for its
+//   efficiency.
+//
+// * gives meaning to Set<RReg>, which otherwise would merely be a
+//   bunch of bits.
+
+pub struct RRegUniverse {
+    // The registers themselves.  All must be real registers, and all must
+    // have their index number (.getIndex()) equal to the array index here,
+    // since this is the only place where we map index numbers to actual
+    // registers.
+    pub regs: Vec<(RReg, String)>,
+
+    // This is the size of the initial section of |regs| that is available to
+    // the allocator.  It must be < |regs|.len().
+    pub allocable: usize,
+
+    // Ranges for groups of allocable registers. Used to quickly address only
+    // a group of allocable registers belonging to the same register class.
+    // Indexes into |allocable_by_class| are RC values, such as RC::F32. If
+    // the resulting entry is |None| then there are no registers in that
+    // class.  Otherwise the value is |Some((first, last)), which specifies
+    // the range of entries in |regs| corresponding to that class.  The range
+    // includes both |first| and |last|.
+    //
+    // In all cases, |last| must be < |allocable|.  In other words,
+    // |allocable_by_class| must describe only the allocable prefix of |regs|.
+    //
+    // For example, let's say allocable_by_class[RC::F32] == Some((10, 14))
+    // Then regs[10], regs[11], regs[12], regs[13], and regs[14] give all
+    // registers of register class RC::F32.
+    //
+    // The effect of the above is that registers in |regs| must form
+    // contiguous groups. This is checked by RRegUniverse::check_is_sane().
+    pub allocable_by_class: [Option<(usize, usize)>; N_REGCLASSES],
+}
+
+impl RRegUniverse {
+    // Check that the given universe satisfies various invariants, and panic
+    // if not.  All the invariants are important.
+    fn check_is_sane(&self) {
+        let regs_len = self.regs.len();
+        let regs_allocable = self.allocable;
+        // The universe must contain at most 256 registers.  That's because
+        // |Reg| only has an 8-bit index value field, so if the universe
+        // contained more than 256 registers, we'd never be able to index into
+        // entries 256 and above.  This is no limitation in practice since all
+        // targets we're interested in contain (many) fewer than 256 regs in
+        // total.
+        let mut ok = regs_len <= 256;
+        // The number of allocable registers must not exceed the number of
+        // |regs| presented.  In general it will be less, since the universe
+        // will list some registers (stack pointer, etc) which are not
+        // available for allocation.
+        if ok {
+            ok = regs_allocable >= 0 && regs_allocable <= regs_len;
+        }
+        // All registers must have an index value which points back at the
+        // |regs| slot they are in.  Also they really must be real regs.
+        if ok {
+            for i in 0 .. regs_len {
+                let (reg, _name) = &self.regs[i];
+                if ok && (reg.toReg().isVirtual() || reg.getIndex() != i) {
+                    ok = false;
+                }
+            }
+        }
+        // The allocatable regclass groupings defined by |allocable_first| and
+        // |allocable_last| must be contiguous.
+        if ok {
+            let mut regclass_used = [false; N_REGCLASSES];
+            for rc in 0 .. N_REGCLASSES {
+                regclass_used[rc] = false;
+            }
+            for i in 0 .. regs_allocable {
+                let (reg, _name) = &self.regs[i];
+                let rc = reg.getClass().rc_to_u32() as usize;
+                regclass_used[rc] = true;
+            }
+            // Scan forward through each grouping, checking that the listed
+            // registers really are of the claimed class.  Also count the
+            // total number visited.  This seems a fairly reliable way to
+            // ensure that the groupings cover all allocated registers exactly
+            // once, and that all classes are contiguous groups.
+            let mut regs_visited = 0;
+            for rc in 0 .. N_REGCLASSES {
+                match self.allocable_by_class[rc] {
+                    None => {
+                        if regclass_used[rc] {
+                            ok = false;
+                        }
+                    },
+                    Some((first,last)) => {
+                        if !regclass_used[rc] {
+                            ok = false;
+                        }
+                        if ok {
+                            for i in first .. last + 1 {
+                                let (reg, _name) = &self.regs[i];
+                                if ok
+                                   && rc_from_u32(rc as u32) != reg.getClass() {
+                                    ok = false;
+                                }
+                                regs_visited += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            if ok && regs_visited != regs_allocable {
+                ok = false;
+            }
+        }
+        // So finally ..
+        if !ok {
+            panic!("RRegUniverse::check_is_sane: invalid RRegUniverse");
+        }
+    }
+}
+
+
+// Create a universe for testing, with nI32 |I32| class regs and nF32 |F32|
+// class regs.
+
+pub fn make_universe(nI32: usize, nF32: usize) -> RRegUniverse {
+    if nI32 + nF32 >= 256 {
+        panic!("make_universe: too many regs, cannot represent");
+    }
+
+    let total_regs = nI32 + nF32;
+    let mut regs = Vec::<(RReg, String)>::new();
+    let mut allocable_by_class = [None; N_REGCLASSES];
+    let mut index = 0u8;
+
+    if nI32 > 0 {
+        let first = index as usize;
+        for i in 0 .. nI32 {
+            let name = format!("R{}", i).to_string();
+            let reg  = mkRReg(RC::I32, /*enc=*/0, index).toRReg();
+            regs.push((reg, name));
+            index += 1;
+        }
+        let last = index as usize - 1;
+        allocable_by_class[RC::I32.rc_to_usize()] = Some((first, last));
+    }
+
+    if nF32 > 0 {
+        let first = index as usize;
+        for i in 0 .. nF32 {
+            let name = format!("F{}", i).to_string();
+            let reg  = mkRReg(RC::F32, /*enc=*/0, index).toRReg();
+            regs.push((reg, name));
+            index += 1;
+        }
+        let last = index as usize - 1;
+        allocable_by_class[RC::F32.rc_to_usize()] = Some((first, last));
+    }
+
+    debug_assert!(index as usize == total_regs);
+
+    let allocable = regs.len();
+    let univ = RRegUniverse { regs,
+                              // for this example, all regs are allocable
+                              allocable,
+                              allocable_by_class };
+    univ.check_is_sane();
+
+    univ
+}
+
+
+//=============================================================================
 // Definition of instructions, and printing thereof.  Destinations are on the
 // left.
 
@@ -526,7 +828,6 @@ pub enum Label {
     Unresolved { name: String },
     Resolved { name: String, bix: BlockIx }
 }
-
 impl Show for Label {
     fn show(&self) -> String {
         match self {
@@ -559,14 +860,26 @@ impl Label {
         }
     }
 }
+pub fn mkTextLabel(n: usize) -> String {
+    "L".to_string() + &n.to_string()
+}
+fn mkUnresolved(name: String) -> Label {
+    Label::Unresolved { name }
+}
+
 
 #[derive(Copy, Clone)]
 pub enum RI {
     Reg { reg: Reg },
     Imm { imm: u32 }
 }
-pub fn RI_R(reg: Reg) -> RI { RI::Reg { reg } }
-pub fn RI_I(imm: u32) -> RI { RI::Imm { imm } }
+pub fn RI_R(reg: Reg) -> RI {
+    debug_assert!(reg.getClass() == RC::I32);
+    RI::Reg { reg }
+}
+pub fn RI_I(imm: u32) -> RI {
+    RI::Imm { imm }
+}
 impl Show for RI {
     fn show(&self) -> String {
         match self {
@@ -596,9 +909,19 @@ pub enum AM {
    RI { base: Reg, offset: u32 },
    RR { base: Reg, offset: Reg }
 }
-pub fn AM_R(base: Reg)               -> AM { AM::RI { base, offset: 0 } }
-pub fn AM_RI(base: Reg, offset: u32) -> AM { AM::RI { base, offset } }
-pub fn AM_RR(base: Reg, offset: Reg) -> AM { AM::RR { base, offset } }
+pub fn AM_R(base: Reg) -> AM {
+    debug_assert!(base.getClass() == RC::I32);
+    AM::RI { base, offset: 0 }
+}
+pub fn AM_RI(base: Reg, offset: u32) -> AM {
+    debug_assert!(base.getClass() == RC::I32);
+    AM::RI { base, offset }
+}
+pub fn AM_RR(base: Reg, offset: Reg) -> AM {
+    debug_assert!(base.getClass() == RC::I32);
+    debug_assert!(offset.getClass() == RC::I32);
+    AM::RR { base, offset }
+}
 impl Show for AM {
     fn show(&self) -> String {
         match self {
@@ -670,28 +993,193 @@ impl BinOp {
     }
 }
 
+
+#[derive(Copy, Clone)]
+enum BinOpF {
+    FAdd, FSub, FMul, FDiv
+}
+impl Show for BinOpF {
+    fn show(&self) -> String {
+        match self {
+            BinOpF::FAdd => "fadd".to_string(),
+            BinOpF::FSub => "fsub".to_string(),
+            BinOpF::FMul => "fmul".to_string(),
+            BinOpF::FDiv => "fdiv".to_string()
+        }
+    }
+}
+impl BinOpF {
+    fn calc(self, argL: f32, argR: f32) -> f32 {
+        match self {
+            BinOpF::FAdd => argL + argR,
+            BinOpF::FSub => argL - argR,
+            BinOpF::FMul => argL * argR,
+            BinOpF::FDiv => argL / argR
+        }
+    }
+}
+
+
 #[derive(Clone)]
 pub enum Insn {
     Imm     { dst: Reg, imm: u32 },
+    ImmF    { dst: Reg, imm: f32 },
     Copy    { dst: Reg, src: Reg },
     BinOp   { op: BinOp, dst: Reg, srcL: Reg, srcR: RI },
     BinOpM  { op: BinOp, dst: Reg, srcR: RI }, // "mod" semantics for |dst|
+    BinOpF  { op: BinOpF, dst: Reg, srcL: Reg, srcR: Reg },
     Load    { dst: Reg, addr: AM },
+    LoadF   { dst: Reg, addr: AM },
     Store   { addr: AM, src: Reg },
+    StoreF  { addr: AM, src: Reg },
     Spill   { dst: Slot, src: RReg },
+    SpillF  { dst: Slot, src: RReg },
     Reload  { dst: RReg, src: Slot },
+    ReloadF { dst: RReg, src: Slot },
     Goto    { target: Label },
     GotoCTF { cond: Reg, targetT: Label, targetF: Label },
     PrintS  { str: String },
     PrintI  { reg: Reg },
+    PrintF  { reg: Reg },
     Finish  { }
 }
 
+pub fn i_imm(dst: Reg, imm: u32) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    Insn::Imm { dst, imm }
+}
+pub fn i_copy(dst: Reg, src: Reg) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    debug_assert!(src.getClass() == RC::I32);
+    Insn::Copy { dst, src }
+}
+// For BinOp variants see below
+
+pub fn i_load(dst: Reg, addr: AM) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    Insn::Load { dst, addr }
+}
+pub fn i_store(addr: AM, src: Reg) -> Insn {
+    debug_assert!(src.getClass() == RC::I32);
+    Insn::Store { addr, src }
+}
 pub fn i_spill(dst: Slot, src: RReg) -> Insn {
+    debug_assert!(src.getClass() == RC::I32);
     Insn::Spill { dst, src }
 }
 pub fn i_reload(dst: RReg, src: Slot) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
     Insn::Reload { dst, src }
+}
+pub fn i_goto<'a>(target: &'a str) -> Insn {
+    Insn::Goto { target: mkUnresolved(target.to_string()) }
+}
+pub fn i_goto_ctf<'a>(cond: Reg, targetT: &'a str, targetF: &'a str) -> Insn {
+    debug_assert!(cond.getClass() == RC::I32);
+    Insn::GotoCTF { cond: cond,
+                    targetT: mkUnresolved(targetT.to_string()),
+                    targetF: mkUnresolved(targetF.to_string()) }
+}
+pub fn i_print_s<'a>(str: &'a str) -> Insn {
+    Insn::PrintS { str: str.to_string() }
+}
+pub fn i_print_i(reg: Reg) -> Insn {
+    debug_assert!(reg.getClass() == RC::I32);
+    Insn::PrintI { reg }
+}
+pub fn i_finish() -> Insn {
+    Insn::Finish { }
+}
+
+pub fn i_add(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    debug_assert!(srcL.getClass() == RC::I32);
+    Insn::BinOp { op: BinOp::Add, dst, srcL, srcR }
+}
+pub fn i_sub(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    debug_assert!(srcL.getClass() == RC::I32);
+    Insn::BinOp { op: BinOp::Sub, dst, srcL, srcR }
+}
+pub fn i_mul(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    debug_assert!(srcL.getClass() == RC::I32);
+    Insn::BinOp { op: BinOp::Mul, dst, srcL, srcR }
+}
+pub fn i_mod(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    debug_assert!(srcL.getClass() == RC::I32);
+    Insn::BinOp { op: BinOp::Mod, dst, srcL, srcR }
+}
+pub fn i_shr(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    debug_assert!(srcL.getClass() == RC::I32);
+    Insn::BinOp { op: BinOp::Shr, dst, srcL, srcR }
+}
+pub fn i_and(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    debug_assert!(srcL.getClass() == RC::I32);
+    Insn::BinOp { op: BinOp::And, dst, srcL, srcR }
+}
+pub fn i_cmp_eq(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    debug_assert!(srcL.getClass() == RC::I32);
+    Insn::BinOp { op: BinOp::CmpEQ, dst, srcL, srcR }
+}
+pub fn i_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    debug_assert!(srcL.getClass() == RC::I32);
+    Insn::BinOp { op: BinOp::CmpLT, dst, srcL, srcR }
+}
+pub fn i_cmp_le(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    debug_assert!(srcL.getClass() == RC::I32);
+    Insn::BinOp { op: BinOp::CmpLE, dst, srcL, srcR }
+}
+pub fn i_cmp_ge(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    debug_assert!(srcL.getClass() == RC::I32);
+    Insn::BinOp { op: BinOp::CmpGE, dst, srcL, srcR }
+}
+pub fn i_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    debug_assert!(srcL.getClass() == RC::I32);
+    Insn::BinOp { op: BinOp::CmpGT, dst, srcL, srcR }
+}
+
+// 2-operand versions of i_add and i_sub, for experimentation
+pub fn i_addm(dst: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    Insn::BinOpM { op: BinOp::Add, dst, srcR }
+}
+pub fn i_subm(dst: Reg, srcR: RI) -> Insn {
+    debug_assert!(dst.getClass() == RC::I32);
+    Insn::BinOpM { op: BinOp::Sub, dst, srcR }
+}
+
+pub fn i_fadd(dst: Reg, srcL: Reg, srcR: Reg) -> Insn {
+    debug_assert!(dst.getClass() == RC::F32);
+    debug_assert!(srcL.getClass() == RC::F32);
+    debug_assert!(srcR.getClass() == RC::F32);
+    Insn::BinOpF { op: BinOpF::FAdd, dst, srcL, srcR }
+}
+pub fn i_fsub(dst: Reg, srcL: Reg, srcR: Reg) -> Insn {
+    debug_assert!(dst.getClass() == RC::F32);
+    debug_assert!(srcL.getClass() == RC::F32);
+    debug_assert!(srcR.getClass() == RC::F32);
+    Insn::BinOpF { op: BinOpF::FSub, dst, srcL, srcR }
+}
+pub fn i_fmul(dst: Reg, srcL: Reg, srcR: Reg) -> Insn {
+    debug_assert!(dst.getClass() == RC::F32);
+    debug_assert!(srcL.getClass() == RC::F32);
+    debug_assert!(srcR.getClass() == RC::F32);
+    Insn::BinOpF { op: BinOpF::FMul, dst, srcL, srcR }
+}
+pub fn i_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Insn {
+    debug_assert!(dst.getClass() == RC::F32);
+    debug_assert!(srcL.getClass() == RC::F32);
+    debug_assert!(srcR.getClass() == RC::F32);
+    Insn::BinOpF { op: BinOpF::FDiv, dst, srcL, srcR }
 }
 
 impl Show for Insn {
@@ -702,8 +1190,8 @@ impl Show for Insn {
             } else {
                 // BEGIN hack
                 let mut need = w - s.len();
-                if need > 4 { need = 4; }
-                let extra = [" ", "  ", "   ", "    "][need - 1];
+                if need > 5 { need = 5; }
+                let extra = [" ", "  ", "   ", "    ","     "][need - 1];
                 // END hack
                 s + &extra.to_string()
             }
@@ -711,40 +1199,63 @@ impl Show for Insn {
 
         match self {
             Insn::Imm { dst, imm } =>
-                "imm    ".to_string()
+                "imm     ".to_string()
+                + &dst.show() + &", ".to_string() + &imm.to_string(),
+            Insn::ImmF { dst, imm } =>
+                "immf    ".to_string()
                 + &dst.show() + &", ".to_string() + &imm.to_string(),
             Insn::Copy { dst, src } =>
-                "copy   ".to_string()
+                "copy    ".to_string()
                 + &dst.show() + &", ".to_string() + &src.show(),
             Insn::BinOp { op, dst, srcL, srcR } =>
-                ljustify(op.show(), 6)
+                ljustify(op.show(), 7)
                 + &" ".to_string() + &dst.show()
                 + &", ".to_string() + &srcL.show() + &", ".to_string()
                 + &srcR.show(),
             Insn::BinOpM { op, dst, srcR } =>
-                ljustify(op.show() + &"m".to_string(), 6)
+                ljustify(op.show() + &"m".to_string(), 7)
                 + &" ".to_string() + &dst.show()
                 + &", ".to_string() + &srcR.show(),
+            Insn::BinOpF { op, dst, srcL, srcR } =>
+                ljustify(op.show(), 7)
+                + &" ".to_string() + &dst.show()
+                + &", ".to_string() + &srcL.show() + &", ".to_string()
+                + &srcR.show(),
             Insn::Load { dst, addr } =>
-                "load   ".to_string() + &dst.show() + &", ".to_string()
+                "load    ".to_string() + &dst.show() + &", ".to_string()
+                + &addr.show(),
+            Insn::LoadF { dst, addr } =>
+                "loadf   ".to_string() + &dst.show() + &", ".to_string()
                 + &addr.show(),
             Insn::Store { addr, src } =>
-                "store  ".to_string() + &addr.show()
+                "store   ".to_string() + &addr.show()
+                + &", ".to_string()
+                + &src.show(),
+            Insn::StoreF { addr, src } =>
+                "storef  ".to_string() + &addr.show()
                 + &", ".to_string()
                 + &src.show(),
             Insn::Spill { dst, src } => {
-                "SPILL  ".to_string() + &dst.show() + &", ".to_string()
+                "SPILL   ".to_string() + &dst.show() + &", ".to_string()
+                + &src.show()
+            },
+            Insn::Spill { dst, src } => {
+                "SPILLF  ".to_string() + &dst.show() + &", ".to_string()
                 + &src.show()
             },
             Insn::Reload { dst, src } => {
-                "RELOAD ".to_string() + &dst.show() + &", ".to_string()
+                "RELOAD  ".to_string() + &dst.show() + &", ".to_string()
+                + &src.show()
+            },
+            Insn::ReloadF { dst, src } => {
+                "RELOADF ".to_string() + &dst.show() + &", ".to_string()
                 + &src.show()
             },
             Insn::Goto { target } =>
                 "goto   ".to_string()
                 + &target.show(),
             Insn::GotoCTF { cond, targetT, targetF } =>
-                "goto   if ".to_string()
+                "goto    if ".to_string()
                 + &cond.show() + &" then ".to_string() + &targetT.show()
                 + &" else ".to_string() + &targetF.show(),
             Insn::PrintS { str } => {
@@ -909,6 +1420,21 @@ pub fn is_goto_insn(insn: &Insn) -> Option<Label> {
     }
 }
 
+pub fn remapControlFlowTarget(insn: &mut Insn, from: &String, to: &String)
+{
+    match insn {
+        Insn::Goto { ref mut target } => {
+            target.remapControlFlow(from, to);
+        },
+        Insn::GotoCTF { cond:_, ref mut targetT, ref mut targetF } => {
+            targetT.remapControlFlow(from, to);
+            targetF.remapControlFlow(from, to);
+        },
+        _ => ()
+    }
+}
+
+
 //=============================================================================
 // Definition of Block and Func, and printing thereof.
 
@@ -1004,8 +1530,8 @@ impl Func {
     }
 
     // Get a new VReg name
-    pub fn vreg(&mut self) -> Reg {
-        let v = Reg::VReg(mkVReg(self.nVRegs));
+    pub fn newVReg(&mut self, rc: RC) -> Reg {
+        let v = mkVReg(rc, self.nVRegs);
         self.nVRegs += 1;
         v
     }

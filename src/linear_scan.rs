@@ -4,8 +4,9 @@ use crate::analysis::run_analysis;
 use crate::data_structures::{
     i_reload, i_spill, mkBlockIx, mkFrag, mkFragIx, mkInsnIx, mkInsnPoint, mkRReg, mkSlot, mkVLRIx,
     Block, BlockIx, Frag, FragIx, FragKind, Func, Insn, InsnIx, InsnPoint, InsnPoint_D,
-    InsnPoint_R, InsnPoint_S, InsnPoint_U, Map, Point, RReg, Reg, Reg_V, Set, Show, Slot,
+    InsnPoint_R, InsnPoint_S, InsnPoint_U, Map, Point, RReg, Reg, Set, Show, Slot,
     SortedFragIxs, TVec, VLRIx, VReg, Vec_Block, Vec_Frag, Vec_Insn, Vec_RLR, Vec_VLR, RLR, VLR,
+    RRegUniverse
 };
 
 // Allocator top level.  |func| is modified so that, when this function
@@ -13,7 +14,8 @@ use crate::data_structures::{
 // insufficient registers to even generate spill/reload code, or if the
 // function appears to have any undefined VReg/RReg uses.
 #[inline(never)]
-pub fn alloc_main(func: &mut Func, nRRegs: usize) -> Result<(), String> {
+pub fn alloc_main(func: &mut Func, reg_universe: &RRegUniverse)
+                  -> Result<(), String> {
     let (rlr_env, mut vlr_env, mut frag_env) = run_analysis(func)?;
 
     unimplemented!("linear scan");

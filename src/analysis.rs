@@ -13,14 +13,18 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 
 use crate::data_structures::{
-    BlockIx, Set, Func, Map, TVec, mkBlockIx, Reg, FragIx, Vec_Frag, InsnPoint, Show, mkInsnIx, InsnPoint_U, InsnPoint_D, Frag, mkFrag, mkFragIx, Vec_RLR, Vec_VLR, FragKind,
+    BlockIx, Set, Func, Map, TVec, mkBlockIx, Reg, FragIx, Vec_Frag,
+    InsnPoint, Show, mkInsnIx, InsnPoint_U, InsnPoint_D, Frag, mkFrag,
+    mkFragIx, Vec_RLR, Vec_VLR, FragKind,
     SortedFragIxs, RLR, VLR, Vec_Block, mkRLRIx, mkVLRIx
 };
+
 
 //=============================================================================
 // Queues
 
 type Queue<T> = VecDeque<T>;
+
 
 //=============================================================================
 // Control-flow analysis results for a Func: predecessors, successors,
@@ -416,6 +420,7 @@ impl Func {
     }
 }
 
+
 //=============================================================================
 // Computation of Frags (Live Range Fragments)
 
@@ -784,13 +789,11 @@ fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
             let sfrags = SortedFragIxs::new(&fragIxs.to_vec(), &frag_env);
             let size = 0;
             let cost = Some(0.0);
-            match *reg {
-                Reg::RReg(rreg) => {
-                    resR.push(RLR { rreg, sfrags });
-                }
-                Reg::VReg(vreg) => {
-                    resV.push(VLR { vreg, rreg: None, sfrags, size, cost });
-                }
+            if reg.isVirtual() {
+                resV.push(VLR { vreg: reg.toVReg(), rreg: None,
+                                sfrags, size, cost });
+            } else {
+                resR.push(RLR { rreg: reg.toRReg(), sfrags });
             }
         }
 
@@ -857,7 +860,9 @@ fn set_VLR_metrics(vlrs: &mut Vec_VLR,
 }
 
 #[inline(never)]
-pub fn run_analysis(func: &mut Func) -> Result<(Vec_RLR, Vec_VLR, Vec_Frag), String> {
+pub fn run_analysis(func: &mut Func)
+                    -> Result<(Vec_RLR, Vec_VLR, Vec_Frag), String> {
+
     let (def_sets_per_block, use_sets_per_block) = func.calc_def_and_use();
     debug_assert!(def_sets_per_block.len() == func.blocks.len());
     debug_assert!(use_sets_per_block.len() == func.blocks.len());
@@ -891,7 +896,7 @@ pub fn run_analysis(func: &mut Func) -> Result<(Vec_RLR, Vec_VLR, Vec_Frag), Str
         n += 1;
     }
 
-    // Annotate each Block with its estimated execution count
+    // Annotate each Block with its estimated execution frequency
     for bix in mkBlockIx(0) .dotdot( mkBlockIx(func.blocks.len()) ) {
         let mut eef = 1;
         let mut depth = cfg_info.depth_map[bix];
