@@ -13,10 +13,11 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 
 use crate::data_structures::{
-    BlockIx, Set, Func, Map, TVec, mkBlockIx, Reg, FragIx, Vec_Frag,
-    InsnPoint, Show, mkInsnIx, InsnPoint_U, InsnPoint_D, Frag, mkFrag,
-    mkFragIx, Vec_RLR, Vec_VLR, FragKind,
-    SortedFragIxs, RLR, VLR, Vec_Block, mkRLRIx, mkVLRIx
+    BlockIx, Set, Func, Map, TypedIxVec, mkBlockIx, Reg, RangeFragIx,
+    Vec_RangeFrag, InstPoint, Show, mkInstIx, InstPoint_Use, InstPoint_Def,
+    RangeFrag, mkRangeFrag, mkRangeFragIx, Vec_RealRange, Vec_VirtualRange,
+    RangeFragKind, SortedRangeFragIxs, RealRange, VirtualRange,
+    Vec_Block, mkRealRangeIx, mkVirtualRangeIx
 };
 
 
@@ -32,17 +33,17 @@ type Queue<T> = VecDeque<T>;
 
 // CFGInfo contains CFG-related info computed from a Func.
 struct CFGInfo {
-    // All these TVecs contain one element per Block in the Func.
+    // All these TypedIxVecs contain one element per Block in the Func.
 
     // Predecessor and successor maps.
-    pred_map: TVec::<BlockIx, Set<BlockIx>>,
-    succ_map: TVec::<BlockIx, Set<BlockIx>>,
+    pred_map: TypedIxVec::<BlockIx, Set<BlockIx>>,
+    succ_map: TypedIxVec::<BlockIx, Set<BlockIx>>,
 
     // This maps from a Block to the set of Blocks it is dominated by
-    dom_map:  TVec::<BlockIx, Set<BlockIx>>,
+    dom_map:  TypedIxVec::<BlockIx, Set<BlockIx>>,
 
     // This maps from a Block to the loop depth that it is at
-    depth_map: TVec::<BlockIx, u32>,
+    depth_map: TypedIxVec::<BlockIx, u32>,
 
     // Pre- and post-order sequences.  Iterating forwards through these
     // vectors enumerates the blocks in preorder and postorder respectively.
@@ -61,7 +62,7 @@ impl CFGInfo {
         // Func::finish() ensures that all blocks are non-empty, and that only
         // the last instruction is a control flow transfer.  Hence the
         // following won't miss any edges.
-        let mut succ_map = TVec::<BlockIx, Set<BlockIx>>::new();
+        let mut succ_map = TypedIxVec::<BlockIx, Set<BlockIx>>::new();
         for b in func.blocks.iter() {
             let last_insn = &func.insns[ b.start.plus(b.len).minus(1) ];
             let succs = last_insn.getTargets();
@@ -73,7 +74,7 @@ impl CFGInfo {
         }
 
         // Now invert the mapping
-        let mut pred_map = TVec::<BlockIx, Set<BlockIx>>::new();
+        let mut pred_map = TypedIxVec::<BlockIx, Set<BlockIx>>::new();
         pred_map.resize(nBlocks, Set::empty());
         for (src, dst_set) in (0..).zip(succ_map.iter()) {
             for dst in dst_set.iter() {
@@ -181,7 +182,7 @@ impl CFGInfo {
 
         // Now that we have a depth for each loop, we can finally compute the
         // depth for each block.
-        let mut depth_map = TVec::<BlockIx, u32>::new();
+        let mut depth_map = TypedIxVec::<BlockIx, u32>::new();
         depth_map.resize(nBlocks, 0);
         for (loopBixs, depth) in natural_loops.iter().zip(loop_depths) {
             //println!("QQQQ4 {} {}", depth.show(), loopBixs.show());
@@ -204,13 +205,13 @@ impl CFGInfo {
         let mut pre_ord  = Vec::<BlockIx>::new();
         let mut post_ord = Vec::<BlockIx>::new();
 
-        let mut visited = TVec::<BlockIx, bool>::new();
+        let mut visited = TypedIxVec::<BlockIx, bool>::new();
         visited.resize(nBlocks, false);
 
         // FIXME: change this to use an explicit stack.
         fn dfs(pre_ord: &mut Vec::<BlockIx>, post_ord: &mut Vec::<BlockIx>,
-               visited: &mut TVec::<BlockIx, bool>,
-               succ_map: &TVec::<BlockIx, Set<BlockIx>>,
+               visited: &mut TypedIxVec::<BlockIx, bool>,
+               succ_map: &TypedIxVec::<BlockIx, Set<BlockIx>>,
                bix: BlockIx) {
             debug_assert!(!visited[bix]);
             visited[bix] = true;
@@ -255,12 +256,12 @@ impl CFGInfo {
 // dominate it. This algorithm is from Fig 7.14 of Muchnick 1997. The
 // algorithm is described as simple but not as performant as some others.
 #[inline(never)]
-fn calc_dominators(pred_map: &TVec::<BlockIx, Set<BlockIx>>,
+fn calc_dominators(pred_map: &TypedIxVec::<BlockIx, Set<BlockIx>>,
                    start: BlockIx)
-                   -> TVec::<BlockIx, Set<BlockIx>> {
+                   -> TypedIxVec::<BlockIx, Set<BlockIx>> {
     // FIXME: nice up the variable names (D, T, etc) a bit.
     let nBlocks = pred_map.len();
-    let mut dom_map = TVec::<BlockIx, Set<BlockIx>>::new();
+    let mut dom_map = TypedIxVec::<BlockIx, Set<BlockIx>>::new();
     {
         let r: BlockIx = start;
         let N: Set<BlockIx> =
@@ -309,12 +310,12 @@ fn calc_dominators(pred_map: &TVec::<BlockIx, Set<BlockIx>>,
 // Computation of live-in and live-out sets
 
 impl Func {
-    // Returned TVecs contain one element per block
+    // Returned TypedIxVecs contain one element per block
     #[inline(never)]
-    fn calc_def_and_use(&self) -> (TVec::<BlockIx, Set<Reg>>,
-                                   TVec::<BlockIx, Set<Reg>>) {
-        let mut def_sets = TVec::new();
-        let mut use_sets = TVec::new();
+    fn calc_def_and_use(&self) -> (TypedIxVec::<BlockIx, Set<Reg>>,
+                                   TypedIxVec::<BlockIx, Set<Reg>>) {
+        let mut def_sets = TypedIxVec::new();
+        let mut use_sets = TypedIxVec::new();
         for b in self.blocks.iter() {
             let mut def = Set::empty();
             let mut uce = Set::empty();
@@ -351,17 +352,17 @@ impl Func {
 
     // Returned vectors contain one element per block
     #[inline(never)]
-    fn calc_livein_and_liveout(&self,
-                               def_sets_per_block: &TVec::<BlockIx, Set<Reg>>,
-                               use_sets_per_block: &TVec::<BlockIx, Set<Reg>>,
-                               cfg_info: &CFGInfo
-                              ) -> (TVec::<BlockIx, Set<Reg>>,
-                                    TVec::<BlockIx, Set<Reg>>) {
+    fn calc_livein_and_liveout(
+           &self,
+           def_sets_per_block: &TypedIxVec::<BlockIx, Set<Reg>>,
+           use_sets_per_block: &TypedIxVec::<BlockIx, Set<Reg>>,
+           cfg_info: &CFGInfo) -> (TypedIxVec::<BlockIx, Set<Reg>>,
+                                   TypedIxVec::<BlockIx, Set<Reg>>) {
         let nBlocks = self.blocks.len();
         let empty = Set::<Reg>::empty();
 
         let mut nEvals = 0;
-        let mut liveouts = TVec::<BlockIx, Set::<Reg>>::new();
+        let mut liveouts = TypedIxVec::<BlockIx, Set::<Reg>>::new();
         liveouts.resize(nBlocks, empty.clone());
 
         // Initialise the work queue so as to do a reverse preorder traversal
@@ -396,7 +397,7 @@ impl Func {
 
         // The liveout values are done, but we need to compute the liveins
         // too.
-        let mut liveins = TVec::<BlockIx, Set::<Reg>>::new();
+        let mut liveins = TypedIxVec::<BlockIx, Set::<Reg>>::new();
         liveins.resize(nBlocks, empty.clone());
         for bixI in mkBlockIx(0) .dotdot( mkBlockIx(nBlocks) ) {
             let mut liveinI = liveouts[bixI].clone();
@@ -422,65 +423,66 @@ impl Func {
 
 
 //=============================================================================
-// Computation of Frags (Live Range Fragments)
+// Computation of RangeFrags (Live Range Fragments)
 
 // This is surprisingly complex, in part because of the need to correctly
 // handle (1) live-in and live-out Regs, (2) dead writes, and (3) instructions
 // that modify registers rather than merely reading or writing them.
 
 impl Func {
-    // Calculate all the Frags for |bix|.  Add them to |outFEnv| and add to
-    // |outMap|, the associated FragIxs, segregated by Reg.  |bix|, |livein|
-    // and |liveout| are expected to be valid in the context of the Func |self|
-    // (duh!)
-    fn get_Frags_for_block(&self, bix: BlockIx,
-                           livein: &Set::<Reg>, liveout: &Set::<Reg>,
-                           outMap: &mut Map::<Reg, Vec::<FragIx>>,
-                           outFEnv: &mut Vec_Frag)
+    // Calculate all the RangeFrags for |bix|.  Add them to |outFEnv| and add
+    // to |outMap|, the associated RangeFragIxs, segregated by Reg.  |bix|,
+    // |livein| and |liveout| are expected to be valid in the context of the
+    // Func |self| (duh!)
+    fn get_RangeFrags_for_block(&self, bix: BlockIx,
+                                livein: &Set::<Reg>, liveout: &Set::<Reg>,
+                                outMap: &mut Map::<Reg, Vec::<RangeFragIx>>,
+                                outFEnv: &mut Vec_RangeFrag)
     {
         //println!("QQQQ --- block {}", bix.show());
-        // BEGIN ProtoFrag
-        // A ProtoFrag carries information about a write .. read range, within
-        // a Block, which we will later turn into a fully-fledged Frag.  It
-        // basically records the first and last-known InsnPoints for
-        // appearances of a Reg.
+        // BEGIN ProtoRangeFrag
+        // A ProtoRangeFrag carries information about a write .. read range,
+        // within a Block, which we will later turn into a fully-fledged
+        // RangeFrag.  It basically records the first and last-known
+        // InstPoints for appearances of a Reg.
         //
-        // ProtoFrag also keeps count of the number of appearances of the Reg
-        // to which it pertains, using |uses|.  The counts get rolled into the
-        // resulting Frags, and later are used to calculate spill costs.
+        // ProtoRangeFrag also keeps count of the number of appearances of
+        // the Reg to which it pertains, using |uses|.  The counts get rolled
+        // into the resulting RangeFrags, and later are used to calculate
+        // spill costs.
         //
-        // The running state of this function is a map from Reg to ProtoFrag.
-        // Only Regs that actually appear in the Block (or are live-in to it)
-        // are mapped.  This has the advantage of economy, since most Regs
-        // will not appear in (or be live-in to) most Blocks.
+        // The running state of this function is a map from Reg to
+        // ProtoRangeFrag.  Only Regs that actually appear in the Block (or are
+        // live-in to it) are mapped.  This has the advantage of economy, since
+        // most Regs will not appear in (or be live-in to) most Blocks.
         //
-        struct ProtoFrag {
-            // The InsnPoint in this Block at which the associated Reg most
+        struct ProtoRangeFrag {
+            // The InstPoint in this Block at which the associated Reg most
             // recently became live (when moving forwards though the Block).
-            // If this value is the first InsnPoint for the Block (the U point
-            // for the Block's lowest InsnIx), that indicates the associated
+            // If this value is the first InstPoint for the Block (the U point
+            // for the Block's lowest InstIx), that indicates the associated
             // Reg is live-in to the Block.
-            first: InsnPoint,
+            first: InstPoint,
 
-            // And this is the InsnPoint which is the end point (most recently
-            // observed read, in general) for the current Frag under
+            // And this is the InstPoint which is the end point (most recently
+            // observed read, in general) for the current RangeFrag under
             // construction.  In general we will move |last| forwards as we
             // discover reads of the associated Reg.  If this is the last
-            // InsnPoint for the Block (the D point for the Block's highest
-            // InsnInx), that indicates that the associated reg is live-out
+            // InstPoint for the Block (the D point for the Block's highest
+            // InstInx), that indicates that the associated reg is live-out
             // from the Block.
-            last: InsnPoint,
+            last: InstPoint,
 
-            // Number of mentions of the associated Reg in this ProtoFrag.
+            // Number of mentions of the associated Reg in this ProtoRangeFrag.
             uses: u16
         }
-        impl Show for ProtoFrag {
+        impl Show for ProtoRangeFrag {
             fn show(&self) -> String {
                 self.uses.show() + &"x ".to_string() + &self.first.show()
                     + &"-".to_string() + &self.last.show()
             }
         }
-        // END ProtoFrag
+        // END ProtoRangeFrag
 
         fn plus1(n: u16) -> u16 { if n == 0xFFFFu16 { n } else { n+1 } }
 
@@ -490,20 +492,20 @@ impl Func {
         debug_assert!(block.len >= 1);
         let first_iix_in_block = block.start.get();
         let last_iix_in_block  = first_iix_in_block + block.len - 1;
-        let first_pt_in_block  = InsnPoint_U(mkInsnIx(first_iix_in_block));
-        let last_pt_in_block   = InsnPoint_D(mkInsnIx(last_iix_in_block));
+        let first_pt_in_block  = InstPoint_Use(mkInstIx(first_iix_in_block));
+        let last_pt_in_block   = InstPoint_Def(mkInstIx(last_iix_in_block));
 
         // The running state.
-        let mut state = Map::<Reg, ProtoFrag>::default();
+        let mut state = Map::<Reg, ProtoRangeFrag>::default();
 
-        // The generated Frags are initially are dumped in here.  We group
-        // them by Reg at the end of this function.
-        let mut tmpResultVec = Vec::<(Reg, Frag)>::new();
+        // The generated RangeFrags are initially are dumped in here.  We
+        // group them by Reg at the end of this function.
+        let mut tmpResultVec = Vec::<(Reg, RangeFrag)>::new();
 
         // First, set up |state| as if all of |livein| had been written just
         // prior to the block.
         for r in livein.iter() {
-            state.insert(*r, ProtoFrag { uses: 0,
+            state.insert(*r, ProtoRangeFrag { uses: 0,
                                          first: first_pt_in_block,
                                          last:  first_pt_in_block });
         }
@@ -513,8 +515,8 @@ impl Func {
         for iix in block.start .dotdot( block.start.plus(block.len) ) {
             let insn = &self.insns[iix];
 
-            //fn id<'a>(x: Vec::<(&'a Reg, &'a ProtoFrag)>)
-            //          -> Vec::<(&'a Reg, &'a ProtoFrag)> { x }
+            //fn id<'a>(x: Vec::<(&'a Reg, &'a ProtoRangeFrag)>)
+            //          -> Vec::<(&'a Reg, &'a ProtoRangeFrag)> { x }
             //println!("");
             //println!("QQQQ state before {}",
             //         id(state.iter().collect()).show());
@@ -523,48 +525,50 @@ impl Func {
             let (regs_d, regs_m, regs_u) = insn.getRegUsage();
 
             // Examine reads.  This is pretty simple.  They simply extend an
-            // existing ProtoFrag to the U point of the reading insn.
+            // existing ProtoRangeFrag to the U point of the reading insn.
             for r in regs_u.iter() {
-                let new_pf: ProtoFrag;
+                let new_pf: ProtoRangeFrag;
                 match state.get(r) {
                     // First event for |r| is a read, but it's not listed in
                     // |livein|, since otherwise |state| would have an entry
                     // for it.
                     None => {
-                        panic!("get_Frags_for_block: fail #1");
+                        panic!("get_RangeFrags_for_block: fail #1");
                     },
                     // This the first or subsequent read after a write.  Note
                     // that the "write" can be either a real write, or due to
                     // the fact that |r| is listed in |livein|.  We don't care
                     // here.
-                    Some(ProtoFrag { uses, first, last }) => {
-                        let new_last = InsnPoint_U(iix);
+                    Some(ProtoRangeFrag { uses, first, last }) => {
+                        let new_last = InstPoint_Use(iix);
                         debug_assert!(last <= &new_last);
-                        new_pf = ProtoFrag { uses: plus1(*uses),
-                                             first: *first, last: new_last };
+                        new_pf = ProtoRangeFrag { uses: plus1(*uses),
+                                                  first: *first,
+                                                  last: new_last };
                     },
                 }
                 state.insert(*r, new_pf);
             }
 
             // Examine modifies.  These are handled almost identically to
-            // reads, except that they extend an existing ProtoFrag down to
+            // reads, except that they extend an existing ProtoRangeFrag down to
             // the D point of the modifying insn.
             for r in regs_m.iter() {
-                let new_pf: ProtoFrag;
+                let new_pf: ProtoRangeFrag;
                 match state.get(r) {
                     // First event for |r| is a read (really, since this insn
                     // modifies |r|), but it's not listed in |livein|, since
                     // otherwise |state| would have an entry for it.
                     None => {
-                        panic!("get_Frags_for_block: fail #2");
+                        panic!("get_RangeFrags_for_block: fail #2");
                     },
                     // This the first or subsequent modify after a write.
-                    Some(ProtoFrag { uses, first, last }) => {
-                        let new_last = InsnPoint_D(iix);
+                    Some(ProtoRangeFrag { uses, first, last }) => {
+                        let new_last = InstPoint_Def(iix);
                         debug_assert!(last <= &new_last);
-                        new_pf = ProtoFrag { uses: plus1(*uses),
-                                             first: *first, last: new_last };
+                        new_pf = ProtoRangeFrag { uses: plus1(*uses),
+                                                  first: *first,
+                                                  last: new_last };
                     },
                 }
                 state.insert(*r, new_pf);
@@ -572,30 +576,31 @@ impl Func {
 
             // Examine writes (but not writes implied by modifies).  The
             // general idea is that a write causes us to terminate the
-            // existing ProtoFrag, if any, add it to |tmpResultVec|, and start
-            // a new frag.
+            // existing ProtoRangeFrag, if any, add it to |tmpResultVec|,
+            // and start a new frag.
             for r in regs_d.iter() {
-                let new_pf: ProtoFrag;
+                let new_pf: ProtoRangeFrag;
                 match state.get(r) {
                     // First mention of a Reg we've never heard of before.
-                    // Start a new ProtoFrag for it and keep going.
+                    // Start a new ProtoRangeFrag for it and keep going.
                     None => {
-                        let new_pt = InsnPoint_D(iix);
-                        new_pf = ProtoFrag { uses: 1,
-                                             first: new_pt, last: new_pt };
+                        let new_pt = InstPoint_Def(iix);
+                        new_pf = ProtoRangeFrag { uses: 1,
+                                                  first: new_pt, last: new_pt };
                     },
-                    // There's already a ProtoFrag for |r|.  This write will
-                    // start a new one, so flush the existing one and note
-                    // this write.
-                    Some(ProtoFrag { uses, first, last }) => {
+                    // There's already a ProtoRangeFrag for |r|.  This write
+                    // will start a new one, so flush the existing one and
+                    // note this write.
+                    Some(ProtoRangeFrag { uses, first, last }) => {
                         if first == last {
                             debug_assert!(*uses == 1);
                         }
-                        let frag = mkFrag(blocks, bix, *first, *last, *uses);
+                        let frag = mkRangeFrag(blocks, bix,
+                                               *first, *last, *uses);
                         tmpResultVec.push((*r, frag));
-                        let new_pt = InsnPoint_D(iix);
-                        new_pf = ProtoFrag { uses: 1,
-                                             first: new_pt, last: new_pt };
+                        let new_pt = InstPoint_Def(iix);
+                        new_pf = ProtoRangeFrag { uses: 1,
+                                                  first: new_pt, last: new_pt };
                     }
                 }
                 state.insert(*r, new_pf);
@@ -605,8 +610,8 @@ impl Func {
         }
 
         // We are at the end of the block.  We still have to deal with
-        // live-out Regs.  We must also deal with ProtoFrags in |state| that
-        // are for registers not listed as live-out.
+        // live-out Regs.  We must also deal with ProtoRangeFrags in |state|
+        // that are for registers not listed as live-out.
 
         // Deal with live-out Regs.  Treat each one as if it is read just
         // after the block.
@@ -617,16 +622,16 @@ impl Func {
                 // that it is neither defined in the block nor present in
                 // |livein|.
                 None => {
-                    panic!("get_Frags_for_block: fail #3");
+                    panic!("get_RangeFrags_for_block: fail #3");
                 },
                 // |r| is written (or modified), either literally or by virtue
                 // of being present in |livein|, and may or may not
                 // subsequently be read -- we don't care, because it must be
                 // read "after" the block.  Create a |LiveOut| or |Thru| frag
                 // accordingly.
-                Some(ProtoFrag { uses, first, last:_ }) => {
-                    let frag = mkFrag(blocks, bix,
-                                      *first, last_pt_in_block, *uses);
+                Some(ProtoRangeFrag { uses, first, last:_ }) => {
+                    let frag = mkRangeFrag(blocks, bix,
+                                           *first, last_pt_in_block, *uses);
                     tmpResultVec.push((*r, frag));
                 }
             }
@@ -635,13 +640,13 @@ impl Func {
             state.remove(r);
         }
 
-        // Finally, round up any remaining ProtoFrags left in |state|.
+        // Finally, round up any remaining ProtoRangeFrags left in |state|.
         for (r, pf) in state.iter() {
             //println!("QQQQ post: leftover: {} {}", r.show(), pf.show());
             if pf.first == pf.last {
                 debug_assert!(pf.uses == 1);
             }
-            let frag = mkFrag(blocks, bix, pf.first, pf.last, pf.uses);
+            let frag = mkRangeFrag(blocks, bix, pf.first, pf.last, pf.uses);
             //println!("QQQQ post: leftover: {}", (r,frag).show());
             tmpResultVec.push((*r, frag));
         }
@@ -651,7 +656,7 @@ impl Func {
         // vector.
         for (r, frag) in tmpResultVec {
             outFEnv.push(frag);
-            let new_fix = mkFragIx(outFEnv.len() as u32 - 1);
+            let new_fix = mkRangeFragIx(outFEnv.len() as u32 - 1);
             match outMap.get_mut(&r) {
                 None => { outMap.insert(r, vec![new_fix]); },
                 Some(fragVec) => { fragVec.push(new_fix); }
@@ -660,17 +665,18 @@ impl Func {
     }
 
     #[inline(never)]
-    fn get_Frags(&self,
-                 livein_sets_per_block:  &TVec::<BlockIx, Set<Reg>>,
-                 liveout_sets_per_block: &TVec::<BlockIx, Set<Reg>>
-                ) -> (Map::<Reg, Vec<FragIx>>, Vec_Frag)
+    fn get_RangeFrags(
+           &self,
+           livein_sets_per_block:  &TypedIxVec::<BlockIx, Set<Reg>>,
+           liveout_sets_per_block: &TypedIxVec::<BlockIx, Set<Reg>>
+       ) -> (Map::<Reg, Vec<RangeFragIx>>, Vec_RangeFrag)
     {
         debug_assert!(livein_sets_per_block.len()  == self.blocks.len());
         debug_assert!(liveout_sets_per_block.len() == self.blocks.len());
-        let mut resMap  = Map::<Reg, Vec<FragIx>>::default();
-        let mut resFEnv = Vec_Frag::new();
+        let mut resMap  = Map::<Reg, Vec<RangeFragIx>>::default();
+        let mut resFEnv = Vec_RangeFrag::new();
         for bix in mkBlockIx(0) .dotdot( mkBlockIx(self.blocks.len()) ) {
-            self.get_Frags_for_block(bix,
+            self.get_RangeFrags_for_block(bix,
                                      &livein_sets_per_block[bix],
                                      &liveout_sets_per_block[bix],
                                      &mut resMap, &mut resFEnv);
@@ -681,22 +687,23 @@ impl Func {
 
 
 //=============================================================================
-// Merging of Frags, producing the final LRs, minus metrics
+// Merging of RangeFrags, producing the final LRs, minus metrics
 
 #[inline(never)]
-fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
-               frag_env: &Vec_Frag,
+fn merge_RangeFrags(fragIx_vecs_per_reg: &Map::<Reg, Vec<RangeFragIx>>,
+               frag_env: &Vec_RangeFrag,
                cfg_info: &CFGInfo)
-               -> (Vec_RLR, Vec_VLR)
+               -> (Vec_RealRange, Vec_VirtualRange)
 {
-    let mut resR = Vec_RLR::new();
-    let mut resV = Vec_VLR::new();
+    let mut resR = Vec_RealRange::new();
+    let mut resV = Vec_VirtualRange::new();
     for (reg, all_fragIxs_for_reg) in fragIx_vecs_per_reg.iter() {
 
         // BEGIN merge |all_fragIxs_for_reg| entries as much as possible.
         // Each |state| entry has four components:
         //    (1) An is-this-entry-still-valid flag
-        //    (2) A set of FragIxs.  These should refer to disjoint Frags.
+        //    (2) A set of RangeFragIxs.  These should refer to disjoint
+        //        RangeFrags.
         //    (3) A set of blocks, which are those corresponding to (2)
         //        that are LiveIn or Thru (== have an inbound value)
         //    (4) A set of blocks, which are the union of the successors of
@@ -704,14 +711,14 @@ fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
         //        (== have an outbound value)
         struct MergeGroup {
             valid: bool,
-            fragIxs: Set::<FragIx>,
+            fragIxs: Set::<RangeFragIx>,
             live_in_blocks: Set::<BlockIx>,
             succs_of_live_out_blocks: Set::<BlockIx>
         }
 
         let mut state = Vec::<MergeGroup>::new();
 
-        // Create the initial state by giving each FragIx its own Vec, and
+        // Create the initial state by giving each RangeFragIx its own Vec, and
         // tagging it with its interface blocks.
         for fix in all_fragIxs_for_reg {
             let mut live_in_blocks = Set::<BlockIx>::empty();
@@ -720,15 +727,15 @@ fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
             let frag_bix = frag.bix;
             let frag_succ_bixes = &cfg_info.succ_map[frag_bix];
             match frag.kind {
-                FragKind::Local => {
+                RangeFragKind::Local => {
                 },
-                FragKind::LiveIn => {
+                RangeFragKind::LiveIn => {
                     live_in_blocks.insert(frag_bix);
                 },
-                FragKind::LiveOut => {
+                RangeFragKind::LiveOut => {
                     succs_of_live_out_blocks.union(frag_succ_bixes);
                 },
-                FragKind::Thru => {
+                RangeFragKind::Thru => {
                     live_in_blocks.insert(frag_bix);
                     succs_of_live_out_blocks.union(frag_succ_bixes);
                 }
@@ -780,20 +787,20 @@ fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
             }
         }
 
-        // Harvest the merged Frag sets from |state|, and turn them into LRs
-        // of the appropriate flavour.
+        // Harvest the merged RangeFrag sets from |state|, and turn them into
+        // RealRanges or VirtualRanges.
         for MergeGroup { valid, fragIxs, .. } in state {
             if !valid {
                 continue;
             }
-            let sfrags = SortedFragIxs::new(&fragIxs.to_vec(), &frag_env);
+            let sfrags = SortedRangeFragIxs::new(&fragIxs.to_vec(), &frag_env);
             let size = 0;
-            let cost = Some(0.0);
+            let spillCost = Some(0.0);
             if reg.isVirtual() {
-                resV.push(VLR { vreg: reg.toVReg(), rreg: None,
-                                sfrags, size, cost });
+                resV.push(VirtualRange { vreg: reg.toVirtualReg(), rreg: None,
+                                         sfrags, size, spillCost });
             } else {
-                resR.push(RLR { rreg: reg.toRReg(), sfrags });
+                resR.push(RealRange { rreg: reg.toRealReg(), sfrags });
             }
         }
 
@@ -805,26 +812,26 @@ fn merge_Frags(fragIx_vecs_per_reg: &Map::<Reg, Vec<FragIx>>,
 
 
 //=============================================================================
-// Finalising of VLRs, by setting the |size| and |cost| metrics.
+// Finalising of VirtualRanges, by setting the |size| and |spillCost| metrics.
 
 // |size|: this is simple.  Simply sum the size of the individual fragments.
 // Note that this must produce a value > 0 for a dead write, hence the "+1".
 //
-// |cost|: try to estimate the number of spills and reloads that would result
-// from spilling the VLR, thusly:
+// |spillCost|: try to estimate the number of spills and reloads that would
+// result from spilling the VirtualRange, thusly:
 //    sum, for each frag
-//        # mentions of the VReg in the frag
-//            (that's the per-frag, per pass spill cost)
+//        # mentions of the VirtualReg in the frag
+//            (that's the per-frag, per pass spill spillCost)
 //        *
 //        the estimated execution count of the containing block
 //
 // all the while being very careful to avoid overflow.
 #[inline(never)]
-fn set_VLR_metrics(vlrs: &mut Vec_VLR,
-                   fenv: &Vec_Frag, blocks: &Vec_Block)
+fn set_VirtualRange_metrics(vlrs: &mut Vec_VirtualRange,
+                            fenv: &Vec_RangeFrag, blocks: &Vec_Block)
 {
     for vlr in vlrs.iter_mut() {
-        debug_assert!(vlr.size == 0 && vlr.cost == Some(0.0));
+        debug_assert!(vlr.size == 0 && vlr.spillCost == Some(0.0));
         debug_assert!(vlr.rreg.is_none());
         let mut tot_size: u32 = 0;
         let mut tot_cost: f32 = 0.0;
@@ -843,7 +850,7 @@ fn set_VLR_metrics(vlrs: &mut Vec_VLR,
             if tot_size > 0xFFFF { tot_size = 0xFFFF; }
 
             // tot_cost is a float, so no such paranoia there.
-            tot_cost += frag.count as f32 * blocks[frag.bix].eef as f32;
+            tot_cost += frag.count as f32 * blocks[frag.bix].estFreq as f32;
         }
 
         debug_assert!(tot_cost >= 0.0);
@@ -855,13 +862,14 @@ fn set_VLR_metrics(vlrs: &mut Vec_VLR,
         // short LRs in competition for registers.  This seems a bit of a hack
         // to me, but hey ..
         tot_cost /= tot_size as f32;
-        vlr.cost = Some(tot_cost);
+        vlr.spillCost = Some(tot_cost);
     }
 }
 
 #[inline(never)]
 pub fn run_analysis(func: &mut Func)
-                    -> Result<(Vec_RLR, Vec_VLR, Vec_Frag), String> {
+                    -> Result<(Vec_RealRange, Vec_VirtualRange, Vec_RangeFrag),
+                              String> {
 
     let (def_sets_per_block, use_sets_per_block) = func.calc_def_and_use();
     debug_assert!(def_sets_per_block.len() == func.blocks.len());
@@ -898,13 +906,13 @@ pub fn run_analysis(func: &mut Func)
 
     // Annotate each Block with its estimated execution frequency
     for bix in mkBlockIx(0) .dotdot( mkBlockIx(func.blocks.len()) ) {
-        let mut eef = 1;
+        let mut estFreq = 1;
         let mut depth = cfg_info.depth_map[bix];
         if depth > 3 { depth = 3; }
         for i in 0 .. depth {
-            eef *= 10;
+            estFreq *= 10;
         }
-        func.blocks[bix].eef = eef;
+        func.blocks[bix].estFreq = estFreq;
     }
 
     let (livein_sets_per_block, liveout_sets_per_block) =
@@ -928,12 +936,12 @@ pub fn run_analysis(func: &mut Func)
     }
 
     let (fragIxs_per_reg, mut frag_env) =
-        func.get_Frags(&livein_sets_per_block, &liveout_sets_per_block);
+        func.get_RangeFrags(&livein_sets_per_block, &liveout_sets_per_block);
 
     println!("");
     n = 0;
     for frag in frag_env.iter() {
-        println!("{:<3}   {}", mkFragIx(n).show(), frag.show());
+        println!("{:<3}   {}", mkRangeFragIx(n).show(), frag.show());
         n += 1;
     }
 
@@ -943,20 +951,20 @@ pub fn run_analysis(func: &mut Func)
     }
 
     let (rlr_env, mut vlr_env)
-        = merge_Frags(&fragIxs_per_reg, &frag_env, &cfg_info);
-    set_VLR_metrics(&mut vlr_env, &frag_env, &func.blocks);
+        = merge_RangeFrags(&fragIxs_per_reg, &frag_env, &cfg_info);
+    set_VirtualRange_metrics(&mut vlr_env, &frag_env, &func.blocks);
 
     println!("");
     n = 0;
     for rlr in rlr_env.iter() {
-        println!("{:<4}   {}", mkRLRIx(n).show(), rlr.show());
+        println!("{:<4}   {}", mkRealRangeIx(n).show(), rlr.show());
         n += 1;
     }
 
     println!("");
     n = 0;
     for vlr in vlr_env.iter() {
-        println!("{:<4}   {}", mkVLRIx(n).show(), vlr.show());
+        println!("{:<4}   {}", mkVirtualRangeIx(n).show(), vlr.show());
         n += 1;
     }
 

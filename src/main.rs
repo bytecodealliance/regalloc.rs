@@ -42,9 +42,9 @@ Performance:
 - Currently we call getRegUsage three times for each insn.  Just do this
   once and cache the results.
 
-- Insn rewrite loop: don't clone mapD; just use it as soon as it's available.
+- Inst rewrite loop: don't clone mapD; just use it as soon as it's available.
 
-- Insn rewrite loop: move cursors forwards at Point granularity so we don't
+- Inst rewrite loop: move cursors forwards at Point granularity so we don't
   have to repeatedly re-scan the groups looking for particular LR kinds?
 */
 
@@ -69,9 +69,9 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 
 use data_structures::{
-    RRegUniverse, make_universe,
-    InsnIx, VReg, RReg, Block, Func, Label, Show, BlockIx, AM,
-    Insn, Reg, Slot, RI, BinOp
+    RealRegUniverse, make_universe,
+    InstIx, VirtualReg, RealReg, Block, Func, Label, Show, BlockIx, AM,
+    Inst, Reg, SpillSlot, RI, BinOp
 };
 
 
@@ -111,9 +111,9 @@ impl Show for Value {
 
 struct IState<'a> {
     func:      &'a Func,
-    nia:       InsnIx, // Program counter ("next instruction address")
+    nia:       InstIx, // Program counter ("next instruction address")
     vregs:     Vec::<Option::<Value>>, // unlimited
-    rregs:     Vec::<Option::<Value>>, // [0 .. maxRRegs)
+    rregs:     Vec::<Option::<Value>>, // [0 .. maxRealRegs)
     mem:       Vec::<Option::<Value>>, // [0 .. maxMem)
     slots:     Vec::<Option::<Value>>, // [0..] Spill slots, no upper limit
     n_insns:   usize,  // Stats: number of insns executed
@@ -122,7 +122,7 @@ struct IState<'a> {
 }
 
 impl<'a> IState<'a> {
-    fn new(func: &'a Func, maxRRegs: usize, maxMem: usize) -> Self {
+    fn new(func: &'a Func, maxRealRegs: usize, maxMem: usize) -> Self {
         let mut state =
             IState {
                 func:      func,
@@ -135,46 +135,48 @@ impl<'a> IState<'a> {
                 n_spills:  0,
                 n_reloads: 0
             };
-        state.rregs.resize(maxRRegs, None);
+        state.rregs.resize(maxRealRegs, None);
         state.mem.resize(maxMem, None);
         state
     }
 
-    fn getRReg(&self, rreg: RReg) -> Value {
+    fn getRealReg(&self, rreg: RealReg) -> Value {
         // No automatic resizing.  If the rreg doesn't exist, just fail.
         match self.rregs.get(rreg.getIndex()) {
             None =>
-                panic!("IState::getRReg: invalid rreg {}", rreg.show()),
+                panic!("IState::getRealReg: invalid rreg {}", rreg.show()),
             Some(None) =>
-                panic!("IState::getRReg: read of uninit rreg {}", rreg.show()),
+                panic!("IState::getRealReg: read of uninit rreg {}",
+                       rreg.show()),
             Some(Some(val))
                 => *val
         }
     }
 
-    fn setRReg(&mut self, rreg: RReg, val: Value) {
+    fn setRealReg(&mut self, rreg: RealReg, val: Value) {
         // No automatic resizing.  If the rreg doesn't exist, just fail.
         match self.rregs.get_mut(rreg.getIndex()) {
             None =>
-                panic!("IState::setRReg: invalid rreg {}", rreg.show()),
+                panic!("IState::setRealReg: invalid rreg {}", rreg.show()),
             Some(valP)
                 => *valP = Some(val)
         }
     }
 
-    fn getVReg(&self, vreg: VReg) -> Value {
+    fn getVirtualReg(&self, vreg: VirtualReg) -> Value {
         // The vector might be too small.  But in that case we'd be
         // reading the vreg uninitialised anyway, so just complain.
         match self.vregs.get(vreg.getIndex()) {
             None |          // indexing error
             Some(None) =>   // entry present, but has never been written
-                panic!("IState::getVReg: read of uninit vreg {}", vreg.show()),
+                panic!("IState::getVirtualReg: read of uninit vreg {}",
+                       vreg.show()),
             Some(Some(val))
                 => *val
         }
     }
 
-    fn setVReg(&mut self, vreg: VReg, val: Value) {
+    fn setVirtualReg(&mut self, vreg: VirtualReg, val: Value) {
         // Auto-resize the vector if necessary
         let ix = vreg.getIndex();
         if ix >= self.vregs.len() {
@@ -184,19 +186,20 @@ impl<'a> IState<'a> {
         self.vregs[ix] = Some(val);
     }
 
-    fn getSlot(&self, slot: Slot) -> Value {
+    fn getSpillSlot(&self, slot: SpillSlot) -> Value {
         // The vector might be too small.  But in that case we'd be
         // reading the slot uninitialised anyway, so just complain.
         match self.slots.get(slot.get_usize()) {
             None |          // indexing error
             Some(None) =>   // entry present, but has never been written
-                panic!("IState::getSlot: read of uninit slot # {}", slot.get()),
+                panic!("IState::getSpillSlot: read of uninit slot # {}",
+                       slot.get()),
             Some(Some(val))
                 => *val
         }
     }
 
-    fn setSlotU32(&mut self, slot: Slot, val: u32) {
+    fn setSpillSlotU32(&mut self, slot: SpillSlot, val: u32) {
         // Auto-resize the vector if necessary
         let ix = slot.get_usize();
         if ix >= self.slots.len() {
@@ -206,7 +209,7 @@ impl<'a> IState<'a> {
         self.slots[ix] = Some(mkU32(val));
     }
 
-    fn setSlotF32(&mut self, slot: Slot, val: f32) {
+    fn setSpillSlotF32(&mut self, slot: SpillSlot, val: f32) {
         // Auto-resize the vector if necessary
         let ix = slot.get_usize();
         if ix >= self.slots.len() {
@@ -218,25 +221,25 @@ impl<'a> IState<'a> {
 
     fn getReg(&self, reg: Reg) -> Value {
         if reg.isVirtual() {
-            self.getVReg(reg.toVReg())
+            self.getVirtualReg(reg.toVirtualReg())
         } else {
-            self.getRReg(reg.toRReg())
+            self.getRealReg(reg.toRealReg())
         }
     }
 
     fn setRegU32(&mut self, reg: Reg, val: u32) {
         if reg.isVirtual() {
-            self.setVReg(reg.toVReg(), mkU32(val));
+            self.setVirtualReg(reg.toVirtualReg(), mkU32(val));
         } else {
-            self.setRReg(reg.toRReg(), mkU32(val));
+            self.setRealReg(reg.toRealReg(), mkU32(val));
         }
     }
 
     fn setRegF32(&mut self, reg: Reg, val: f32) {
         if reg.isVirtual() {
-            self.setVReg(reg.toVReg(), mkF32(val));
+            self.setVirtualReg(reg.toVirtualReg(), mkF32(val));
         } else {
-            self.setRReg(reg.toRReg(), mkF32(val));
+            self.setRealReg(reg.toRealReg(), mkF32(val));
         }
     }
 
@@ -297,54 +300,54 @@ impl<'a> IState<'a> {
 
         let insn = &self.func.insns[iix];
         match insn {
-            Insn::Imm { dst, imm } =>
+            Inst::Imm { dst, imm } =>
                 self.setRegU32(*dst, *imm),
-            Insn::Copy { dst, src } =>
+            Inst::Copy { dst, src } =>
                 self.setRegU32(*dst, self.getReg(*src).toU32()),
-            Insn::BinOp { op, dst, srcL, srcR } => {
+            Inst::BinOp { op, dst, srcL, srcR } => {
                 let srcL_v = self.getReg(*srcL).toU32();
                 let srcR_v = self.getRI(srcR);
                 let dst_v = op.calc(srcL_v, srcR_v);
                 self.setRegU32(*dst, dst_v);
             },
-            Insn::BinOpM { op, dst, srcR } => {
+            Inst::BinOpM { op, dst, srcR } => {
                 let mut dst_v = self.getReg(*dst).toU32();
                 let srcR_v = self.getRI(srcR);
                 dst_v = op.calc(dst_v, srcR_v);
                 self.setRegU32(*dst, dst_v);
             },
-            Insn::Load { dst, addr } => {
+            Inst::Load { dst, addr } => {
                 let addr_v = self.getAM(addr);
                 let dst_v = self.getMem(addr_v).toU32();
                 self.setRegU32(*dst, dst_v);
             },
-            Insn::Store { addr, src } => {
+            Inst::Store { addr, src } => {
                 let addr_v = self.getAM(addr);
                 let src_v  = self.getReg(*src).toU32();
                 self.setMemU32(addr_v, src_v);
             },
-            Insn::Spill { dst, src } => {
-                let src_v = self.getRReg(*src).toU32();
-                self.setSlotU32(*dst, src_v);
+            Inst::Spill { dst, src } => {
+                let src_v = self.getRealReg(*src).toU32();
+                self.setSpillSlotU32(*dst, src_v);
                 self.n_spills += 1;
             },
-            Insn::Reload { dst, src } => {
-                let src_v = self.getSlot(*src).toU32();
+            Inst::Reload { dst, src } => {
+                let src_v = self.getSpillSlot(*src).toU32();
                 self.setRegU32(dst.toReg(), src_v);
                 self.n_reloads += 1;
             },
-            Insn::Goto { target } =>
+            Inst::Goto { target } =>
                 self.nia = self.func.blocks[target.getBlockIx()].start,
-            Insn::GotoCTF { cond, targetT, targetF } => {
+            Inst::GotoCTF { cond, targetT, targetF } => {
                 let target = if self.getReg(*cond).toU32() != 0 { targetT }
                                                            else { targetF };
                 self.nia = self.func.blocks[target.getBlockIx()].start;
             },
-            Insn::PrintS { str } =>
+            Inst::PrintS { str } =>
                 print!("{}", str),
-            Insn::PrintI { reg } =>
+            Inst::PrintI { reg } =>
                 print!("{}", self.getReg(*reg).toU32().show()),
-            Insn::Finish { } =>
+            Inst::Finish { } =>
                 done = true,
             _ => {
                 println!("Interp: unhandled: {}", insn.show());
@@ -356,7 +359,7 @@ impl<'a> IState<'a> {
 }
 
 impl Func {
-    fn run(&self, who: &str, reg_universe: &RRegUniverse) {
+    fn run(&self, who: &str, reg_universe: &RealRegUniverse) {
         println!("");
         println!("Running stage '{}': Func: name='{}' entry='{}'",
                  who, self.name, self.entry.show());

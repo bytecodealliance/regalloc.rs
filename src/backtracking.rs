@@ -1,32 +1,34 @@
 //! Core implementation of the backtracking allocator.
 
 use crate::data_structures::{
-    BlockIx, Set, Func, Map, TVec, mkBlockIx, Reg, FragIx, Vec_Frag,
-    InsnPoint, Show, mkInsnIx, InsnPoint_U, InsnPoint_D, Frag, mkFrag,
-    mkFragIx, Vec_RLR, Vec_VLR, FragKind,
-    SortedFragIxs, RLR, VLR, Vec_Block,
-    VLRIx, mkVLRIx, Slot, mkRReg, InsnIx, Insn, Point, mkInsnPoint,
-    mkSlot, RReg, VReg, i_spill, i_reload, Vec_Insn, Block, InsnPoint_R,
-    InsnPoint_S,
-    RRegUniverse, rc_from_u32
+    BlockIx, Set, Func, Map, TypedIxVec, mkBlockIx, Reg, RangeFragIx,
+    Vec_RangeFrag, InstPoint, Show, mkInstIx, InstPoint_Use, InstPoint_Def,
+    RangeFrag, mkRangeFrag, mkRangeFragIx, Vec_RealRange, Vec_VirtualRange,
+    RangeFragKind, SortedRangeFragIxs, RealRange, VirtualRange, Vec_Block,
+    VirtualRangeIx, mkVirtualRangeIx, SpillSlot, mkRealReg, InstIx, Inst,
+    Point, mkInstPoint, mkSpillSlot, RealReg, VirtualReg, i_spill, i_reload,
+    Vec_Inst, Block, InstPoint_Reload, InstPoint_Spill, RealRegUniverse,
+    rc_from_u32
 };
 use crate::analysis::run_analysis;
 
 
 //=============================================================================
-// The as-yet-unallocated VReg LR prio queue
+// The as-yet-unallocated VirtualReg LR prio queue
 //
-// Relevant methods are parameterised by a VLR env.
+// Relevant methods are parameterised by a VirtualRange env.
 
-struct VLRPrioQ {
-    // The set of as-yet unallocated VLRs.  These are indexes into a VLR env
-    // that is not stored here.  These indices can come and go.
-    unallocated: Vec::<VLRIx>
+struct VirtualRangePrioQ {
+    // The set of as-yet unallocated VirtualRanges.  These are indexes into a
+    // VirtualRange env that is not stored here.  These indices can come and
+    // go.
+    unallocated: Vec::<VirtualRangeIx>
 }
-impl VLRPrioQ {
-    fn new(vlr_env: &Vec_VLR) -> Self {
+impl VirtualRangePrioQ {
+    fn new(vlr_env: &Vec_VirtualRange) -> Self {
         let mut res = Self { unallocated: Vec::new() };
-        for vlrix in mkVLRIx(0) .dotdot( mkVLRIx(vlr_env.len()) ) {
+        for vlrix in mkVirtualRangeIx(0)
+                     .dotdot( mkVirtualRangeIx(vlr_env.len()) ) {
             assert!(vlr_env[vlrix].size > 0);
             res.unallocated.push(vlrix);
         }
@@ -38,17 +40,18 @@ impl VLRPrioQ {
         self.unallocated.is_empty()
     }
 
-    // Add a VLR index.
+    // Add a VirtualRange index.
     #[inline(never)]
-    fn add_VLR(&mut self, vlr_ix: VLRIx) {
+    fn add_VirtualRange(&mut self, vlr_ix: VirtualRangeIx) {
         self.unallocated.push(vlr_ix);
     }
 
-    // Look in |unallocated| to locate the entry referencing the VLR with the
-    // largest |size| value.  Remove the ref from |unallocated| and return the
-    // LRIx for said entry.
+    // Look in |unallocated| to locate the entry referencing the VirtualRange
+    // with the largest |size| value.  Remove the ref from |unallocated| and
+    // return the LRIx for said entry.
     #[inline(never)]
-    fn get_longest_VLR(&mut self, vlr_env: &Vec_VLR) -> Option<VLRIx> {
+    fn get_longest_VirtualRange(&mut self, vlr_env: &Vec_VirtualRange)
+                                -> Option<VirtualRangeIx> {
         if self.unallocated.len() == 0 {
             return None;
         }
@@ -63,7 +66,7 @@ impl VLRPrioQ {
             }
         }
         // We must have found *something* since there was at least one
-        // unallocated VLR still available.
+        // unallocated VirtualRange still available.
         debug_assert!(largestIx < self.unallocated.len());
         debug_assert!(largestSize > 0);
         // What we will return
@@ -76,7 +79,7 @@ impl VLRPrioQ {
     }
 
     #[inline(never)]
-    fn show_with_envs(&self, vlr_env: &Vec_VLR) -> String {
+    fn show_with_envs(&self, vlr_env: &Vec_VirtualRange) -> String {
         let mut res = "".to_string();
         let mut first = true;
         for vlrix in self.unallocated.iter() {
@@ -93,29 +96,30 @@ impl VLRPrioQ {
 //=============================================================================
 // The per-real-register state
 //
-// Relevant methods are expected to be parameterised by the same VLR env as
-// used in calls to |VLRPrioQ|.
+// Relevant methods are expected to be parameterised by the same VirtualRange
+// env as used in calls to |VirtualRangePrioQ|.
 
-struct PerRReg {
-    // The current committed fragments for this RReg.
-    frags_in_use: SortedFragIxs,
+struct PerRealReg {
+    // The current committed fragments for this RealReg.
+    frags_in_use: SortedRangeFragIxs,
 
-    // The VLRs which have been assigned to this RReg, in no particular order.
-    // The union of their frags will be equal to |frags_in_use| only if this
-    // RReg has no RLRs.  If this RReg does have RLRs the aforementioned union
-    // will be exactly the subset of |frags_in_use| not used by the RLRs.
-    vlrixs_assigned: Vec::<VLRIx>
+    // The VirtualRanges which have been assigned to this RealReg, in no
+    // particular order.  The union of their frags will be equal to
+    // |frags_in_use| only if this RealReg has no RealRanges.  If this RealReg
+    // does have RealRanges the aforementioned union will be exactly the
+    // subset of |frags_in_use| not used by the RealRanges.
+    vlrixs_assigned: Vec::<VirtualRangeIx>
 }
-impl PerRReg {
-    fn new(fenv: &Vec_Frag) -> Self {
+impl PerRealReg {
+    fn new(fenv: &Vec_RangeFrag) -> Self {
         Self {
-            frags_in_use: SortedFragIxs::new(&vec![], fenv),
-            vlrixs_assigned: Vec::<VLRIx>::new()
+            frags_in_use: SortedRangeFragIxs::new(&vec![], fenv),
+            vlrixs_assigned: Vec::<VirtualRangeIx>::new()
         }
     }
 
     #[inline(never)]
-    fn add_RLR(&mut self, to_add: &RLR, fenv: &Vec_Frag) {
+    fn add_RealRange(&mut self, to_add: &RealRange, fenv: &Vec_RangeFrag) {
         // Commit this register to |to_add|, irrevocably.  Don't add it to
         // |vlrixs_assigned| since we will never want to later evict the
         // assignment.
@@ -123,22 +127,22 @@ impl PerRReg {
     }
 
     #[inline(never)]
-    fn can_add_VLR_without_eviction(&self, to_add: &VLR,
-                                    fenv: &Vec_Frag) -> bool {
+    fn can_add_VirtualRange_without_eviction(&self, to_add: &VirtualRange,
+                                    fenv: &Vec_RangeFrag) -> bool {
         self.frags_in_use.can_add(&to_add.sfrags, fenv)
     }
 
     #[inline(never)]
-    fn add_VLR(&mut self, to_add_vlrix: VLRIx,
-               vlr_env: &Vec_VLR, fenv: &Vec_Frag) {
+    fn add_VirtualRange(&mut self, to_add_vlrix: VirtualRangeIx,
+               vlr_env: &Vec_VirtualRange, fenv: &Vec_RangeFrag) {
         let vlr = &vlr_env[to_add_vlrix];
         self.frags_in_use.add(&vlr.sfrags, fenv);
         self.vlrixs_assigned.push(to_add_vlrix);
     }
 
     #[inline(never)]
-    fn del_VLR(&mut self, to_del_vlrix: VLRIx,
-               vlr_env: &Vec_VLR, fenv: &Vec_Frag) {
+    fn del_VirtualRange(&mut self, to_del_vlrix: VirtualRangeIx,
+               vlr_env: &Vec_VirtualRange, fenv: &Vec_RangeFrag) {
         debug_assert!(self.vlrixs_assigned.len() > 0);
         // Remove it from |vlrixs_assigned|
         let mut found = None;
@@ -153,7 +157,7 @@ impl PerRReg {
                 = self.vlrixs_assigned[self.vlrixs_assigned.len() - 1];
             self.vlrixs_assigned.remove(self.vlrixs_assigned.len() - 1);
         } else {
-            panic!("PerRReg: del_VLR on VLR that isn't in vlrixs_assigned");
+            panic!("PerRealReg: del_VirtualRange on VR not in vlrixs_assigned");
         }
         // Remove it from |frags_in_use|
         let vlr = &vlr_env[to_del_vlrix];
@@ -161,14 +165,14 @@ impl PerRReg {
     }
 
     #[inline(never)]
-    fn find_best_evict_VLR(&self, would_like_to_add: &VLR,
-                           vlr_env: &Vec_VLR,
-                           frag_env: &Vec_Frag)
-                           -> Option<(VLRIx, f32)> {
+    fn find_best_evict_VirtualRange(&self, would_like_to_add: &VirtualRange,
+                           vlr_env: &Vec_VirtualRange,
+                           frag_env: &Vec_RangeFrag)
+                           -> Option<(VirtualRangeIx, f32)> {
         // |would_like_to_add| presumably doesn't fit here.  See if eviction
         // of any of the existing LRs would make it allocable, and if so
-        // return that LR and its cost.  Valid candidates VLRs must meet
-        // the following criteria:
+        // return that LR and its cost.  Valid candidates VirtualRanges must
+        // meet the following criteria:
         // - must be assigned to this register (obviously)
         // - must have a non-infinite spill cost
         //   (since we don't want to eject spill/reload LRs)
@@ -176,14 +180,14 @@ impl PerRReg {
         //   (so as to guarantee forward progress)
         // - removal of it must actually make |would_like_to_add| allocable
         //   (otherwise all this is pointless)
-        let mut best_so_far: Option<(VLRIx, f32)> = None;
+        let mut best_so_far: Option<(VirtualRangeIx, f32)> = None;
         for cand_vlrix in &self.vlrixs_assigned {
             let cand_vlr = &vlr_env[*cand_vlrix];
-            if cand_vlr.cost.is_none() {
+            if cand_vlr.spillCost.is_none() {
                 continue;
             }
-            let cand_cost = cand_vlr.cost.unwrap();
-            if !cost_is_less(Some(cand_cost), would_like_to_add.cost) {
+            let cand_cost = cand_vlr.spillCost.unwrap();
+            if !cost_is_less(Some(cand_cost), would_like_to_add.spillCost) {
                 continue;
             }
             if !self.frags_in_use
@@ -211,11 +215,11 @@ impl PerRReg {
     }
 
     #[inline(never)]
-    fn show1_with_envs(&self, fenv: &Vec_Frag) -> String {
+    fn show1_with_envs(&self, fenv: &Vec_RangeFrag) -> String {
         "in_use:   ".to_string() + &self.frags_in_use.show_with_fenv(&fenv)
     }
     #[inline(never)]
-    fn show2_with_envs(&self, fenv: &Vec_Frag) -> String {
+    fn show2_with_envs(&self, fenv: &Vec_RangeFrag) -> String {
         "assigned: ".to_string() + &self.vlrixs_assigned.show()
     }
 }
@@ -238,8 +242,8 @@ fn cost_is_less(cost1: Option<f32>, cost2: Option<f32>) -> bool {
 //=============================================================================
 // Edit list items
 
-// VLRs created by spilling all pertain to a single InsnIx.  But within that
-// InsnIx, there are three kinds of "bridges":
+// VirtualRanges created by spilling all pertain to a single InstIx.  But
+// within that InstIx, there are three kinds of "bridges":
 #[derive(PartialEq)]
 enum BridgeKind {
     RtoU, // A bridge for a USE.  This connects the reload to the use.
@@ -266,12 +270,12 @@ struct EditListItem {
     // multiple items for the same location, then it is assumed that the order
     // in which they execute isn't important.
     //
-    // Some of the relevant info can be found via the VLRIx link:
+    // Some of the relevant info can be found via the VirtualRangeIx link:
     // * the real reg involved
-    // * the place where the insn should go, since the VLR should only have
-    //   one Frag, and we can deduce the correct location from that.
-    slot:  Slot,
-    vlrix: VLRIx,
+    // * the place where the insn should go, since the VirtualRange should only
+    //   have one RangeFrag, and we can deduce the correct location from that.
+    slot:  SpillSlot,
+    vlrix: VirtualRangeIx,
     kind:  BridgeKind
 }
 impl Show for EditListItem {
@@ -288,19 +292,19 @@ impl Show for EditListItem {
 
 #[inline(never)]
 fn print_RA_state(who: &str,
-                  universe: &RRegUniverse,
+                  universe: &RealRegUniverse,
                   // State components
-                  prioQ: &VLRPrioQ, perRReg: &Vec::<PerRReg>,
+                  prioQ: &VirtualRangePrioQ, perRealReg: &Vec::<PerRealReg>,
                   editList: &Vec::<EditListItem>,
                   // The context (environment)
-                  vlr_env: &Vec_VLR, frag_env: &Vec_Frag)
+                  vlr_env: &Vec_VirtualRange, frag_env: &Vec_RangeFrag)
 {
     println!("<<<<====---- RA state at '{}' ----====", who);
-    for ix in 0 .. perRReg.len() {
+    for ix in 0 .. perRealReg.len() {
         println!("{:<4}   {}\n      {}",
                  universe.regs[ix].1,
-                 &perRReg[ix].show1_with_envs(&frag_env),
-                 &perRReg[ix].show2_with_envs(&frag_env));
+                 &perRealReg[ix].show1_with_envs(&frag_env),
+                 &perRealReg[ix].show2_with_envs(&frag_env));
         println!("");
     }
     if !prioQ.is_empty() {
@@ -317,32 +321,32 @@ fn print_RA_state(who: &str,
 // Allocator top level
 
 /* (const) For each virtual live range
-   - its sorted Frags
+   - its sorted RangeFrags
    - its total size
    - its spill cost
    - (eventually) its assigned real register
-   New VLRs are created as we go, but existing ones are unchanged, apart from
-   being tagged with its assigned real register.
+   New VirtualRanges are created as we go, but existing ones are unchanged,
+   apart from being tagged with its assigned real register.
 
    (mut) For each real register
-   - the sorted Frags assigned to it (todo: rm the M)
+   - the sorted RangeFrags assigned to it (todo: rm the M)
    - the virtual LR indices assigned to it.  This is so we can eject
-     a VLR from the commitment, as needed
+     a VirtualRange from the commitment, as needed
 
-   (mut) the set of VLRs not yet allocated, prioritised by total size
+   (mut) the set of VirtualRanges not yet allocated, prioritised by total size
 
    (mut) the edit list that is produced
 */
 /*
-fn show_commit_tab(commit_tab: &Vec::<SortedFragIxs>,
+fn show_commit_tab(commit_tab: &Vec::<SortedRangeFragIxs>,
                    who: &str,
-                   context: &Vec_Frag) -> String {
+                   context: &Vec_RangeFrag) -> String {
     let mut res = "Commit Table at '".to_string()
                   + &who.to_string() + &"'\n".to_string();
     let mut rregNo = 0;
     for smf in commit_tab.iter() {
         res += &"  ".to_string();
-        res += &mkRReg(rregNo).show();
+        res += &mkRealReg(rregNo).show();
         res += &" ".to_string();
         res += &smf.show_with_fenv(&context);
         res += &"\n".to_string();
@@ -354,13 +358,13 @@ fn show_commit_tab(commit_tab: &Vec::<SortedFragIxs>,
 
 
 // Allocator top level.  |func| is modified so that, when this function
-// returns, it will contain no VReg uses.  Allocation can fail if there are
-// insufficient registers to even generate spill/reload code, or if the
-// function appears to have any undefined VReg/RReg uses.
+// returns, it will contain no VirtualReg uses.  Allocation can fail if there
+// are insufficient registers to even generate spill/reload code, or if the
+// function appears to have any undefined VirtualReg/RealReg uses.
 
 #[inline(never)]
 pub fn alloc_main(func: &mut Func,
-                  reg_universe: &RRegUniverse) -> Result<(), String> {
+                  reg_universe: &RealRegUniverse) -> Result<(), String> {
 
     // Note that the analysis phase can fail; hence we propagate any error.
     let (rlr_env, mut vlr_env, mut frag_env) = run_analysis(func)?;
@@ -370,47 +374,50 @@ pub fn alloc_main(func: &mut Func,
     // Create initial state
 
     // This is fully populated by the ::new call.
-    let mut prioQ = VLRPrioQ::new(&vlr_env);
+    let mut prioQ = VirtualRangePrioQ::new(&vlr_env);
 
     // Whereas this is empty.  We have to populate it "by hand", by
     // effectively cloning the allocatable part (prefix) of the universe.
-    let mut perRReg = Vec::<PerRReg>::new();
+    let mut perRealReg = Vec::<PerRealReg>::new();
     for rreg in 0 .. reg_universe.allocable {
-        // Doing this instead of simply .resize avoids needing Clone for PerRReg
-        perRReg.push(PerRReg::new(&frag_env));
+        // Doing this instead of simply .resize avoids needing Clone for
+        // PerRealReg
+        perRealReg.push(PerRealReg::new(&frag_env));
     }
     for rlr in rlr_env.iter() {
         let rregIndex = rlr.rreg.getIndex();
-        // Ignore RLRs for RRegs that are not part of the allocatable set.  As
-        // far as the allocator is concerned, such RRegs simply don't exist.
+        // Ignore RealRanges for RealRegs that are not part of the allocatable
+        // set.  As far as the allocator is concerned, such RealRegs simply
+        // don't exist.
         if rregIndex >= reg_universe.allocable {
             continue;
         }
-        perRReg[rregIndex].add_RLR(&rlr, &frag_env);
+        perRealReg[rregIndex].add_RealRange(&rlr, &frag_env);
     }
 
     let mut editList = Vec::<EditListItem>::new();
     println!("");
     print_RA_state("Initial", &reg_universe,
-                   &prioQ, &perRReg, &editList, &vlr_env, &frag_env);
+                   &prioQ, &perRealReg, &editList, &vlr_env, &frag_env);
 
     // This is technically part of the running state, at least for now.
     let mut spillSlotCtr: u32 = 0;
 
     // Main allocation loop.  Each time round, pull out the longest
-    // unallocated VLR, and do one of three things:
+    // unallocated VirtualRange, and do one of three things:
     //
-    // * allocate it to a RReg, possibly by ejecting some existing allocation,
-    //   but only one with a lower spill cost than this one, or
+    // * allocate it to a RealReg, possibly by ejecting some existing
+    //   allocation, but only one with a lower spill cost than this one, or
     //
-    // * spill it.  This causes the VLR to disappear.  It is replaced by a set
-    //   of very short VLRs to carry the spill and reload values.  Or,
+    // * spill it.  This causes the VirtualRange to disappear.  It is replaced
+    //   by a set of very short VirtualRanges to carry the spill and reload
+    //  values.  Or,
     //
-    // * split it.  This causes it to disappear but be replaced by two VLRs
-    //   which together constitute the original.
+    // * split it.  This causes it to disappear but be replaced by two
+    //   VirtualRanges which together constitute the original.
     println!("");
     println!("-- MAIN ALLOCATION LOOP:");
-    while let Some(curr_vlrix) = prioQ.get_longest_VLR(&vlr_env) {
+    while let Some(curr_vlrix) = prioQ.get_longest_VirtualRange(&vlr_env) {
         let curr_vlr = &vlr_env[curr_vlrix];
 
         println!("-- considering        {}:  {}",
@@ -431,11 +438,12 @@ pub fn alloc_main(func: &mut Func,
                 => (first, last)
         };
 
-        // See if we can find a RReg to which we can assign this VLR without
-        // evicting any previous assignment.
+        // See if we can find a RealReg to which we can assign this
+        // VirtualRange without evicting any previous assignment.
         let mut rreg_to_use = None;
         for i in first_in_rc .. last_in_rc + 1 {
-            if perRReg[i].can_add_VLR_without_eviction(curr_vlr, &frag_env) {
+            if perRealReg[i].can_add_VirtualRange_without_eviction(curr_vlr,
+                                                                   &frag_env) {
                 rreg_to_use = Some(i);
                 break;
             }
@@ -444,7 +452,7 @@ pub fn alloc_main(func: &mut Func,
             // Yay!
             let rreg = reg_universe.regs[rregNo].0;
             println!("--   direct alloc to  {}", rreg.show());
-            perRReg[rregNo].add_VLR(curr_vlrix, &vlr_env, &frag_env);
+            perRealReg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
             debug_assert!(curr_vlr.rreg.is_none());
             // Directly modify bits of vlr_env.  This means we have to abandon
             // the immutable borrow for curr_vlr, but that's OK -- we won't
@@ -455,15 +463,16 @@ pub fn alloc_main(func: &mut Func,
 
         // That didn't work out.  Next, try to see if we can allocate it by
         // evicting some existing allocation that has a lower spill weight.
-        // Search all RRegs to find the candidate with the lowest spill
+        // Search all RealRegs to find the candidate with the lowest spill
         // weight.  This could be expensive.
 
-        // (rregNo for best cand, its VLRIx, and its spill cost)
-        let mut best_so_far: Option<(usize, VLRIx, f32)> = None;
+        // (rregNo for best cand, its VirtualRangeIx, and its spill cost)
+        let mut best_so_far: Option<(usize, VirtualRangeIx, f32)> = None;
         for i in first_in_rc .. last_in_rc + 1 {
-            let mb_better_cand: Option<(VLRIx, f32)>;
+            let mb_better_cand: Option<(VirtualRangeIx, f32)>;
             mb_better_cand =
-                perRReg[i].find_best_evict_VLR(&curr_vlr, &vlr_env, &frag_env);
+                perRealReg[i].find_best_evict_VirtualRange(&curr_vlr,
+                                                           &vlr_env, &frag_env);
             if let Some((cand_vlrix, cand_cost)) = mb_better_cand {
                 // See if this is better than the best so far, and if so take
                 // it.  First some sanity checks:
@@ -474,7 +483,8 @@ pub fn alloc_main(func: &mut Func,
                 // We can only evict a LR with lower spill cost than the LR
                 // we're trying to allocate.  This is really important, if only
                 // to show that the algorithm will actually terminate.
-                debug_assert!(cost_is_less(Some(cand_cost), curr_vlr.cost));
+                debug_assert!(cost_is_less(Some(cand_cost),
+                                           curr_vlr.spillCost));
                 let mut cand_is_better = true;
                 if let Some((_, _, best_cost)) = best_so_far {
                     if cost_is_less(Some(best_cost), Some(cand_cost)) {
@@ -495,13 +505,14 @@ pub fn alloc_main(func: &mut Func,
                      vlrix_to_evict.show(),
                      &vlr_env[vlrix_to_evict].show());
             debug_assert!(vlrix_to_evict != curr_vlrix);
-            perRReg[rregNo].del_VLR(vlrix_to_evict, &vlr_env, &frag_env);
-            prioQ.add_VLR(vlrix_to_evict);
+            perRealReg[rregNo].del_VirtualRange(vlrix_to_evict,
+                                                &vlr_env, &frag_env);
+            prioQ.add_VirtualRange(vlrix_to_evict);
             debug_assert!(vlr_env[vlrix_to_evict].rreg.is_some());
             // .. and reassign.
             let rreg = reg_universe.regs[rregNo].0;
             println!("--   then alloc to    {}", rreg.show());
-            perRReg[rregNo].add_VLR(curr_vlrix, &vlr_env, &frag_env);
+            perRealReg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
             debug_assert!(curr_vlr.rreg.is_none());
             // Directly modify bits of vlr_env.  This means we have to abandon
             // the immutable borrow for curr_vlr, but that's OK -- we won't
@@ -516,48 +527,51 @@ pub fn alloc_main(func: &mut Func,
         println!("--   spill");
 
         // If the live range already pertains to a spill or restore, then
-        // it's Game Over.  The constraints (availability of RRegs vs
+        // it's Game Over.  The constraints (availability of RealRegs vs
         // requirement for them) are impossible to fulfill, and so we cannot
         // generate any valid allocation for this function.
-        if curr_vlr.cost.is_none() {
+        if curr_vlr.spillCost.is_none() {
             return Err("out of registers".to_string());
         }
 
         // Generate a new spill slot number, S
-        /* Spilling vreg V with virtual live range VLR to slot S:
-              for each frag F in VLR {
+        /* Spilling vreg V with virtual live range VirtualRange to slot S:
+              for each frag F in VirtualRange {
                  for each insn I in F.first.iix .. F.last.iix {
                     if I does not mention V
                        continue
                     if I mentions V in a Read role {
                        // invar: I cannot mention V in a Mod role
-                       add new VLR I.reload -> I.use, vreg V, spillcost Inf
-                       add eli @ I.reload V Slot
+                       add new VirtualRange I.reload -> I.use,
+                                            vreg V, spillcost Inf
+                       add eli @ I.reload V SpillSlot
                     }
                     if I mentions V in a Mod role {
                        // invar: I cannot mention V in a Read or Write Role
-                       add new VLR I.reload -> I.spill, Vreg V, spillcost Inf
-                       add eli @ I.reload V Slot
-                       add eli @ I.spill  Slot V
+                       add new VirtualRange I.reload -> I.spill,
+                                            Vreg V, spillcost Inf
+                       add eli @ I.reload V SpillSlot
+                       add eli @ I.spill  SpillSlot V
                     }
                     if I mentions V in a Write role {
                        // invar: I cannot mention V in a Mod role
-                       add new VLR I.def -> I.spill, vreg V, spillcost Inf
-                       add eli @ I.spill V Slot
+                       add new VirtualRange I.def -> I.spill,
+                                            vreg V, spillcost Inf
+                       add eli @ I.spill V SpillSlot
                     }
                  }
               }
         */
-        /* We will be spilling vreg |curr_vlr.reg| with VLR |curr_vlr| to ..
-           well, we better invent a new spill slot number.  Just hand them out
-           sequentially for now. */
+        /* We will be spilling vreg |curr_vlr.reg| with VirtualRange
+           |curr_vlr| to ..  well, we better invent a new spill slot number.
+           Just hand them out sequentially for now. */
 
         // This holds enough info to create reload or spill (or both)
-        // instructions around an instruction that references a VReg that has
-        // been spilled.
+        // instructions around an instruction that references a VirtualReg
+        // that has been spilled.
         struct SpillAndOrReloadInfo {
             bix:  BlockIx, // that |iix| is in
-            iix:  InsnIx,  // this is the Insn we are spilling/reloading for
+            iix:  InstIx,  // this is the Inst we are spilling/reloading for
             kind: BridgeKind // says whether to create a spill or reload or both
         }
         let mut sri_vec = Vec::<SpillAndOrReloadInfo>::new();
@@ -565,9 +579,9 @@ pub fn alloc_main(func: &mut Func,
         let curr_vlr_reg = curr_vlr_vreg.toReg();
 
         for fix in &curr_vlr.sfrags.fragIxs {
-            let frag: &Frag = &frag_env[*fix];
+            let frag: &RangeFrag = &frag_env[*fix];
             for iix in frag.first.iix .dotdot( frag.last.iix.plus(1) ) {
-                let insn: &Insn = &func.insns[iix];
+                let insn: &Inst = &func.insns[iix];
                 let (regs_d, regs_m, regs_u) = insn.getRegUsage();
                 // If this insn doesn't mention the vreg we're spilling for,
                 // move on.
@@ -576,25 +590,26 @@ pub fn alloc_main(func: &mut Func,
                    && !regs_u.contains(curr_vlr_reg) {
                     continue;
                 }
-                // USES: Do we need to create a reload-to-use bridge (VLR) ?
+                // USES: Do we need to create a reload-to-use bridge
+                // (VirtualRange) ?
                 if regs_u.contains(curr_vlr_reg)
-                   && frag.contains(&InsnPoint_U(iix)) {
+                   && frag.contains(&InstPoint_Use(iix)) {
                     debug_assert!(!regs_m.contains(curr_vlr_reg));
-                    // Stash enough info that we can create a new VLR and a
-                    // new edit list entry for the reload.
+                    // Stash enough info that we can create a new VirtualRange
+                    // and a new edit list entry for the reload.
                     let sri = SpillAndOrReloadInfo { bix: frag.bix, iix: iix,
                                                      kind: BridgeKind::RtoU };
                     sri_vec.push(sri);
                 }
                 // MODS: Do we need to create a reload-to-spill bridge?  This
                 // can only happen for instructions which modify a register.
-                // Note this has to be a single VLR, since if it were two (one
-                // for the reload, one for the spill) they could later end up
-                // being assigned to different RRegs, which is obviously
-                // nonsensical.
+                // Note this has to be a single VirtualRange, since if it were
+                // two (one for the reload, one for the spill) they could
+                // later end up being assigned to different RealRegs, which is
+                // obviously nonsensical.
                 if regs_m.contains(curr_vlr_reg)
-                   && frag.contains(&InsnPoint_U(iix))
-                   && frag.contains(&InsnPoint_D(iix)) {
+                   && frag.contains(&InstPoint_Use(iix))
+                   && frag.contains(&InstPoint_Def(iix)) {
                     debug_assert!(!regs_u.contains(curr_vlr_reg));
                     debug_assert!(!regs_d.contains(curr_vlr_reg));
                     let sri = SpillAndOrReloadInfo { bix: frag.bix, iix: iix,
@@ -603,7 +618,7 @@ pub fn alloc_main(func: &mut Func,
                 }
                 // DEFS: Do we need to create a def-to-spill bridge?
                 if regs_d.contains(curr_vlr_reg)
-                   && frag.contains(&InsnPoint_D(iix)) {
+                   && frag.contains(&InstPoint_Def(iix)) {
                     debug_assert!(!regs_m.contains(curr_vlr_reg));
                     let sri = SpillAndOrReloadInfo { bix: frag.bix, iix: iix,
                                                      kind: BridgeKind::DtoS };
@@ -618,37 +633,39 @@ pub fn alloc_main(func: &mut Func,
         for sri in sri_vec {
             // For a spill for a MOD use, the new value will be referenced
             // three times.  For DEF and USE uses, it'll only be ref'd twice.
-            // (I think we don't care about metrics for the new Frags, though)
+            // (I think we don't care about metrics for the new RangeFrags,
+            // though)
             let new_vlr_count =
                 if sri.kind == BridgeKind::RtoS { 3 } else { 2 };
             let (new_vlr_first_pt, new_vlr_last_pt) =
                 match sri.kind {
-                    BridgeKind::RtoU => (Point::R, Point::U),
-                    BridgeKind::RtoS => (Point::R, Point::S),
-                    BridgeKind::DtoS => (Point::D, Point::S)
+                    BridgeKind::RtoU => (Point::Reload, Point::Use),
+                    BridgeKind::RtoS => (Point::Reload, Point::Spill),
+                    BridgeKind::DtoS => (Point::Def,    Point::Spill)
                 };
             let new_vlr_frag
-                = Frag { bix:   sri.bix,
-                         kind:  FragKind::Local,
-                         first: mkInsnPoint(sri.iix, new_vlr_first_pt),
-                         last:  mkInsnPoint(sri.iix, new_vlr_last_pt),
+                = RangeFrag { bix:   sri.bix,
+                         kind:  RangeFragKind::Local,
+                         first: mkInstPoint(sri.iix, new_vlr_first_pt),
+                         last:  mkInstPoint(sri.iix, new_vlr_last_pt),
                          count: new_vlr_count };
-            let new_vlr_fix = mkFragIx(frag_env.len() as u32);
+            let new_vlr_fix = mkRangeFragIx(frag_env.len() as u32);
             frag_env.push(new_vlr_frag);
-            println!("--     new Frag       {}  :=  {}",
+            println!("--     new RangeFrag       {}  :=  {}",
                      &new_vlr_fix.show(), &new_vlr_frag.show());
-            let new_vlr_sfixs = SortedFragIxs::unit(new_vlr_fix, &frag_env);
-            let new_vlr = VLR { vreg: curr_vlr_vreg, rreg: None,
+            let new_vlr_sfixs
+                    = SortedRangeFragIxs::unit(new_vlr_fix, &frag_env);
+            let new_vlr = VirtualRange { vreg: curr_vlr_vreg, rreg: None,
                                 sfrags: new_vlr_sfixs,
-                                size: 1, cost: None/*infinity*/ };
-            let new_vlrix = mkVLRIx(vlr_env.len() as u32);
-            println!("--     new VLR        {}  :=  {}",
+                                size: 1, spillCost: None/*infinity*/ };
+            let new_vlrix = mkVirtualRangeIx(vlr_env.len() as u32);
+            println!("--     new VirtualRange        {}  :=  {}",
                      new_vlrix.show(), &new_vlr.show());
             vlr_env.push(new_vlr);
-            prioQ.add_VLR(new_vlrix);
+            prioQ.add_VirtualRange(new_vlrix);
 
             let new_eli
-                = EditListItem { slot:  mkSlot(spillSlotCtr),
+                = EditListItem { slot:  mkSpillSlot(spillSlotCtr),
                                  vlrix: new_vlrix,
                                  kind:  sri.kind };
             println!("--     new ELI        {}", &new_eli.show());
@@ -660,33 +677,33 @@ pub fn alloc_main(func: &mut Func,
 
     println!("");
     print_RA_state("Final", &reg_universe,
-                   &prioQ, &perRReg, &editList, &vlr_env, &frag_env);
+                   &prioQ, &perRealReg, &editList, &vlr_env, &frag_env);
 
     // -------- Edit the instruction stream --------
 
-    // Gather up a vector of (Frag, VReg, RReg) resulting from the previous
-    // phase.  This fundamentally is the result of the allocation and tells us
-    // how the instruction stream must be edited.  Note it does not take
-    // account of spill or reload instructions.  Dealing with those is
-    // relatively simple and happens later.
+    // Gather up a vector of (RangeFrag, VirtualReg, RealReg) resulting from
+    // the previous phase.  This fundamentally is the result of the allocation
+    // and tells us how the instruction stream must be edited.  Note it does
+    // not take account of spill or reload instructions.  Dealing with those
+    // is relatively simple and happens later.
     //
     // Make two copies of this list, one sorted by the fragment start points
-    // (just the InsnIx numbers, ignoring the Point), and one sorted by
+    // (just the InstIx numbers, ignoring the Point), and one sorted by
     // fragment end points.
 
-    let mut fragMapsByStart = Vec::<(FragIx, VReg, RReg)>::new();
-    let mut fragMapsByEnd   = Vec::<(FragIx, VReg, RReg)>::new();
-    // For each real register ..
+    let mut fragMapsByStart = Vec::<(RangeFragIx, VirtualReg, RealReg)>::new();
+    let mut fragMapsByEnd   = Vec::<(RangeFragIx, VirtualReg, RealReg)>::new();
     // For each real register under our control ..
     for i in 0 .. reg_universe.allocable {
         let rreg = reg_universe.regs[i].0;
-        // .. look at all the VLRs assigned to it.  And for each such VLR ..
-        for vlrix_assigned in &perRReg[i].vlrixs_assigned {
+        // .. look at all the VirtualRanges assigned to it.  And for each such
+        // VirtualRange ..
+        for vlrix_assigned in &perRealReg[i].vlrixs_assigned {
             let vlr_assigned = &vlr_env[*vlrix_assigned];
-            // All the Frags in |vlr_assigned| require |vlr_assigned.reg| to
-            // be mapped to the real reg |i|
+            // All the RangeFrags in |vlr_assigned| require |vlr_assigned.reg|
+            // to be mapped to the real reg |i|
             let vreg = vlr_assigned.vreg;
-            // .. collect up all its constituent Frags.
+            // .. collect up all its constituent RangeFrags.
             for fix in &vlr_assigned.sfrags.fragIxs {
                 let frag = &frag_env[*fix];
                 fragMapsByStart.push((*fix, vreg, rreg));
@@ -713,43 +730,43 @@ pub fn alloc_main(func: &mut Func,
     let mut cursorEnds = 0;
     let mut numEnds = 0;
 
-    let mut map = Map::<VReg, RReg>::default();
+    let mut map = Map::<VirtualReg, RealReg>::default();
 
-    fn showMap(m: &Map::<VReg, RReg>) -> String {
-        let mut vec: Vec::<(&VReg, &RReg)> = m.iter().collect();
+    fn showMap(m: &Map::<VirtualReg, RealReg>) -> String {
+        let mut vec: Vec::<(&VirtualReg, &RealReg)> = m.iter().collect();
         vec.sort_by(|p1, p2| p1.0.partial_cmp(p2.0).unwrap());
         vec.show()
     }
 
-    fn is_sane(frag: &Frag) -> bool {
+    fn is_sane(frag: &RangeFrag) -> bool {
         // "Normal" frag (unrelated to spilling).  No normal frag may start or
         // end at a .s or a .r point.
-        if frag.first.pt.isUorD() && frag.last.pt.isUorD()
+        if frag.first.pt.isUseOrDef() && frag.last.pt.isUseOrDef()
            && frag.first.iix <= frag.last.iix {
                return true;
         }
         // A spill-related ("bridge") frag.  There are three possibilities,
         // and they correspond exactly to |BridgeKind|.
-        if frag.first.pt.isR() && frag.last.pt.isU()
+        if frag.first.pt.isReload() && frag.last.pt.isUse()
            && frag.last.iix == frag.first.iix {
             // BridgeKind::RtoU
             return true;
         }
-        if frag.first.pt.isR() && frag.last.pt.isS()
+        if frag.first.pt.isReload() && frag.last.pt.isSpill()
            && frag.last.iix == frag.first.iix {
             // BridgeKind::RtoS
             return true;
         }
-        if frag.first.pt.isD() && frag.last.pt.isS()
+        if frag.first.pt.isDef() && frag.last.pt.isSpill()
            && frag.last.iix == frag.first.iix {
             // BridgeKind::DtoS
             return true;
         }
-        // None of the above apply.  This Frag is insane \o/
+        // None of the above apply.  This RangeFrag is insane \o/
         false
     }
 
-    for insnIx in mkInsnIx(0) .dotdot( mkInsnIx(func.insns.len()) ) {
+    for insnIx in mkInstIx(0) .dotdot( mkInstIx(func.insns.len()) ) {
         //println!("");
         //println!("QQQQ insn {}: {}",
         //         insnIx, func.insns[insnIx].show());
@@ -782,8 +799,8 @@ pub fn alloc_main(func: &mut Func,
 
         // So now, fragMapsByStart[cursorStarts, +numStarts) are the mappings
         // for fragments that begin at this instruction, in no particular
-        // order.  And fragMapsByEnd[cursorEnd, +numEnd) are the FragIxs for
-        // fragments that end at this instruction.
+        // order.  And fragMapsByEnd[cursorEnd, +numEnd) are the RangeFragIxs
+        // for fragments that end at this instruction.
 
         //println!("insn no {}:", insnIx);
         //for j in cursorStarts .. cursorStarts + numStarts {
@@ -836,7 +853,7 @@ pub fn alloc_main(func: &mut Func,
         //   no frags should end at I.r (it's a reload insn)
         for j in cursorStarts .. cursorStarts + numStarts {
             let frag = &frag_env[ fragMapsByStart[j].0 ];
-            if frag.first.pt.isR() { //////// STARTS at I.r
+            if frag.first.pt.isReload() { //////// STARTS at I.r
                 map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
             }
         }
@@ -847,14 +864,14 @@ pub fn alloc_main(func: &mut Func,
         //   remove frags ending at I.u
         for j in cursorStarts .. cursorStarts + numStarts {
             let frag = &frag_env[ fragMapsByStart[j].0 ];
-            if frag.first.pt.isU() { //////// STARTS at I.u
+            if frag.first.pt.isUse() { //////// STARTS at I.u
                 map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
             }
         }
         let mapU = map.clone();
         for j in cursorEnds .. cursorEnds + numEnds {
             let frag = &frag_env[ fragMapsByEnd[j].0 ];
-            if frag.last.pt.isU() { //////// ENDS at I.U
+            if frag.last.pt.isUse() { //////// ENDS at I.U
                 map.remove(&fragMapsByEnd[j].1);
             }
         }
@@ -865,14 +882,14 @@ pub fn alloc_main(func: &mut Func,
         //   remove frags ending at I.d
         for j in cursorStarts .. cursorStarts + numStarts {
             let frag = &frag_env[ fragMapsByStart[j].0 ];
-            if frag.first.pt.isD() { //////// STARTS at I.d
+            if frag.first.pt.isDef() { //////// STARTS at I.d
                 map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
             }
         }
         let mapD = map.clone();
         for j in cursorEnds .. cursorEnds + numEnds {
             let frag = &frag_env[ fragMapsByEnd[j].0 ];
-            if frag.last.pt.isD() { //////// ENDS at I.d
+            if frag.last.pt.isDef() { //////// ENDS at I.d
                 map.remove(&fragMapsByEnd[j].1);
             }
         }
@@ -882,7 +899,7 @@ pub fn alloc_main(func: &mut Func,
         //   remove frags ending at I.s
         for j in cursorEnds .. cursorEnds + numEnds {
             let frag = &frag_env[ fragMapsByEnd[j].0 ];
-            if frag.last.pt.isS() { //////// ENDS at I.s
+            if frag.last.pt.isSpill() { //////// ENDS at I.s
                 map.remove(&fragMapsByEnd[j].1);
             }
         }
@@ -911,7 +928,7 @@ pub fn alloc_main(func: &mut Func,
     // are missing.  To generate them, go through the "edit list", which
     // contains info on both how to generate the instructions, and where to
     // insert them.
-    let mut spillsAndReloads = Vec::<(InsnPoint, Insn)>::new();
+    let mut spillsAndReloads = Vec::<(InstPoint, Inst)>::new();
     for eli in &editList {
         let vlr = &vlr_env[eli.vlrix];
         let vlr_sfrags = &vlr.sfrags;
@@ -920,16 +937,16 @@ pub fn alloc_main(func: &mut Func,
         let rreg = vlr.rreg.expect("Gen of spill/reload: reg not assigned?!");
         match eli.kind {
             BridgeKind::RtoU => {
-                debug_assert!(vlr_frag.first.pt.isR());
-                debug_assert!(vlr_frag.last.pt.isU());
+                debug_assert!(vlr_frag.first.pt.isReload());
+                debug_assert!(vlr_frag.last.pt.isUse());
                 debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
                 let insnR    = i_reload(rreg, eli.slot);
                 let whereToR = vlr_frag.first;
                 spillsAndReloads.push((whereToR, insnR));
             },
             BridgeKind::RtoS => {
-                debug_assert!(vlr_frag.first.pt.isR());
-                debug_assert!(vlr_frag.last.pt.isS());
+                debug_assert!(vlr_frag.first.pt.isReload());
+                debug_assert!(vlr_frag.last.pt.isSpill());
                 debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
                 let insnR    = i_reload(rreg, eli.slot);
                 let whereToR = vlr_frag.first;
@@ -939,8 +956,8 @@ pub fn alloc_main(func: &mut Func,
                 spillsAndReloads.push((whereToS, insnS));
             },
             BridgeKind::DtoS => {
-                debug_assert!(vlr_frag.first.pt.isD());
-                debug_assert!(vlr_frag.last.pt.isS());
+                debug_assert!(vlr_frag.first.pt.isDef());
+                debug_assert!(vlr_frag.last.pt.isSpill());
                 debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
                 let insnS = i_spill(eli.slot, rreg);
                 let whereToS = vlr_frag.last;
@@ -955,7 +972,7 @@ pub fn alloc_main(func: &mut Func,
 
     // Construct the final code by interleaving the mapped code with the
     // spills and reloads.  To do that requires having the latter sorted by
-    // InsnPoint.
+    // InstPoint.
     //
     // We also need to examine and update Func::blocks.  This is assumed to
     // be arranged in ascending order of the Block::start fields.
@@ -966,10 +983,10 @@ pub fn alloc_main(func: &mut Func,
     let mut curSnR = 0; // cursor in |spillsAndReloads|
     let mut curB = mkBlockIx(0); // cursor in Func::blocks
 
-    let mut newInsns = Vec_Insn::new();
+    let mut newInsts = Vec_Inst::new();
     let mut newBlocks = Vec_Block::new();
 
-    for iix in mkInsnIx(0) .dotdot( mkInsnIx(func.insns.len()) ) {
+    for iix in mkInstIx(0) .dotdot( mkInstIx(func.insns.len()) ) {
 
         // Is |iix| the first instruction in a block?  Meaning, are we
         // starting a new block?
@@ -977,24 +994,24 @@ pub fn alloc_main(func: &mut Func,
         if func.blocks[curB].start == iix {
             let oldBlock = &func.blocks[curB];
             let newBlock = Block { name: oldBlock.name.clone(),
-                                   start: mkInsnIx(newInsns.len() as u32),
-                                   len: 0, eef: oldBlock.eef };
+                                   start: mkInstIx(newInsts.len() as u32),
+                                   len: 0, estFreq: oldBlock.estFreq };
             newBlocks.push(newBlock);
 
         }
 
         // Copy reloads for this insn
         while curSnR < spillsAndReloads.len()
-              && spillsAndReloads[curSnR].0 == InsnPoint_R(iix) {
-            newInsns.push(spillsAndReloads[curSnR].1.clone());
+              && spillsAndReloads[curSnR].0 == InstPoint_Reload(iix) {
+            newInsts.push(spillsAndReloads[curSnR].1.clone());
             curSnR += 1;
         }
         // And the insn itself
-        newInsns.push(func.insns[iix].clone());
+        newInsts.push(func.insns[iix].clone());
         // Copy spills for this insn
         while curSnR < spillsAndReloads.len()
-              && spillsAndReloads[curSnR].0 == InsnPoint_S(iix) {
-            newInsns.push(spillsAndReloads[curSnR].1.clone());
+              && spillsAndReloads[curSnR].0 == InstPoint_Spill(iix) {
+            newInsts.push(spillsAndReloads[curSnR].1.clone());
             curSnR += 1;
         }
 
@@ -1003,7 +1020,7 @@ pub fn alloc_main(func: &mut Func,
             debug_assert!(curB.get() < func.blocks.len());
             debug_assert!(newBlocks.len() > 0);
             debug_assert!(curB.get() == newBlocks.len() - 1);
-            newBlocks[curB].len = newInsns.len() as u32
+            newBlocks[curB].len = newInsts.len() as u32
                                   - newBlocks[curB].start.get();
             curB = curB.plus(1);
         }
@@ -1013,14 +1030,14 @@ pub fn alloc_main(func: &mut Func,
     debug_assert!(curB.get() == func.blocks.len());
     debug_assert!(curB.get() == newBlocks.len());
 
-    func.insns = newInsns;
+    func.insns = newInsts;
     func.blocks = newBlocks;
 
     // And we're done!
     //
     // Curiously, there's no need to fix up Labels after having merged the
     // spill and original instructions.  That's because Labels refer to
-    // Blocks, not to individual Insns.  Obviously in a real system things are
+    // Blocks, not to individual Insts.  Obviously in a real system things are
     // different :-/
     Ok(())
 }

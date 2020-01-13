@@ -2,11 +2,11 @@
 /// Add new ones there.
 
 use crate::data_structures::{
-    Insn, Func, Reg, AM, RI, Vec_Insn,
-    mkVReg, mkInsnIx, Label, is_goto_insn,
-    Slot, RReg, BinOp, mk_Vec_Insn, RI_I,
-    mkRReg, AM_R, AM_RI, AM_RR, RI_R,
-    RC,
+    Inst, Func, Reg, AM, RI, Vec_Inst,
+    mkVirtualReg, mkInstIx, Label, is_goto_insn,
+    SpillSlot, RealReg, BinOp, mk_Vec_Inst, RI_I,
+    mkRealReg, AM_R, AM_RI, AM_RR, RI_R,
+    RegClass,
     i_imm, i_copy, i_load, i_store, i_print_s, i_print_i, i_add, i_sub, i_mul,
     i_mod, i_shr, i_and, i_cmp_eq, i_cmp_lt, i_cmp_le, i_cmp_ge, i_cmp_gt,
     i_addm, i_subm, i_goto, i_goto_ctf, i_finish,
@@ -15,7 +15,7 @@ use crate::data_structures::{
 
 
 enum Stmt {
-    Vanilla     { insn: Insn },
+    Vanilla     { insn: Inst },
     IfThen      { cond: Reg, stmts_t: Vec::<Stmt> },
     IfThenElse  { cond: Reg,
                   stmts_t: Vec::<Stmt>, stmts_e: Vec::<Stmt> },
@@ -38,7 +38,7 @@ fn s_while_do(cond: Reg, stmts: Vec::<Stmt>) -> Stmt {
     Stmt::WhileDo { cond, stmts }
 }
 
-fn s_vanilla(insn: Insn) -> Stmt {
+fn s_vanilla(insn: Inst) -> Stmt {
     Stmt::Vanilla { insn }
 }
 
@@ -109,9 +109,9 @@ fn s_subm(dst: Reg, srcR: RI) -> Stmt {
 
 struct Blockifier {
     name:    String,
-    blocks:  Vec::<Vec_Insn>,
+    blocks:  Vec::<Vec_Inst>,
     currBNo: usize,  // index into |blocks|
-    nVRegs:  u32
+    nVirtualRegs:  u32
 }
 
 impl Blockifier {
@@ -120,14 +120,14 @@ impl Blockifier {
             name: name.to_string(),
             blocks: vec![],
             currBNo: 0,
-            nVRegs: 0
+            nVirtualRegs: 0
         }
     }
 
-    // Get a new VReg name
-    fn newVReg(&mut self, rc: RC) -> Reg {
-        let v = mkVReg(rc, self.nVRegs);
-        self.nVRegs += 1;
+    // Get a new VirtualReg name
+    fn newVirtualReg(&mut self, rc: RegClass) -> Reg {
+        let v = mkVirtualReg(rc, self.nVirtualRegs);
+        self.nVirtualRegs += 1;
         v
     }
 
@@ -136,7 +136,7 @@ impl Blockifier {
     fn blockify(&mut self, stmts: Vec::<Stmt>) -> (usize, usize) {
         let entryBNo = self.blocks.len();
         let mut currBNo = entryBNo;
-        self.blocks.push(Vec_Insn::new());
+        self.blocks.push(Vec_Inst::new());
         for s in stmts {
             match s {
                 Stmt::Vanilla { insn } => {
@@ -146,7 +146,7 @@ impl Blockifier {
                     let (t_ent, t_exit) = self.blockify(stmts_t);
                     let (e_ent, e_exit) = self.blockify(stmts_e);
                     let cont = self.blocks.len();
-                    self.blocks.push(Vec_Insn::new());
+                    self.blocks.push(Vec_Inst::new());
                     self.blocks[t_exit].push(i_goto(&mkTextLabel(cont)));
                     self.blocks[e_exit].push(i_goto(&mkTextLabel(cont)));
                     self.blocks[currBNo].push(i_goto_ctf(cond,
@@ -158,7 +158,7 @@ impl Blockifier {
                     let (s_ent, s_exit) = self.blockify(stmts);
                     self.blocks[currBNo].push(i_goto(&mkTextLabel(s_ent)));
                     let cont = self.blocks.len();
-                    self.blocks.push(Vec_Insn::new());
+                    self.blocks.push(Vec_Inst::new());
                     self.blocks[s_exit].push(i_goto_ctf(cond,
                                                         &mkTextLabel(cont),
                                                         &mkTextLabel(s_ent)));
@@ -166,12 +166,12 @@ impl Blockifier {
                 },
                 Stmt::WhileDo { cond, stmts } => {
                     let condblock = self.blocks.len();
-                    self.blocks.push(Vec_Insn::new());
+                    self.blocks.push(Vec_Inst::new());
                     self.blocks[currBNo].push(i_goto(&mkTextLabel(condblock)));
                     let (s_ent, s_exit) = self.blockify(stmts);
                     self.blocks[s_exit].push(i_goto(&mkTextLabel(condblock)));
                     let cont = self.blocks.len();
-                    self.blocks.push(Vec_Insn::new());
+                    self.blocks.push(Vec_Inst::new());
                     self.blocks[condblock].push(i_goto_ctf(cond,
                                                            &mkTextLabel(s_ent),
                                                            &mkTextLabel(cont)));
@@ -189,11 +189,11 @@ impl Blockifier {
         let (ent_bno, exit_bno) = self.blockify(stmts);
         self.blocks[exit_bno].push(i_finish());
 
-        let mut blockz = Vec::<Vec_Insn>::new();
+        let mut blockz = Vec::<Vec_Inst>::new();
         std::mem::swap(&mut self.blocks, &mut blockz);
 
         // BEGIN optionally, short out blocks that merely jump somewhere else
-        let mut cleanedUp = Vec::<Option<Vec_Insn>>::new();
+        let mut cleanedUp = Vec::<Option<Vec_Inst>>::new();
         for ivec in blockz {
             cleanedUp.push(Some(ivec));
         }
@@ -217,7 +217,7 @@ impl Blockifier {
 
                 debug_assert!(b.len() > 0);
                 if b.len() == 1 {
-                    if let Some(targetLabel) = is_goto_insn(&b[mkInsnIx(0)]) {
+                    if let Some(targetLabel) = is_goto_insn(&b[mkInstIx(0)]) {
                         if let Label::Unresolved { name } = targetLabel {
                             redir = Some((n - 1, name));
                             break;
@@ -239,7 +239,7 @@ impl Blockifier {
                             None => { },
                             Some(ref mut insns) => {
                                 let mmm = insns.len();
-                                for j in mkInsnIx(0) .dotdot( mkInsnIx(mmm) ) {
+                                for j in mkInstIx(0) .dotdot( mkInstIx(mmm) ) {
                                     remapControlFlowTarget(&mut insns[j],
                                                            &mkTextLabel(from),
                                                            &to);
@@ -261,7 +261,7 @@ impl Blockifier {
 
         // Convert (ent_bno, exit_bno, cleanedUp) into a Func
         let mut func = Func::new(&self.name, &mkTextLabel(ent_bno));
-        func.nVRegs = 3; // or whatever
+        func.nVirtualRegs = 3; // or whatever
         let mut n = 0;
         for mb_ivec in cleanedUp {
             if let Some(ivec) = mb_ivec {
@@ -281,7 +281,7 @@ impl Blockifier {
 fn test__badness() -> Func {
     let mut func = Func::new("badness", "start");
 
-    func.block("start", mk_Vec_Insn(vec![
+    func.block("start", mk_Vec_Inst(vec![
         i_print_s("!!Badness!!\n"),
         i_finish()
     ]));
@@ -294,15 +294,15 @@ fn test__straight_line() -> Func {
     let mut func = Func::new("straight_line", "b0");
 
     // Regs, virtual and real, that we want to use.
-    let vA = func.newVReg(RC::I32);
+    let vA = func.newVirtualReg(RegClass::I32);
 
-    func.block("b0", mk_Vec_Insn(vec![
+    func.block("b0", mk_Vec_Inst(vec![
         i_print_s("Start\n"),
         i_imm(vA, 10),
         i_add(vA, vA, RI_I(7)),
         i_goto("b1"),
     ]));
-    func.block("b1", mk_Vec_Insn(vec![
+    func.block("b1", mk_Vec_Inst(vec![
         i_print_s("Result = "),
         i_print_i(vA),
         i_print_s("\n"),
@@ -317,22 +317,23 @@ fn test__fill_then_sum() -> Func {
     let mut func = Func::new("fill_then_sum", "set-loop-pre");
 
     // Regs, virtual and real, that we want to use.
-    let vNENT = func.newVReg(RC::I32);
-    let vI    = func.newVReg(RC::I32);
-    let vSUM  = func.newVReg(RC::I32);
-    let rTMP  = mkRReg(RC::I32, /*enc=*/0x42, /*index=*/2); // "2" is arbitrary.
-    let vTMP2 = func.newVReg(RC::I32);
+    let vNENT = func.newVirtualReg(RegClass::I32);
+    let vI    = func.newVirtualReg(RegClass::I32);
+    let vSUM  = func.newVirtualReg(RegClass::I32);
+    let rTMP  = mkRealReg(RegClass::I32, /*enc=*/0x42,
+                                         /*index=*/2); // "2" is arbitrary.
+    let vTMP2 = func.newVirtualReg(RegClass::I32);
 
     // Loop pre-header for filling array with numbers.
     // This is also the entry point.
-    func.block("set-loop-pre", mk_Vec_Insn(vec![
+    func.block("set-loop-pre", mk_Vec_Inst(vec![
         i_imm (vNENT, 10),
         i_imm (vI,    0),
         i_goto("set-loop")
     ]));
 
     // Filling loop
-    func.block("set-loop", mk_Vec_Insn(vec![
+    func.block("set-loop", mk_Vec_Inst(vec![
         i_store   (AM_R(vI), vI),
         i_add     (vI,   vI, RI_I(1)),
         i_cmp_lt  (rTMP, vI, RI_R(vNENT)),
@@ -340,14 +341,14 @@ fn test__fill_then_sum() -> Func {
     ]));
 
     // Loop pre-header for summing them
-    func.block("sum-loop-pre", mk_Vec_Insn(vec![
+    func.block("sum-loop-pre", mk_Vec_Inst(vec![
         i_imm(vSUM, 0),
         i_imm(vI,   0),
         i_goto("sum-loop")
     ]));
 
     // Summing loop
-    func.block("sum-loop", mk_Vec_Insn(vec![
+    func.block("sum-loop", mk_Vec_Inst(vec![
         i_load  (rTMP,  AM_R(vI)),
         i_add   (vSUM,  vSUM, RI_R(rTMP)),
         i_add   (vI,    vI,   RI_I(1)),
@@ -356,7 +357,7 @@ fn test__fill_then_sum() -> Func {
     ]));
 
     // After loop.  Print result and stop.
-    func.block("print-result", mk_Vec_Insn(vec![
+    func.block("print-result", mk_Vec_Inst(vec![
         i_print_s("Sum = "),
         i_print_i(vSUM),
         i_print_s("\n"),
@@ -379,18 +380,18 @@ fn test__ssort() -> Func {
     // some live ranges which span parts of the loop nest.  So it's an
     // interesting test case.
 
-    let lo = func.newVReg(RC::I32);
-    let hi = func.newVReg(RC::I32);
-    let i = func.newVReg(RC::I32);
-    let j = func.newVReg(RC::I32);
-    let h = func.newVReg(RC::I32);
-    let bigN = func.newVReg(RC::I32);
-    let v = func.newVReg(RC::I32);
-    let hp = func.newVReg(RC::I32);
-    let t0 = func.newVReg(RC::I32);
-    let zero = func.newVReg(RC::I32);
+    let lo = func.newVirtualReg(RegClass::I32);
+    let hi = func.newVirtualReg(RegClass::I32);
+    let i = func.newVirtualReg(RegClass::I32);
+    let j = func.newVirtualReg(RegClass::I32);
+    let h = func.newVirtualReg(RegClass::I32);
+    let bigN = func.newVirtualReg(RegClass::I32);
+    let v = func.newVirtualReg(RegClass::I32);
+    let hp = func.newVirtualReg(RegClass::I32);
+    let t0 = func.newVirtualReg(RegClass::I32);
+    let zero = func.newVirtualReg(RegClass::I32);
 
-    func.block("Lstart", mk_Vec_Insn(vec![
+    func.block("Lstart", mk_Vec_Inst(vec![
         i_imm(zero, 0),
         // Store the increment table
         i_imm(t0,   1),        i_store(AM_RI(zero,0),  t0),
@@ -428,23 +429,23 @@ fn test__ssort() -> Func {
         i_goto("L11")
     ]));
 
-    func.block("L11", mk_Vec_Insn(vec![
+    func.block("L11", mk_Vec_Inst(vec![
         i_load(t0, AM_R(hp)),
         i_cmp_gt(t0, t0, RI_R(bigN)),
         i_goto_ctf(t0, "L20", "L11a")
     ]));
 
-    func.block("L11a", mk_Vec_Insn(vec![
+    func.block("L11a", mk_Vec_Inst(vec![
         i_add(hp, hp, RI_I(1)),
         i_goto("L11")
     ]));
 
-    func.block("L20", mk_Vec_Insn(vec![
+    func.block("L20", mk_Vec_Inst(vec![
         i_cmp_lt(t0, hp, RI_I(1)),
         i_goto_ctf(t0, "L60", "L21a"),
     ]));
 
-    func.block("L21a", mk_Vec_Insn(vec![
+    func.block("L21a", mk_Vec_Inst(vec![
         i_sub(t0, hp, RI_I(1)),
         i_load(h, AM_R(t0)),
         //printf("h = %u\n", h),
@@ -452,25 +453,25 @@ fn test__ssort() -> Func {
         i_goto("L30"),
     ]));
 
-    func.block("L30", mk_Vec_Insn(vec![
+    func.block("L30", mk_Vec_Inst(vec![
         i_cmp_gt(t0, i, RI_R(hi)),
         i_goto_ctf(t0, "L50", "L30a"),
     ]));
 
-    func.block("L30a", mk_Vec_Insn(vec![
+    func.block("L30a", mk_Vec_Inst(vec![
         i_load(v, AM_R(i)),
         i_add(j, i, RI_I(0)),  // FIXME: is this a coalescable copy?
         i_goto("L40"),
     ]));
 
-    func.block("L40", mk_Vec_Insn(vec![
+    func.block("L40", mk_Vec_Inst(vec![
         i_sub(t0, j, RI_R(h)),
         i_load(t0, AM_R(t0)),
         i_cmp_le(t0, t0, RI_R(v)),
         i_goto_ctf(t0, "L45", "L40a"),
     ]));
 
-    func.block("L40a", mk_Vec_Insn(vec![
+    func.block("L40a", mk_Vec_Inst(vec![
         i_sub(t0, j, RI_R(h)),
         i_load(t0, AM_R(t0)),
         i_store(AM_R(j), t0),
@@ -481,28 +482,28 @@ fn test__ssort() -> Func {
         i_goto_ctf(t0, "L45", "L40"),
     ]));
 
-    func.block("L45", mk_Vec_Insn(vec![
+    func.block("L45", mk_Vec_Inst(vec![
         i_store(AM_R(j), v),
         i_add(i, i, RI_I(1)),
         i_goto("L30"),
     ]));
 
-    func.block("L50", mk_Vec_Insn(vec![
+    func.block("L50", mk_Vec_Inst(vec![
         i_sub(hp, hp, RI_I(1)),
         i_goto("L20"),
     ]));
 
-    func.block("L60", mk_Vec_Insn(vec![
+    func.block("L60", mk_Vec_Inst(vec![
         i_add(i, lo, RI_I(0)), // FIXME: ditto
         i_goto("L61")
     ]));
 
-    func.block("L61", mk_Vec_Insn(vec![
+    func.block("L61", mk_Vec_Inst(vec![
         i_cmp_gt(t0, i, RI_R(hi)),
         i_goto_ctf(t0, "L62", "L61a"),
     ]));
 
-    func.block("L61a", mk_Vec_Insn(vec![
+    func.block("L61a", mk_Vec_Inst(vec![
         i_load(t0, AM_R(i)),
         i_print_i(t0),
         i_print_s(" "),
@@ -510,7 +511,7 @@ fn test__ssort() -> Func {
         i_goto("L61"),
     ]));
 
-    func.block("L62", mk_Vec_Insn(vec![
+    func.block("L62", mk_Vec_Inst(vec![
         i_print_s("\n"),
         i_finish()
     ]));
@@ -522,26 +523,26 @@ fn test__ssort() -> Func {
 fn test__3_loops() -> Func {
     let mut func = Func::new("3_loops", "start");
 
-    let v00  = func.newVReg(RC::I32);
-    let v01  = func.newVReg(RC::I32);
-    let v02  = func.newVReg(RC::I32);
-    let v03  = func.newVReg(RC::I32);
-    let v04  = func.newVReg(RC::I32);
-    let v05  = func.newVReg(RC::I32);
-    let v06  = func.newVReg(RC::I32);
-    let v07  = func.newVReg(RC::I32);
-    let v08  = func.newVReg(RC::I32);
-    let v09  = func.newVReg(RC::I32);
-    let v10  = func.newVReg(RC::I32);
-    let v11  = func.newVReg(RC::I32);
-    let vI   = func.newVReg(RC::I32);
-    let vJ   = func.newVReg(RC::I32);
-    let vSUM = func.newVReg(RC::I32);
-    let vTMP = func.newVReg(RC::I32);
+    let v00  = func.newVirtualReg(RegClass::I32);
+    let v01  = func.newVirtualReg(RegClass::I32);
+    let v02  = func.newVirtualReg(RegClass::I32);
+    let v03  = func.newVirtualReg(RegClass::I32);
+    let v04  = func.newVirtualReg(RegClass::I32);
+    let v05  = func.newVirtualReg(RegClass::I32);
+    let v06  = func.newVirtualReg(RegClass::I32);
+    let v07  = func.newVirtualReg(RegClass::I32);
+    let v08  = func.newVirtualReg(RegClass::I32);
+    let v09  = func.newVirtualReg(RegClass::I32);
+    let v10  = func.newVirtualReg(RegClass::I32);
+    let v11  = func.newVirtualReg(RegClass::I32);
+    let vI   = func.newVirtualReg(RegClass::I32);
+    let vJ   = func.newVirtualReg(RegClass::I32);
+    let vSUM = func.newVirtualReg(RegClass::I32);
+    let vTMP = func.newVirtualReg(RegClass::I32);
 
     // Loop pre-header for filling array with numbers.
     // This is also the entry point.
-    func.block("start", mk_Vec_Insn(vec![
+    func.block("start", mk_Vec_Inst(vec![
         i_imm(v00, 0),
         i_imm(v01, 0),
         i_imm(v02, 0),
@@ -559,13 +560,13 @@ fn test__3_loops() -> Func {
     ]));
 
     // Outer loop
-    func.block("outer-loop-cond", mk_Vec_Insn(vec![
+    func.block("outer-loop-cond", mk_Vec_Inst(vec![
         i_add     (vI,   vI, RI_I(1)),
         i_cmp_le  (vTMP, vI, RI_I(20)),
         i_goto_ctf(vTMP, "outer-loop-1", "after-outer-loop")
     ]));
 
-    func.block("outer-loop-1", mk_Vec_Insn(vec![
+    func.block("outer-loop-1", mk_Vec_Inst(vec![
         i_add(v00, v00, RI_I(1)),
         i_add(v01, v01, RI_I(1)),
         i_add(v02, v02, RI_I(1)),
@@ -574,7 +575,7 @@ fn test__3_loops() -> Func {
     ]));
 
     // After loop.  Print result and stop.
-    func.block("after-outer-loop", mk_Vec_Insn(vec![
+    func.block("after-outer-loop", mk_Vec_Inst(vec![
         i_imm(vSUM, 0),
         i_add(vSUM, vSUM, RI_R(v00)),
         i_add(vSUM, vSUM, RI_R(v01)),
@@ -600,10 +601,10 @@ fn test__3_loops() -> Func {
 
 fn test__stmts() -> Func {
     let mut bif = Blockifier::new("stmts");
-    let vI = bif.newVReg(RC::I32);
-    let vJ = bif.newVReg(RC::I32);
-    let vSUM = bif.newVReg(RC::I32);
-    let vTMP = bif.newVReg(RC::I32);
+    let vI = bif.newVirtualReg(RegClass::I32);
+    let vJ = bif.newVirtualReg(RegClass::I32);
+    let vSUM = bif.newVirtualReg(RegClass::I32);
+    let vTMP = bif.newVirtualReg(RegClass::I32);
     let stmts = vec![
         s_imm(vSUM, 0),
         s_imm(vI, 0),
@@ -672,17 +673,17 @@ fn test__stmts() -> Func {
 
 fn test__needs_splitting() -> Func {
     let mut bif = Blockifier::new("needs_splitting");
-    let v10 = bif.newVReg(RC::I32);
-    let v11 = bif.newVReg(RC::I32);
-    let v12 = bif.newVReg(RC::I32);
+    let v10 = bif.newVirtualReg(RegClass::I32);
+    let v11 = bif.newVirtualReg(RegClass::I32);
+    let v12 = bif.newVirtualReg(RegClass::I32);
 
-    let v20 = bif.newVReg(RC::I32);
-    let v21 = bif.newVReg(RC::I32);
-    let v22 = bif.newVReg(RC::I32);
+    let v20 = bif.newVirtualReg(RegClass::I32);
+    let v21 = bif.newVirtualReg(RegClass::I32);
+    let v22 = bif.newVirtualReg(RegClass::I32);
 
-    let vI   = bif.newVReg(RC::I32);
-    let vSUM = bif.newVReg(RC::I32);
-    let vTMP = bif.newVReg(RC::I32);
+    let vI   = bif.newVirtualReg(RegClass::I32);
+    let vSUM = bif.newVirtualReg(RegClass::I32);
+    let vTMP = bif.newVirtualReg(RegClass::I32);
 
     let stmts = vec![
         // Both the v1x and the v2x set become live at this point
@@ -739,30 +740,30 @@ fn test__needs_splitting() -> Func {
 // This is the same as needs_splitting, but with the live ranges split "manually"
 fn test__needs_splitting2() -> Func {
     let mut bif = Blockifier::new("needs_splitting2");
-    let v10 = bif.newVReg(RC::I32);
-    let v11 = bif.newVReg(RC::I32);
-    let v12 = bif.newVReg(RC::I32);
+    let v10 = bif.newVirtualReg(RegClass::I32);
+    let v11 = bif.newVirtualReg(RegClass::I32);
+    let v12 = bif.newVirtualReg(RegClass::I32);
  
-    let v20 = bif.newVReg(RC::I32);
-    let v21 = bif.newVReg(RC::I32);
-    let v22 = bif.newVReg(RC::I32);
+    let v20 = bif.newVirtualReg(RegClass::I32);
+    let v21 = bif.newVirtualReg(RegClass::I32);
+    let v22 = bif.newVirtualReg(RegClass::I32);
  
      // Post-split versions of v10 .. v22
-    let s1v10 = bif.newVReg(RC::I32);
-    let s1v11 = bif.newVReg(RC::I32);
-    let s1v12 = bif.newVReg(RC::I32);
+    let s1v10 = bif.newVirtualReg(RegClass::I32);
+    let s1v11 = bif.newVirtualReg(RegClass::I32);
+    let s1v12 = bif.newVirtualReg(RegClass::I32);
  
-    let s1v20 = bif.newVReg(RC::I32);
-    let s1v21 = bif.newVReg(RC::I32);
-    let s1v22 = bif.newVReg(RC::I32);
+    let s1v20 = bif.newVirtualReg(RegClass::I32);
+    let s1v21 = bif.newVirtualReg(RegClass::I32);
+    let s1v22 = bif.newVirtualReg(RegClass::I32);
  
-    let s2v20 = bif.newVReg(RC::I32);
-    let s2v21 = bif.newVReg(RC::I32);
-    let s2v22 = bif.newVReg(RC::I32);
+    let s2v20 = bif.newVirtualReg(RegClass::I32);
+    let s2v21 = bif.newVirtualReg(RegClass::I32);
+    let s2v22 = bif.newVirtualReg(RegClass::I32);
  
-    let vI   = bif.newVReg(RC::I32);
-    let vSUM = bif.newVReg(RC::I32);
-    let vTMP = bif.newVReg(RC::I32);
+    let vI   = bif.newVirtualReg(RegClass::I32);
+    let vSUM = bif.newVirtualReg(RegClass::I32);
+    let vTMP = bif.newVirtualReg(RegClass::I32);
 
     let stmts = vec![
         // Both the v1x and the v2x set become live at this point
@@ -861,42 +862,42 @@ fn test__qsort() -> Func {
     let mut bif = Blockifier::new("qsort");
 
     // All your virtual register are belong to me.  Bwahaha.  Ha.  Ha.
-    let offs_stackLo = bif.newVReg(RC::I32);
-    let offs_stackHi = bif.newVReg(RC::I32);
-    let offs_numbers = bif.newVReg(RC::I32);
-    let nNumbers = bif.newVReg(RC::I32);
-    let rand = bif.newVReg(RC::I32);
-    let loSt = bif.newVReg(RC::I32);
-    let hiSt = bif.newVReg(RC::I32);
-    let keepGoingI = bif.newVReg(RC::I32);
-    let keepGoingO = bif.newVReg(RC::I32);
-    let unLo = bif.newVReg(RC::I32);
-    let unHi = bif.newVReg(RC::I32);
-    let ltLo = bif.newVReg(RC::I32);
-    let gtHi = bif.newVReg(RC::I32);
-    let n = bif.newVReg(RC::I32);
-    let m = bif.newVReg(RC::I32);
-    let sp = bif.newVReg(RC::I32);
-    let lo = bif.newVReg(RC::I32);
-    let hi = bif.newVReg(RC::I32);
-    let med = bif.newVReg(RC::I32);
-    let r3 = bif.newVReg(RC::I32);
-    let yyp1 = bif.newVReg(RC::I32);
-    let yyp2 = bif.newVReg(RC::I32);
-    let yyn = bif.newVReg(RC::I32);
-    let t0 = bif.newVReg(RC::I32);
-    let t1 = bif.newVReg(RC::I32);
-    let t2 = bif.newVReg(RC::I32);
-    let zztmp1 = bif.newVReg(RC::I32);
-    let zztmp2 = bif.newVReg(RC::I32);
-    let taa = bif.newVReg(RC::I32);
-    let tbb = bif.newVReg(RC::I32);
-    let i = bif.newVReg(RC::I32);
-    let inOrder = bif.newVReg(RC::I32);
-    let sum = bif.newVReg(RC::I32);
-    let pass = bif.newVReg(RC::I32);
-    let sp_gt_zero = bif.newVReg(RC::I32);
-    let guard = bif.newVReg(RC::I32);
+    let offs_stackLo = bif.newVirtualReg(RegClass::I32);
+    let offs_stackHi = bif.newVirtualReg(RegClass::I32);
+    let offs_numbers = bif.newVirtualReg(RegClass::I32);
+    let nNumbers = bif.newVirtualReg(RegClass::I32);
+    let rand = bif.newVirtualReg(RegClass::I32);
+    let loSt = bif.newVirtualReg(RegClass::I32);
+    let hiSt = bif.newVirtualReg(RegClass::I32);
+    let keepGoingI = bif.newVirtualReg(RegClass::I32);
+    let keepGoingO = bif.newVirtualReg(RegClass::I32);
+    let unLo = bif.newVirtualReg(RegClass::I32);
+    let unHi = bif.newVirtualReg(RegClass::I32);
+    let ltLo = bif.newVirtualReg(RegClass::I32);
+    let gtHi = bif.newVirtualReg(RegClass::I32);
+    let n = bif.newVirtualReg(RegClass::I32);
+    let m = bif.newVirtualReg(RegClass::I32);
+    let sp = bif.newVirtualReg(RegClass::I32);
+    let lo = bif.newVirtualReg(RegClass::I32);
+    let hi = bif.newVirtualReg(RegClass::I32);
+    let med = bif.newVirtualReg(RegClass::I32);
+    let r3 = bif.newVirtualReg(RegClass::I32);
+    let yyp1 = bif.newVirtualReg(RegClass::I32);
+    let yyp2 = bif.newVirtualReg(RegClass::I32);
+    let yyn = bif.newVirtualReg(RegClass::I32);
+    let t0 = bif.newVirtualReg(RegClass::I32);
+    let t1 = bif.newVirtualReg(RegClass::I32);
+    let t2 = bif.newVirtualReg(RegClass::I32);
+    let zztmp1 = bif.newVirtualReg(RegClass::I32);
+    let zztmp2 = bif.newVirtualReg(RegClass::I32);
+    let taa = bif.newVirtualReg(RegClass::I32);
+    let tbb = bif.newVirtualReg(RegClass::I32);
+    let i = bif.newVirtualReg(RegClass::I32);
+    let inOrder = bif.newVirtualReg(RegClass::I32);
+    let sum = bif.newVirtualReg(RegClass::I32);
+    let pass = bif.newVirtualReg(RegClass::I32);
+    let sp_gt_zero = bif.newVirtualReg(RegClass::I32);
+    let guard = bif.newVirtualReg(RegClass::I32);
 
     let stmts = vec![
     // mem[] layout and base offsets
@@ -1168,22 +1169,23 @@ fn test__fill_then_sum_2a() -> Func {
     let mut func = Func::new("fill_then_sum_2a", "set-loop-pre");
 
     // Regs, virtual and real, that we want to use.
-    let vNENT = func.newVReg(RC::I32);
-    let vI    = func.newVReg(RC::I32);
-    let vSUM  = func.newVReg(RC::I32);
-    let rTMP  = mkRReg(RC::I32, /*enc=*/0x42, /*index=*/2); // "2" is arbitrary.
-    let vTMP2 = func.newVReg(RC::I32);
+    let vNENT = func.newVirtualReg(RegClass::I32);
+    let vI    = func.newVirtualReg(RegClass::I32);
+    let vSUM  = func.newVirtualReg(RegClass::I32);
+    let rTMP  = mkRealReg(RegClass::I32, /*enc=*/0x42,
+                                         /*index=*/2); // "2" is arbitrary.
+    let vTMP2 = func.newVirtualReg(RegClass::I32);
 
     // Loop pre-header for filling array with numbers.
     // This is also the entry point.
-    func.block("set-loop-pre", mk_Vec_Insn(vec![
+    func.block("set-loop-pre", mk_Vec_Inst(vec![
         i_imm (vNENT, 10),
         i_imm (vI,    0),
         i_goto("set-loop")
     ]));
 
     // Filling loop
-    func.block("set-loop", mk_Vec_Insn(vec![
+    func.block("set-loop", mk_Vec_Inst(vec![
         i_store   (AM_R(vI), vI),
         i_addm    (vI,   RI_I(1)),
         i_cmp_lt  (rTMP, vI, RI_R(vNENT)),
@@ -1191,14 +1193,14 @@ fn test__fill_then_sum_2a() -> Func {
     ]));
 
     // Loop pre-header for summing them
-    func.block("sum-loop-pre", mk_Vec_Insn(vec![
+    func.block("sum-loop-pre", mk_Vec_Inst(vec![
         i_imm(vSUM, 0),
         i_imm(vI,   0),
         i_goto("sum-loop")
     ]));
 
     // Summing loop
-    func.block("sum-loop", mk_Vec_Insn(vec![
+    func.block("sum-loop", mk_Vec_Inst(vec![
         i_load  (rTMP,  AM_R(vI)),
         i_addm  (vSUM,  RI_R(rTMP)),
         i_addm  (vI,    RI_I(1)),
@@ -1207,7 +1209,7 @@ fn test__fill_then_sum_2a() -> Func {
     ]));
 
     // After loop.  Print result and stop.
-    func.block("print-result", mk_Vec_Insn(vec![
+    func.block("print-result", mk_Vec_Inst(vec![
         i_print_s("Sum = "),
         i_print_i(vSUM),
         i_print_s("\n"),
@@ -1231,18 +1233,18 @@ fn test__ssort_2a() -> Func {
     // some live ranges which span parts of the loop nest.  So it's an
     // interesting test case.
 
-    let lo = func.newVReg(RC::I32);
-    let hi = func.newVReg(RC::I32);
-    let i = func.newVReg(RC::I32);
-    let j = func.newVReg(RC::I32);
-    let h = func.newVReg(RC::I32);
-    let bigN = func.newVReg(RC::I32);
-    let v = func.newVReg(RC::I32);
-    let hp = func.newVReg(RC::I32);
-    let t0 = func.newVReg(RC::I32);
-    let zero = func.newVReg(RC::I32);
+    let lo = func.newVirtualReg(RegClass::I32);
+    let hi = func.newVirtualReg(RegClass::I32);
+    let i = func.newVirtualReg(RegClass::I32);
+    let j = func.newVirtualReg(RegClass::I32);
+    let h = func.newVirtualReg(RegClass::I32);
+    let bigN = func.newVirtualReg(RegClass::I32);
+    let v = func.newVirtualReg(RegClass::I32);
+    let hp = func.newVirtualReg(RegClass::I32);
+    let t0 = func.newVirtualReg(RegClass::I32);
+    let zero = func.newVirtualReg(RegClass::I32);
 
-    func.block("Lstart", mk_Vec_Insn(vec![
+    func.block("Lstart", mk_Vec_Inst(vec![
         i_imm(zero, 0),
         // Store the increment table
         i_imm(t0,   1),        i_store(AM_RI(zero,0),  t0),
@@ -1281,23 +1283,23 @@ fn test__ssort_2a() -> Func {
         i_goto("L11")
     ]));
 
-    func.block("L11", mk_Vec_Insn(vec![
+    func.block("L11", mk_Vec_Inst(vec![
         i_load(t0, AM_R(hp)),
         i_cmp_gt(t0, t0, RI_R(bigN)),
         i_goto_ctf(t0, "L20", "L11a")
     ]));
 
-    func.block("L11a", mk_Vec_Insn(vec![
+    func.block("L11a", mk_Vec_Inst(vec![
         i_addm(hp, RI_I(1)),
         i_goto("L11")
     ]));
 
-    func.block("L20", mk_Vec_Insn(vec![
+    func.block("L20", mk_Vec_Inst(vec![
         i_cmp_lt(t0, hp, RI_I(1)),
         i_goto_ctf(t0, "L60", "L21a"),
     ]));
 
-    func.block("L21a", mk_Vec_Insn(vec![
+    func.block("L21a", mk_Vec_Inst(vec![
         i_copy(t0, hp),
         i_subm(t0, RI_I(1)),
         i_load(h, AM_R(t0)),
@@ -1307,18 +1309,18 @@ fn test__ssort_2a() -> Func {
         i_goto("L30"),
     ]));
 
-    func.block("L30", mk_Vec_Insn(vec![
+    func.block("L30", mk_Vec_Inst(vec![
         i_cmp_gt(t0, i, RI_R(hi)),
         i_goto_ctf(t0, "L50", "L30a"),
     ]));
 
-    func.block("L30a", mk_Vec_Insn(vec![
+    func.block("L30a", mk_Vec_Inst(vec![
         i_load(v, AM_R(i)),
         i_copy(j, i),  // FIXME: is this a coalescable copy?
         i_goto("L40"),
     ]));
 
-    func.block("L40", mk_Vec_Insn(vec![
+    func.block("L40", mk_Vec_Inst(vec![
         i_copy(t0, j),
         i_subm(t0, RI_R(h)),
         i_load(t0, AM_R(t0)),
@@ -1326,7 +1328,7 @@ fn test__ssort_2a() -> Func {
         i_goto_ctf(t0, "L45", "L40a"),
     ]));
 
-    func.block("L40a", mk_Vec_Insn(vec![
+    func.block("L40a", mk_Vec_Inst(vec![
         i_copy(t0, j),
         i_subm(t0, RI_R(h)),
         i_load(t0, AM_R(t0)),
@@ -1339,28 +1341,28 @@ fn test__ssort_2a() -> Func {
         i_goto_ctf(t0, "L45", "L40"),
     ]));
 
-    func.block("L45", mk_Vec_Insn(vec![
+    func.block("L45", mk_Vec_Inst(vec![
         i_store(AM_R(j), v),
         i_addm(i, RI_I(1)),
         i_goto("L30"),
     ]));
 
-    func.block("L50", mk_Vec_Insn(vec![
+    func.block("L50", mk_Vec_Inst(vec![
         i_subm(hp, RI_I(1)),
         i_goto("L20"),
     ]));
 
-    func.block("L60", mk_Vec_Insn(vec![
+    func.block("L60", mk_Vec_Inst(vec![
         i_copy(i, lo), // FIXME: ditto
         i_goto("L61")
     ]));
 
-    func.block("L61", mk_Vec_Insn(vec![
+    func.block("L61", mk_Vec_Inst(vec![
         i_cmp_gt(t0, i, RI_R(hi)),
         i_goto_ctf(t0, "L62", "L61a"),
     ]));
 
-    func.block("L61a", mk_Vec_Insn(vec![
+    func.block("L61a", mk_Vec_Inst(vec![
         i_load(t0, AM_R(i)),
         i_print_i(t0),
         i_print_s(" "),
@@ -1368,7 +1370,7 @@ fn test__ssort_2a() -> Func {
         i_goto("L61"),
     ]));
 
-    func.block("L62", mk_Vec_Insn(vec![
+    func.block("L62", mk_Vec_Inst(vec![
         i_print_s("\n"),
         i_finish()
     ]));

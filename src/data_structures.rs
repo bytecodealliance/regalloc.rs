@@ -167,8 +167,8 @@ impl<'a, T> Iterator for SetIter<'a, T> {
 //   }
 //
 // until such time as |trait Step| is available in stable Rust.  At that point
-// |fn dotdot| and all of the following can be removed, and the loops rewritten
-// using the standard syntax:
+// |fn dotdot| and all of the following can be removed, and the loops
+// rewritten using the standard syntax:
 //
 //   for ent in startEnt .. endPlus1Ent {
 //   }
@@ -212,11 +212,11 @@ impl<T: Copy + PartialOrd + PlusOne> Iterator for MyIterator<T> {
 // Vectors where both the index and element types can be specified (and at
 // most 2^32-1 elems can be stored.  What if this overflows?)
 
-pub struct TVec<TyIx, Ty> {
+pub struct TypedIxVec<TyIx, Ty> {
     vek: Vec<Ty>,
     ty_ix: PhantomData<TyIx>
 }
-impl<TyIx, Ty> TVec<TyIx, Ty>
+impl<TyIx, Ty> TypedIxVec<TyIx, Ty>
 where Ty: Clone {
     pub fn new() -> Self {
         Self {
@@ -224,7 +224,7 @@ where Ty: Clone {
             ty_ix: PhantomData::<TyIx>
         }
     }
-    fn append(&mut self, other: &mut TVec<TyIx, Ty>) {
+    fn append(&mut self, other: &mut TypedIxVec<TyIx, Ty>) {
         // FIXME what if this overflows?
         self.vek.append(&mut other.vek);
     }
@@ -247,7 +247,7 @@ where Ty: Clone {
     }
 }
 
-impl<TyIx, Ty> Index<TyIx> for TVec<TyIx, Ty>
+impl<TyIx, Ty> Index<TyIx> for TypedIxVec<TyIx, Ty>
 where TyIx: Into<u32> {
     type Output = Ty;
     fn index(&self, ix: TyIx) -> &Ty {
@@ -255,14 +255,14 @@ where TyIx: Into<u32> {
     }
 }
 
-impl<TyIx, Ty> IndexMut<TyIx> for TVec<TyIx, Ty>
+impl<TyIx, Ty> IndexMut<TyIx> for TypedIxVec<TyIx, Ty>
 where TyIx: Into<u32> {
     fn index_mut(&mut self, ix: TyIx) -> &mut Ty {
         &mut self.vek[ix.into() as usize]
     }
 }
 
-impl<TyIx, Ty> Clone for TVec<TyIx, Ty>
+impl<TyIx, Ty> Clone for TypedIxVec<TyIx, Ty>
 where Ty: Clone {
     // This is only needed for debug printing.
     fn clone(&self) -> Self {
@@ -313,22 +313,27 @@ macro_rules! generate_boilerplate {
         }
         // Secondly, the vector of the actual type (Type) as indexed only by
         // the indexing type (TypeIx)
-        pub type $Vec_Type = TVec<$TypeIx, $Type>;
+        pub type $Vec_Type = TypedIxVec<$TypeIx, $Type>;
         pub fn $mk_Vec_Type(vek: Vec<$Type>) -> $Vec_Type {
-            TVec { vek, ty_ix: PhantomData::<$TypeIx> }
+            TypedIxVec { vek, ty_ix: PhantomData::<$TypeIx> }
         }
     }
 }
 
-generate_boilerplate!(InsnIx, mkInsnIx, Insn, Vec_Insn, mk_Vec_Insn, "i");
+generate_boilerplate!(InstIx, mkInstIx, Inst,
+                      Vec_Inst, mk_Vec_Inst, "i");
 
-generate_boilerplate!(BlockIx, mkBlockIx, Block, Vec_Block, mk_Vec_Block, "b");
+generate_boilerplate!(BlockIx, mkBlockIx, Block,
+                      Vec_Block, mk_Vec_Block, "b");
 
-generate_boilerplate!(FragIx, mkFragIx, Frag, Vec_Frag, mk_Vec_Frag, "f");
+generate_boilerplate!(RangeFragIx, mkRangeFragIx, RangeFrag,
+                      Vec_RangeFrag, mk_Vec_RangeFrag, "f");
 
-generate_boilerplate!(VLRIx, mkVLRIx, VLR, Vec_VLR, mk_Vec_VLR, "vlr");
+generate_boilerplate!(VirtualRangeIx, mkVirtualRangeIx, VirtualRange,
+                      Vec_VirtualRange, mk_Vec_VirtualRange, "vlr");
 
-generate_boilerplate!(RLRIx, mkRLRIx, RLR, Vec_RLR, mk_Vec_RLR, "rlr");
+generate_boilerplate!(RealRangeIx, mkRealRangeIx, RealRange,
+                      Vec_RealRange, mk_Vec_RealRange, "rlr");
 
 
 //=============================================================================
@@ -382,7 +387,7 @@ impl<T: Show> Show for Vec<T> {
         res + &"]".to_string()
     }
 }
-impl<TyIx, Ty: Show> Show for TVec<TyIx, Ty> {
+impl<TyIx, Ty: Show> Show for TypedIxVec<TyIx, Ty> {
     // This is something of a hack in the sense that it doesn't show the
     // indices, but oh well ..
     fn show(&self) -> String {
@@ -416,29 +421,32 @@ impl<A: Show, B: Show, C: Show> Show for (A, B, C) {
 // thereof.
 
 #[derive(PartialEq)]
-pub enum RC {
+pub enum RegClass {
     I32, F32
 }
 const N_REGCLASSES: usize = 2;
 
-impl Show for RC {
+impl Show for RegClass {
     fn show(&self) -> String {
         match self {
-            RC::I32 => "I".to_string(),
-            RC::F32 => "F".to_string()
+            RegClass::I32 => "I".to_string(),
+            RegClass::F32 => "F".to_string()
         }
     }
 }
-impl RC {
+impl RegClass {
     fn rc_to_u32(self) -> u32 {
-        match self { RC::I32 => 0, RC::F32 => 1 }
+        match self { RegClass::I32 => 0, RegClass::F32 => 1 }
     }
     pub fn rc_to_usize(self) -> usize {
         self.rc_to_u32() as usize
     }
 }
-pub fn rc_from_u32(rc: u32) -> RC {
-    match rc { 0 => RC::I32, 1 => RC::F32, _ => panic!("rc_from_u32") }
+pub fn rc_from_u32(rc: u32) -> RegClass {
+    match rc {
+        0 => RegClass::I32,
+        1 => RegClass::F32, _ => panic!("rc_from_u32")
+    }
 }
 
 
@@ -454,7 +462,7 @@ pub fn rc_from_u32(rc: u32) -> RC {
 //
 // * for a Virtual Reg, |index| is just the virtual register number.
 // * for a Real Reg, |index| is the entry number in the associated
-//   |RRegUniverse|.
+//   |RealRegUniverse|.
 //
 // This scheme gives us:
 //
@@ -481,7 +489,7 @@ impl Reg {
     pub fn isVirtual(self) -> bool {
         (self.do_not_access_this_directly & 0x8000_0000) != 0
     }
-    pub fn getClass(self) -> RC {
+    pub fn getClass(self) -> RegClass {
         rc_from_u32((self.do_not_access_this_directly >> 28) & 0x7)
     }
     pub fn getIndex(self) -> usize {
@@ -500,9 +508,9 @@ impl Reg {
             ((self.do_not_access_this_directly >> 8) & ((1 << 8) - 1)) as u8
         }
     }
-    pub fn asVReg(self) -> Option<VReg> {
+    pub fn asVirtualReg(self) -> Option<VirtualReg> {
         if self.isVirtual() {
-            Some(VReg { reg: self })
+            Some(VirtualReg { reg: self })
         } else {
             None
         }
@@ -515,16 +523,16 @@ impl Show for Reg {
         + &self.getIndex().show()
     }
 }
-pub fn mkRReg(rc: RC, enc: u8, index: u8) -> Reg {
+pub fn mkRealReg(rc: RegClass, enc: u8, index: u8) -> Reg {
     let n = (0 << 31)
             | (rc.rc_to_u32() << 28)
             | ((enc as u32)   << 8)
             | ((index as u32) << 0);
     Reg { do_not_access_this_directly: n }
 }
-pub fn mkVReg(rc: RC, index: u32) -> Reg {
+pub fn mkVirtualReg(rc: RegClass, index: u32) -> Reg {
     if index >= (1 << 28) {
-        panic!("mkVReg(): index too large");
+        panic!("mkVirtualReg(): index too large");
      }
     let n = (1 << 31)
             | (rc.rc_to_u32() << 28)
@@ -533,51 +541,52 @@ pub fn mkVReg(rc: RC, index: u32) -> Reg {
 }
 
 
-// RReg and VReg are merely wrappers around Reg, which try to dynamically
-// ensure that they are really wrapping the correct flavour of register.
+// RealReg and VirtualReg are merely wrappers around Reg, which try to
+// dynamically ensure that they are really wrapping the correct flavour of
+// register.
 
 #[derive(Copy, Clone, /*Hash,*/ PartialEq, /*Eq, PartialOrd, Ord*/)]
-pub struct RReg {
+pub struct RealReg {
     reg: Reg
 }
-impl Reg /* !!not RReg!! */ {
-    pub fn toRReg(self) -> RReg {
+impl Reg /* !!not RealReg!! */ {
+    pub fn toRealReg(self) -> RealReg {
         if self.isVirtual() {
-            panic!("Reg::toRReg: this is a virtual register")
+            panic!("Reg::toRealReg: this is a virtual register")
         } else {
-            RReg { reg: self }
+            RealReg { reg: self }
         }
     }
 }
-impl RReg {
-    pub fn getClass(self) -> RC { self.reg.getClass() }
+impl RealReg {
+    pub fn getClass(self) -> RegClass { self.reg.getClass() }
     pub fn getIndex(self) -> usize { self.reg.getIndex() }
     pub fn toReg(self) -> Reg { self.reg }
 }
-impl Show for RReg {
+impl Show for RealReg {
     fn show(&self) -> String { self.reg.show() }
 }
 
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, /* Ord*/)]
-pub struct VReg {
+pub struct VirtualReg {
     reg: Reg
 }
-impl Reg /* !!not VReg!! */ {
-    pub fn toVReg(self) -> VReg {
+impl Reg /* !!not VirtualReg!! */ {
+    pub fn toVirtualReg(self) -> VirtualReg {
         if self.isVirtual() {
-            VReg { reg: self }
+            VirtualReg { reg: self }
         } else {
-            panic!("Reg::toVReg: this is a real register")
+            panic!("Reg::toVirtualReg: this is a real register")
         }
     }
 }
-impl VReg {
-    pub fn getClass(self) -> RC { self.reg.getClass() }
+impl VirtualReg {
+    pub fn getClass(self) -> RegClass { self.reg.getClass() }
     pub fn getIndex(self) -> usize { self.reg.getIndex() }
     pub fn toReg(self) -> Reg { self.reg }
 }
-impl Show for VReg {
+impl Show for VirtualReg {
     fn show(&self) -> String { self.reg.show() }
 }
 
@@ -585,8 +594,8 @@ impl Show for VReg {
 impl Reg {
     // Apply a vreg-rreg mapping to a Reg.  This used for registers used in
     // either a read- or a write-role.
-    fn apply_D_or_U(&mut self, map: &Map::<VReg, RReg>) {
-        if let Some(vreg) = self.asVReg() {
+    fn apply_D_or_U(&mut self, map: &Map::<VirtualReg, RealReg>) {
+        if let Some(vreg) = self.asVirtualReg() {
             if let Some(rreg) = map.get(&vreg) {
                 debug_assert!(rreg.getClass() == vreg.getClass());
                 *self = rreg.toReg();
@@ -598,8 +607,9 @@ impl Reg {
     // Apply a pair of vreg-rreg mappings to a Reg.  The mappings *must*
     // agree!  This seems a bit strange at first.  It is used for registers
     // used in a modify-role.
-    fn apply_M(&mut self, mapD: &Map::<VReg, RReg>, mapU: &Map::<VReg, RReg>) {
-        if let Some(vreg) = self.asVReg() {
+    fn apply_M(&mut self, mapD: &Map::<VirtualReg, RealReg>,
+                          mapU: &Map::<VirtualReg, RealReg>) {
+        if let Some(vreg) = self.asVirtualReg() {
             let mb_result_D = mapD.get(&vreg);
             let mb_result_U = mapU.get(&vreg);
             // Failure of this is serious and should be investigated.
@@ -620,15 +630,15 @@ impl Reg {
 
 
 #[derive(Copy, Clone)]
-pub enum Slot {
-    Slot(u32)
+pub enum SpillSlot {
+    SpillSlot(u32)
 }
-pub fn mkSlot(n: u32) -> Slot { Slot::Slot(n) }
-impl Slot {
-    pub fn get(self) -> u32 { match self { Slot::Slot(n) => n } }
+pub fn mkSpillSlot(n: u32) -> SpillSlot { SpillSlot::SpillSlot(n) }
+impl SpillSlot {
+    pub fn get(self) -> u32 { match self { SpillSlot::SpillSlot(n) => n } }
     pub fn get_usize(self) -> usize { self.get() as usize }
 }
-impl Show for Slot {
+impl Show for SpillSlot {
     fn show(&self) -> String {
         "S".to_string() + &self.get().to_string()
     }
@@ -646,19 +656,19 @@ impl Show for Slot {
 //   themselves
 //
 // * defines the size of the initial section of that mapping that is available
-//   to the register allocator for use, so that it can treat the registers under
-//   its control as a zero based, contiguous array.  This is important for its
-//   efficiency.
+// to the register allocator for use, so that it can treat the registers under
+// its control as a zero based, contiguous array.  This is important for its
+// efficiency.
 //
-// * gives meaning to Set<RReg>, which otherwise would merely be a
-//   bunch of bits.
+// * gives meaning to Set<RealReg>, which otherwise would merely be a bunch of
+//   bits.
 
-pub struct RRegUniverse {
+pub struct RealRegUniverse {
     // The registers themselves.  All must be real registers, and all must
     // have their index number (.getIndex()) equal to the array index here,
     // since this is the only place where we map index numbers to actual
     // registers.
-    pub regs: Vec<(RReg, String)>,
+    pub regs: Vec<(RealReg, String)>,
 
     // This is the size of the initial section of |regs| that is available to
     // the allocator.  It must be < |regs|.len().
@@ -666,25 +676,26 @@ pub struct RRegUniverse {
 
     // Ranges for groups of allocable registers. Used to quickly address only
     // a group of allocable registers belonging to the same register class.
-    // Indexes into |allocable_by_class| are RC values, such as RC::F32. If
-    // the resulting entry is |None| then there are no registers in that
-    // class.  Otherwise the value is |Some((first, last)), which specifies
-    // the range of entries in |regs| corresponding to that class.  The range
-    // includes both |first| and |last|.
+    // Indexes into |allocable_by_class| are RegClass values, such as
+    // RegClass::F32. If the resulting entry is |None| then there are no
+    // registers in that class.  Otherwise the value is |Some((first, last)),
+    // which specifies the range of entries in |regs| corresponding to that
+    // class.  The range includes both |first| and |last|.
     //
     // In all cases, |last| must be < |allocable|.  In other words,
     // |allocable_by_class| must describe only the allocable prefix of |regs|.
     //
-    // For example, let's say allocable_by_class[RC::F32] == Some((10, 14))
+    // For example, let's say
+    //    allocable_by_class[RegClass::F32] == Some((10, 14))
     // Then regs[10], regs[11], regs[12], regs[13], and regs[14] give all
-    // registers of register class RC::F32.
+    // registers of register class RegClass::F32.
     //
     // The effect of the above is that registers in |regs| must form
-    // contiguous groups. This is checked by RRegUniverse::check_is_sane().
+    // contiguous groups. This is checked by RealRegUniverse::check_is_sane().
     pub allocable_by_class: [Option<(usize, usize)>; N_REGCLASSES],
 }
 
-impl RRegUniverse {
+impl RealRegUniverse {
     // Check that the given universe satisfies various invariants, and panic
     // if not.  All the invariants are important.
     fn check_is_sane(&self) {
@@ -762,7 +773,7 @@ impl RRegUniverse {
         }
         // So finally ..
         if !ok {
-            panic!("RRegUniverse::check_is_sane: invalid RRegUniverse");
+            panic!("RealRegUniverse::check_is_sane: invalid RealRegUniverse");
         }
     }
 }
@@ -771,13 +782,13 @@ impl RRegUniverse {
 // Create a universe for testing, with nI32 |I32| class regs and nF32 |F32|
 // class regs.
 
-pub fn make_universe(nI32: usize, nF32: usize) -> RRegUniverse {
-    if nI32 + nF32 >= 256 {
+pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
+    let total_regs = nI32 + nF32;
+    if total_regs >= 256 {
         panic!("make_universe: too many regs, cannot represent");
     }
 
-    let total_regs = nI32 + nF32;
-    let mut regs = Vec::<(RReg, String)>::new();
+    let mut regs = Vec::<(RealReg, String)>::new();
     let mut allocable_by_class = [None; N_REGCLASSES];
     let mut index = 0u8;
 
@@ -785,33 +796,33 @@ pub fn make_universe(nI32: usize, nF32: usize) -> RRegUniverse {
         let first = index as usize;
         for i in 0 .. nI32 {
             let name = format!("R{}", i).to_string();
-            let reg  = mkRReg(RC::I32, /*enc=*/0, index).toRReg();
+            let reg  = mkRealReg(RegClass::I32, /*enc=*/0, index).toRealReg();
             regs.push((reg, name));
             index += 1;
         }
         let last = index as usize - 1;
-        allocable_by_class[RC::I32.rc_to_usize()] = Some((first, last));
+        allocable_by_class[RegClass::I32.rc_to_usize()] = Some((first, last));
     }
 
     if nF32 > 0 {
         let first = index as usize;
         for i in 0 .. nF32 {
             let name = format!("F{}", i).to_string();
-            let reg  = mkRReg(RC::F32, /*enc=*/0, index).toRReg();
+            let reg  = mkRealReg(RegClass::F32, /*enc=*/0, index).toRealReg();
             regs.push((reg, name));
             index += 1;
         }
         let last = index as usize - 1;
-        allocable_by_class[RC::F32.rc_to_usize()] = Some((first, last));
+        allocable_by_class[RegClass::F32.rc_to_usize()] = Some((first, last));
     }
 
     debug_assert!(index as usize == total_regs);
 
     let allocable = regs.len();
-    let univ = RRegUniverse { regs,
-                              // for this example, all regs are allocable
-                              allocable,
-                              allocable_by_class };
+    let univ = RealRegUniverse { regs,
+                                 // for this example, all regs are allocable
+                                 allocable,
+                                 allocable_by_class };
     univ.check_is_sane();
 
     univ
@@ -873,7 +884,7 @@ pub enum RI {
     Imm { imm: u32 }
 }
 pub fn RI_R(reg: Reg) -> RI {
-    debug_assert!(reg.getClass() == RC::I32);
+    debug_assert!(reg.getClass() == RegClass::I32);
     RI::Reg { reg }
 }
 pub fn RI_I(imm: u32) -> RI {
@@ -894,7 +905,7 @@ impl RI {
             RI::Imm { ..  } => { }
         }
     }
-    fn apply_D_or_U(&mut self, map: &Map::<VReg, RReg>) {
+    fn apply_D_or_U(&mut self, map: &Map::<VirtualReg, RealReg>) {
         match self {
             RI::Reg { ref mut reg } => { reg.apply_D_or_U(map); },
             RI::Imm { .. }          => {}
@@ -909,16 +920,16 @@ pub enum AM {
    RR { base: Reg, offset: Reg }
 }
 pub fn AM_R(base: Reg) -> AM {
-    debug_assert!(base.getClass() == RC::I32);
+    debug_assert!(base.getClass() == RegClass::I32);
     AM::RI { base, offset: 0 }
 }
 pub fn AM_RI(base: Reg, offset: u32) -> AM {
-    debug_assert!(base.getClass() == RC::I32);
+    debug_assert!(base.getClass() == RegClass::I32);
     AM::RI { base, offset }
 }
 pub fn AM_RR(base: Reg, offset: Reg) -> AM {
-    debug_assert!(base.getClass() == RC::I32);
-    debug_assert!(offset.getClass() == RC::I32);
+    debug_assert!(base.getClass() == RegClass::I32);
+    debug_assert!(offset.getClass() == RegClass::I32);
     AM::RR { base, offset }
 }
 impl Show for AM {
@@ -942,7 +953,7 @@ impl AM {
                 { uce.insert(*base); uce.insert(*offset); },
         }
     }
-    fn apply_D_or_U(&mut self, map: &Map::<VReg, RReg>) {
+    fn apply_D_or_U(&mut self, map: &Map::<VirtualReg, RealReg>) {
         match self {
             AM::RI { ref mut base, .. } =>
                 { base.apply_D_or_U(map); },
@@ -1020,7 +1031,7 @@ impl BinOpF {
 
 
 #[derive(Clone)]
-pub enum Insn {
+pub enum Inst {
     Imm     { dst: Reg, imm: u32 },
     ImmF    { dst: Reg, imm: f32 },
     Copy    { dst: Reg, src: Reg },
@@ -1031,10 +1042,10 @@ pub enum Insn {
     LoadF   { dst: Reg, addr: AM },
     Store   { addr: AM, src: Reg },
     StoreF  { addr: AM, src: Reg },
-    Spill   { dst: Slot, src: RReg },
-    SpillF  { dst: Slot, src: RReg },
-    Reload  { dst: RReg, src: Slot },
-    ReloadF { dst: RReg, src: Slot },
+    Spill   { dst: SpillSlot, src: RealReg },
+    SpillF  { dst: SpillSlot, src: RealReg },
+    Reload  { dst: RealReg, src: SpillSlot },
+    ReloadF { dst: RealReg, src: SpillSlot },
     Goto    { target: Label },
     GotoCTF { cond: Reg, targetT: Label, targetF: Label },
     PrintS  { str: String },
@@ -1043,145 +1054,145 @@ pub enum Insn {
     Finish  { }
 }
 
-pub fn i_imm(dst: Reg, imm: u32) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    Insn::Imm { dst, imm }
+pub fn i_imm(dst: Reg, imm: u32) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    Inst::Imm { dst, imm }
 }
-pub fn i_copy(dst: Reg, src: Reg) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    debug_assert!(src.getClass() == RC::I32);
-    Insn::Copy { dst, src }
+pub fn i_copy(dst: Reg, src: Reg) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    debug_assert!(src.getClass() == RegClass::I32);
+    Inst::Copy { dst, src }
 }
 // For BinOp variants see below
 
-pub fn i_load(dst: Reg, addr: AM) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    Insn::Load { dst, addr }
+pub fn i_load(dst: Reg, addr: AM) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    Inst::Load { dst, addr }
 }
-pub fn i_store(addr: AM, src: Reg) -> Insn {
-    debug_assert!(src.getClass() == RC::I32);
-    Insn::Store { addr, src }
+pub fn i_store(addr: AM, src: Reg) -> Inst {
+    debug_assert!(src.getClass() == RegClass::I32);
+    Inst::Store { addr, src }
 }
-pub fn i_spill(dst: Slot, src: RReg) -> Insn {
-    debug_assert!(src.getClass() == RC::I32);
-    Insn::Spill { dst, src }
+pub fn i_spill(dst: SpillSlot, src: RealReg) -> Inst {
+    debug_assert!(src.getClass() == RegClass::I32);
+    Inst::Spill { dst, src }
 }
-pub fn i_reload(dst: RReg, src: Slot) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    Insn::Reload { dst, src }
+pub fn i_reload(dst: RealReg, src: SpillSlot) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    Inst::Reload { dst, src }
 }
-pub fn i_goto<'a>(target: &'a str) -> Insn {
-    Insn::Goto { target: mkUnresolved(target.to_string()) }
+pub fn i_goto<'a>(target: &'a str) -> Inst {
+    Inst::Goto { target: mkUnresolved(target.to_string()) }
 }
-pub fn i_goto_ctf<'a>(cond: Reg, targetT: &'a str, targetF: &'a str) -> Insn {
-    debug_assert!(cond.getClass() == RC::I32);
-    Insn::GotoCTF { cond: cond,
+pub fn i_goto_ctf<'a>(cond: Reg, targetT: &'a str, targetF: &'a str) -> Inst {
+    debug_assert!(cond.getClass() == RegClass::I32);
+    Inst::GotoCTF { cond: cond,
                     targetT: mkUnresolved(targetT.to_string()),
                     targetF: mkUnresolved(targetF.to_string()) }
 }
-pub fn i_print_s<'a>(str: &'a str) -> Insn {
-    Insn::PrintS { str: str.to_string() }
+pub fn i_print_s<'a>(str: &'a str) -> Inst {
+    Inst::PrintS { str: str.to_string() }
 }
-pub fn i_print_i(reg: Reg) -> Insn {
-    debug_assert!(reg.getClass() == RC::I32);
-    Insn::PrintI { reg }
+pub fn i_print_i(reg: Reg) -> Inst {
+    debug_assert!(reg.getClass() == RegClass::I32);
+    Inst::PrintI { reg }
 }
-pub fn i_finish() -> Insn {
-    Insn::Finish { }
+pub fn i_finish() -> Inst {
+    Inst::Finish { }
 }
 
-pub fn i_add(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    debug_assert!(srcL.getClass() == RC::I32);
-    Insn::BinOp { op: BinOp::Add, dst, srcL, srcR }
+pub fn i_add(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    debug_assert!(srcL.getClass() == RegClass::I32);
+    Inst::BinOp { op: BinOp::Add, dst, srcL, srcR }
 }
-pub fn i_sub(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    debug_assert!(srcL.getClass() == RC::I32);
-    Insn::BinOp { op: BinOp::Sub, dst, srcL, srcR }
+pub fn i_sub(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    debug_assert!(srcL.getClass() == RegClass::I32);
+    Inst::BinOp { op: BinOp::Sub, dst, srcL, srcR }
 }
-pub fn i_mul(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    debug_assert!(srcL.getClass() == RC::I32);
-    Insn::BinOp { op: BinOp::Mul, dst, srcL, srcR }
+pub fn i_mul(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    debug_assert!(srcL.getClass() == RegClass::I32);
+    Inst::BinOp { op: BinOp::Mul, dst, srcL, srcR }
 }
-pub fn i_mod(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    debug_assert!(srcL.getClass() == RC::I32);
-    Insn::BinOp { op: BinOp::Mod, dst, srcL, srcR }
+pub fn i_mod(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    debug_assert!(srcL.getClass() == RegClass::I32);
+    Inst::BinOp { op: BinOp::Mod, dst, srcL, srcR }
 }
-pub fn i_shr(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    debug_assert!(srcL.getClass() == RC::I32);
-    Insn::BinOp { op: BinOp::Shr, dst, srcL, srcR }
+pub fn i_shr(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    debug_assert!(srcL.getClass() == RegClass::I32);
+    Inst::BinOp { op: BinOp::Shr, dst, srcL, srcR }
 }
-pub fn i_and(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    debug_assert!(srcL.getClass() == RC::I32);
-    Insn::BinOp { op: BinOp::And, dst, srcL, srcR }
+pub fn i_and(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    debug_assert!(srcL.getClass() == RegClass::I32);
+    Inst::BinOp { op: BinOp::And, dst, srcL, srcR }
 }
-pub fn i_cmp_eq(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    debug_assert!(srcL.getClass() == RC::I32);
-    Insn::BinOp { op: BinOp::CmpEQ, dst, srcL, srcR }
+pub fn i_cmp_eq(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    debug_assert!(srcL.getClass() == RegClass::I32);
+    Inst::BinOp { op: BinOp::CmpEQ, dst, srcL, srcR }
 }
-pub fn i_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    debug_assert!(srcL.getClass() == RC::I32);
-    Insn::BinOp { op: BinOp::CmpLT, dst, srcL, srcR }
+pub fn i_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    debug_assert!(srcL.getClass() == RegClass::I32);
+    Inst::BinOp { op: BinOp::CmpLT, dst, srcL, srcR }
 }
-pub fn i_cmp_le(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    debug_assert!(srcL.getClass() == RC::I32);
-    Insn::BinOp { op: BinOp::CmpLE, dst, srcL, srcR }
+pub fn i_cmp_le(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    debug_assert!(srcL.getClass() == RegClass::I32);
+    Inst::BinOp { op: BinOp::CmpLE, dst, srcL, srcR }
 }
-pub fn i_cmp_ge(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    debug_assert!(srcL.getClass() == RC::I32);
-    Insn::BinOp { op: BinOp::CmpGE, dst, srcL, srcR }
+pub fn i_cmp_ge(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    debug_assert!(srcL.getClass() == RegClass::I32);
+    Inst::BinOp { op: BinOp::CmpGE, dst, srcL, srcR }
 }
-pub fn i_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    debug_assert!(srcL.getClass() == RC::I32);
-    Insn::BinOp { op: BinOp::CmpGT, dst, srcL, srcR }
+pub fn i_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    debug_assert!(srcL.getClass() == RegClass::I32);
+    Inst::BinOp { op: BinOp::CmpGT, dst, srcL, srcR }
 }
 
 // 2-operand versions of i_add and i_sub, for experimentation
-pub fn i_addm(dst: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    Insn::BinOpM { op: BinOp::Add, dst, srcR }
+pub fn i_addm(dst: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    Inst::BinOpM { op: BinOp::Add, dst, srcR }
 }
-pub fn i_subm(dst: Reg, srcR: RI) -> Insn {
-    debug_assert!(dst.getClass() == RC::I32);
-    Insn::BinOpM { op: BinOp::Sub, dst, srcR }
-}
-
-pub fn i_fadd(dst: Reg, srcL: Reg, srcR: Reg) -> Insn {
-    debug_assert!(dst.getClass() == RC::F32);
-    debug_assert!(srcL.getClass() == RC::F32);
-    debug_assert!(srcR.getClass() == RC::F32);
-    Insn::BinOpF { op: BinOpF::FAdd, dst, srcL, srcR }
-}
-pub fn i_fsub(dst: Reg, srcL: Reg, srcR: Reg) -> Insn {
-    debug_assert!(dst.getClass() == RC::F32);
-    debug_assert!(srcL.getClass() == RC::F32);
-    debug_assert!(srcR.getClass() == RC::F32);
-    Insn::BinOpF { op: BinOpF::FSub, dst, srcL, srcR }
-}
-pub fn i_fmul(dst: Reg, srcL: Reg, srcR: Reg) -> Insn {
-    debug_assert!(dst.getClass() == RC::F32);
-    debug_assert!(srcL.getClass() == RC::F32);
-    debug_assert!(srcR.getClass() == RC::F32);
-    Insn::BinOpF { op: BinOpF::FMul, dst, srcL, srcR }
-}
-pub fn i_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Insn {
-    debug_assert!(dst.getClass() == RC::F32);
-    debug_assert!(srcL.getClass() == RC::F32);
-    debug_assert!(srcR.getClass() == RC::F32);
-    Insn::BinOpF { op: BinOpF::FDiv, dst, srcL, srcR }
+pub fn i_subm(dst: Reg, srcR: RI) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::I32);
+    Inst::BinOpM { op: BinOp::Sub, dst, srcR }
 }
 
-impl Show for Insn {
+pub fn i_fadd(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::F32);
+    debug_assert!(srcL.getClass() == RegClass::F32);
+    debug_assert!(srcR.getClass() == RegClass::F32);
+    Inst::BinOpF { op: BinOpF::FAdd, dst, srcL, srcR }
+}
+pub fn i_fsub(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::F32);
+    debug_assert!(srcL.getClass() == RegClass::F32);
+    debug_assert!(srcR.getClass() == RegClass::F32);
+    Inst::BinOpF { op: BinOpF::FSub, dst, srcL, srcR }
+}
+pub fn i_fmul(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::F32);
+    debug_assert!(srcL.getClass() == RegClass::F32);
+    debug_assert!(srcR.getClass() == RegClass::F32);
+    Inst::BinOpF { op: BinOpF::FMul, dst, srcL, srcR }
+}
+pub fn i_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
+    debug_assert!(dst.getClass() == RegClass::F32);
+    debug_assert!(srcL.getClass() == RegClass::F32);
+    debug_assert!(srcR.getClass() == RegClass::F32);
+    Inst::BinOpF { op: BinOpF::FDiv, dst, srcL, srcR }
+}
+
+impl Show for Inst {
     fn show(&self) -> String {
         fn ljustify(s: String, w: usize) -> String {
             if s.len() >= w {
@@ -1197,67 +1208,67 @@ impl Show for Insn {
         }
 
         match self {
-            Insn::Imm { dst, imm } =>
+            Inst::Imm { dst, imm } =>
                 "imm     ".to_string()
                 + &dst.show() + &", ".to_string() + &imm.to_string(),
-            Insn::ImmF { dst, imm } =>
+            Inst::ImmF { dst, imm } =>
                 "immf    ".to_string()
                 + &dst.show() + &", ".to_string() + &imm.to_string(),
-            Insn::Copy { dst, src } =>
+            Inst::Copy { dst, src } =>
                 "copy    ".to_string()
                 + &dst.show() + &", ".to_string() + &src.show(),
-            Insn::BinOp { op, dst, srcL, srcR } =>
+            Inst::BinOp { op, dst, srcL, srcR } =>
                 ljustify(op.show(), 7)
                 + &" ".to_string() + &dst.show()
                 + &", ".to_string() + &srcL.show() + &", ".to_string()
                 + &srcR.show(),
-            Insn::BinOpM { op, dst, srcR } =>
+            Inst::BinOpM { op, dst, srcR } =>
                 ljustify(op.show() + &"m".to_string(), 7)
                 + &" ".to_string() + &dst.show()
                 + &", ".to_string() + &srcR.show(),
-            Insn::BinOpF { op, dst, srcL, srcR } =>
+            Inst::BinOpF { op, dst, srcL, srcR } =>
                 ljustify(op.show(), 7)
                 + &" ".to_string() + &dst.show()
                 + &", ".to_string() + &srcL.show() + &", ".to_string()
                 + &srcR.show(),
-            Insn::Load { dst, addr } =>
+            Inst::Load { dst, addr } =>
                 "load    ".to_string() + &dst.show() + &", ".to_string()
                 + &addr.show(),
-            Insn::LoadF { dst, addr } =>
+            Inst::LoadF { dst, addr } =>
                 "loadf   ".to_string() + &dst.show() + &", ".to_string()
                 + &addr.show(),
-            Insn::Store { addr, src } =>
+            Inst::Store { addr, src } =>
                 "store   ".to_string() + &addr.show()
                 + &", ".to_string()
                 + &src.show(),
-            Insn::StoreF { addr, src } =>
+            Inst::StoreF { addr, src } =>
                 "storef  ".to_string() + &addr.show()
                 + &", ".to_string()
                 + &src.show(),
-            Insn::Spill { dst, src } => {
+            Inst::Spill { dst, src } => {
                 "SPILL   ".to_string() + &dst.show() + &", ".to_string()
                 + &src.show()
             },
-            Insn::Spill { dst, src } => {
+            Inst::Spill { dst, src } => {
                 "SPILLF  ".to_string() + &dst.show() + &", ".to_string()
                 + &src.show()
             },
-            Insn::Reload { dst, src } => {
+            Inst::Reload { dst, src } => {
                 "RELOAD  ".to_string() + &dst.show() + &", ".to_string()
                 + &src.show()
             },
-            Insn::ReloadF { dst, src } => {
+            Inst::ReloadF { dst, src } => {
                 "RELOADF ".to_string() + &dst.show() + &", ".to_string()
                 + &src.show()
             },
-            Insn::Goto { target } =>
-                "goto   ".to_string()
+            Inst::Goto { target } =>
+                "goto    ".to_string()
                 + &target.show(),
-            Insn::GotoCTF { cond, targetT, targetF } =>
+            Inst::GotoCTF { cond, targetT, targetF } =>
                 "goto    if ".to_string()
                 + &cond.show() + &" then ".to_string() + &targetT.show()
                 + &" else ".to_string() + &targetF.show(),
-            Insn::PrintS { str } => {
+            Inst::PrintS { str } => {
                 let mut res = "prints '".to_string();
                 for c in str.chars() {
                     res += &(if c == '\n' { "\\n".to_string() }
@@ -1265,31 +1276,31 @@ impl Show for Insn {
                 }
                 res + &"'".to_string()
             }
-            Insn::PrintI { reg } =>
+            Inst::PrintI { reg } =>
                 "printi ".to_string()
                 + &reg.show(),
-            Insn::Finish { } =>
+            Inst::Finish { } =>
                 "finish ".to_string(),
             _ => "other".to_string()
         }
     }
 }
 
-impl Insn {
+impl Inst {
     // Returns a vector of BlockIxs, being those that this insn might jump to.
     // This might contain duplicates (although it would be pretty strange if
     // it did). This function should not be applied to non-control-flow
     // instructions.  The labels are assumed all to be "resolved".
     pub fn getTargets(&self) -> Vec::<BlockIx> {
         match self {
-            Insn::Goto { target } =>
+            Inst::Goto { target } =>
                 vec![target.getBlockIx()],
-            Insn::GotoCTF { cond:_, targetT, targetF } =>
+            Inst::GotoCTF { cond:_, targetT, targetF } =>
                 vec![targetT.getBlockIx(), targetF.getBlockIx()],
-            Insn::Finish { } =>
+            Inst::Finish { } =>
                 vec![],
             _other =>
-                panic!("Insn::getTargets: incorrectly applied to: {}",
+                panic!("Inst::getTargets: incorrectly applied to: {}",
                         self.show())
         }
     }
@@ -1312,40 +1323,40 @@ impl Insn {
         let mut m0d = Set::<Reg>::empty();
         let mut uce = Set::<Reg>::empty();
         match self {
-            Insn::Imm { dst, imm:_ } => {
+            Inst::Imm { dst, imm:_ } => {
                 def.insert(*dst);
             },
-            Insn::Copy { dst, src } => {
+            Inst::Copy { dst, src } => {
                 def.insert(*dst);
                 uce.insert(*src);
             },
-            Insn::BinOp { op:_, dst, srcL, srcR } => {
+            Inst::BinOp { op:_, dst, srcL, srcR } => {
                 def.insert(*dst);
                 uce.insert(*srcL);
                 srcR.addRegReadsTo(&mut uce);
             },
-            Insn::BinOpM { op:_, dst, srcR } => {
+            Inst::BinOpM { op:_, dst, srcR } => {
                 m0d.insert(*dst);
                 srcR.addRegReadsTo(&mut uce);
             },
-            Insn::Store { addr, src } => {
+            Inst::Store { addr, src } => {
                 addr.addRegReadsTo(&mut uce);
                 uce.insert(*src);
             },
-            Insn::Load { dst, addr } => {
+            Inst::Load { dst, addr } => {
                 def.insert(*dst);
                 addr.addRegReadsTo(&mut uce);
             },
-            Insn::Goto { .. } => { },
-            Insn::GotoCTF { cond, targetT:_, targetF:_ } => {
+            Inst::Goto { .. } => { },
+            Inst::GotoCTF { cond, targetT:_, targetF:_ } => {
                 uce.insert(*cond);
             },
-            Insn::PrintS { .. } => { },
-            Insn::PrintI { reg } => {
+            Inst::PrintS { .. } => { },
+            Inst::PrintI { reg } => {
                 uce.insert(*reg);
             },
-            Insn::Finish { } => { },
-            _other => panic!("Insn::getRegUsage: unhandled: {}", self.show())
+            Inst::Finish { } => { },
+            _other => panic!("Inst::getRegUsage: unhandled: {}", self.show())
         }
         // Failure of either of these is serious and should be investigated.
         debug_assert!(!def.intersects(&m0d));
@@ -1353,79 +1364,80 @@ impl Insn {
         (def, m0d, uce)
     }
 
-    // Apply the specified VReg->RReg mappings to the instruction, thusly:
+    // Apply the specified VirtualReg->RealReg mappings to the instruction,
+    // thusly:
     // * For registers mentioned in a read role, apply mapU.
     // * For registers mentioned in a write role, apply mapD.
     // * For registers mentioned in a modify role, mapU and mapD *must* agree
     //   (if not, our caller is buggy).  So apply either map to that register.
-    pub fn mapRegs_D_U(&mut self, mapD: &Map::<VReg, RReg>,
-                              mapU: &Map::<VReg, RReg>) {
+    pub fn mapRegs_D_U(&mut self, mapD: &Map::<VirtualReg, RealReg>,
+                                  mapU: &Map::<VirtualReg, RealReg>) {
         let mut ok = true;
         match self {
-            Insn::Imm { dst, imm:_ } => {
+            Inst::Imm { dst, imm:_ } => {
                 dst.apply_D_or_U(mapD);
             },
-            Insn::Copy { dst, src } => {
+            Inst::Copy { dst, src } => {
                 dst.apply_D_or_U(mapD);
                 src.apply_D_or_U(mapU);
             },
-            Insn::BinOp { op:_, dst, srcL, srcR } => {
+            Inst::BinOp { op:_, dst, srcL, srcR } => {
                 dst.apply_D_or_U(mapD);
                 srcL.apply_D_or_U(mapU);
                 srcR.apply_D_or_U(mapU);
             },
-            Insn::BinOpM { op:_, dst, srcR } => {
+            Inst::BinOpM { op:_, dst, srcR } => {
                 dst.apply_M(mapD, mapU);
                 srcR.apply_D_or_U(mapU);
             },
-            Insn::Store { addr, src } => {
+            Inst::Store { addr, src } => {
                 addr.apply_D_or_U(mapU);
                 src.apply_D_or_U(mapU);
             },
-            Insn::Load { dst, addr } => {
+            Inst::Load { dst, addr } => {
                 dst.apply_D_or_U(mapD);
                 addr.apply_D_or_U(mapU);
             },
-            Insn::Goto { .. } => { },
-            Insn::GotoCTF { cond, targetT:_, targetF:_ } => {
+            Inst::Goto { .. } => { },
+            Inst::GotoCTF { cond, targetT:_, targetF:_ } => {
                 cond.apply_D_or_U(mapU);
             },
-            Insn::PrintS { .. } => { },
-            Insn::PrintI { reg } => {
+            Inst::PrintS { .. } => { },
+            Inst::PrintI { reg } => {
                 reg.apply_D_or_U(mapU);
             },
-            Insn::Finish { } => { },
+            Inst::Finish { } => { },
             _ => {
                 ok = false;
             }
         }
         if !ok {
-            panic!("Insn::mapRegs_D_U: unhandled: {}", self.show());
+            panic!("Inst::mapRegs_D_U: unhandled: {}", self.show());
         }
     }
 }
 
-fn is_control_flow_insn(insn: &Insn) -> bool {
+fn is_control_flow_insn(insn: &Inst) -> bool {
     match insn {
-        Insn::Goto { .. } | Insn::GotoCTF { .. } | Insn::Finish{} => true,
+        Inst::Goto { .. } | Inst::GotoCTF { .. } | Inst::Finish{} => true,
         _ => false
     }
 }
 
-pub fn is_goto_insn(insn: &Insn) -> Option<Label> {
+pub fn is_goto_insn(insn: &Inst) -> Option<Label> {
     match insn {
-        Insn::Goto { target } => Some(target.clone()),
+        Inst::Goto { target } => Some(target.clone()),
         _ => None
     }
 }
 
-pub fn remapControlFlowTarget(insn: &mut Insn, from: &String, to: &String)
+pub fn remapControlFlowTarget(insn: &mut Inst, from: &String, to: &String)
 {
     match insn {
-        Insn::Goto { ref mut target } => {
+        Inst::Goto { ref mut target } => {
             target.remapControlFlow(from, to);
         },
-        Insn::GotoCTF { cond:_, ref mut targetT, ref mut targetF } => {
+        Inst::GotoCTF { cond:_, ref mut targetT, ref mut targetF } => {
             targetT.remapControlFlow(from, to);
             targetF.remapControlFlow(from, to);
         },
@@ -1438,25 +1450,25 @@ pub fn remapControlFlowTarget(insn: &mut Insn, from: &String, to: &String)
 // Definition of Block and Func, and printing thereof.
 
 pub struct Block {
-    pub name:  String,
-    pub start: InsnIx,
-    pub len:   u32,
-    pub eef:   u16
+    pub name:    String,
+    pub start:   InstIx,
+    pub len:     u32,
+    pub estFreq: u16 // Estimated execution frequency
 }
-pub fn mkBlock(name: String, start: InsnIx, len: u32) -> Block {
-    Block { name: name, start: start, len: len, eef: 1 }
+pub fn mkBlock(name: String, start: InstIx, len: u32) -> Block {
+    Block { name: name, start: start, len: len, estFreq: 1 }
 }
 impl Clone for Block {
     // This is only needed for debug printing.
     fn clone(&self) -> Self {
-        Block { name:  self.name.clone(),
-                start: self.start,
-                len:   self.len,
-                eef:   self.eef }
+        Block { name:    self.name.clone(),
+                start:   self.start,
+                len:     self.len,
+                estFreq: self.estFreq }
     }
 }
 impl Block {
-    fn containsInsnIx(&self, iix: InsnIx) -> bool {
+    fn containsInstIx(&self, iix: InstIx) -> bool {
         iix.get() >= self.start.get()
             && iix.get() < self.start.get() + self.len
     }
@@ -1464,11 +1476,11 @@ impl Block {
 
 
 pub struct Func {
-    pub name:   String,
-    pub entry:  Label,
-    pub nVRegs: u32,
-    pub insns:  Vec_Insn,    // indexed by InsnIx
-    pub blocks: Vec_Block    // indexed by BlockIx
+    pub name:         String,
+    pub entry:        Label,
+    pub nVirtualRegs: u32,
+    pub insns:        Vec_Inst,    // indexed by InstIx
+    pub blocks:       Vec_Block    // indexed by BlockIx
     // Note that |blocks| must be in order of increasing |Block::start|
     // fields.  Code that wants to traverse the blocks in some other order
     // must represent the ordering some other way; rearranging Func::blocks is
@@ -1479,7 +1491,7 @@ impl Clone for Func {
     fn clone(&self) -> Self {
         Func { name:   self.name.clone(),
                entry:  self.entry.clone(),
-               nVRegs: self.nVRegs,
+               nVirtualRegs: self.nVirtualRegs,
                insns:  self.insns.clone(),
                blocks: self.blocks.clone() }
     }
@@ -1502,8 +1514,8 @@ impl Func {
         Func {
             name: name.to_string(),
             entry: Label::Unresolved { name: entry.to_string() },
-            nVRegs: 0,
-            insns: Vec_Insn::new(),
+            nVirtualRegs: 0,
+            insns: Vec_Inst::new(),
             blocks: Vec_Block::new()
         }
     }
@@ -1519,7 +1531,7 @@ impl Func {
             }
             println!("  {}:{}", mkBlockIx(ix).show(), b.name);
             for i in b.start.get() .. b.start.get() + b.len {
-                let ixI = mkInsnIx(i);
+                let ixI = mkInstIx(i);
                 println!("      {:<3}   {}",
                          ixI.show(), self.insns[ixI].show());
             }
@@ -1528,19 +1540,19 @@ impl Func {
         println!("}}");
     }
 
-    // Get a new VReg name
-    pub fn newVReg(&mut self, rc: RC) -> Reg {
-        let v = mkVReg(rc, self.nVRegs);
-        self.nVRegs += 1;
+    // Get a new VirtualReg name
+    pub fn newVirtualReg(&mut self, rc: RegClass) -> Reg {
+        let v = mkVirtualReg(rc, self.nVirtualRegs);
+        self.nVirtualRegs += 1;
         v
     }
 
     // Add a block to the Func
-    pub fn block<'a>(&mut self, name: &'a str, mut insns: Vec_Insn) {
+    pub fn block<'a>(&mut self, name: &'a str, mut insns: Vec_Inst) {
         let start = self.insns.len();
         let len = insns.len() as u32;
         self.insns.append(&mut insns);
-        let b = mkBlock(name.to_string(), mkInsnIx(start), len);
+        let b = mkBlock(name.to_string(), mkInstIx(start), len);
         self.blocks.push(b);
     }
 
@@ -1561,7 +1573,7 @@ impl Func {
             }
             if bix > mkBlockIx(0)
                 && self.blocks[bix.minus(1)].start >= self.blocks[bix].start {
-                panic!("Func: blocks are not in increasing order of InsnIx");
+                panic!("Func: blocks are not in increasing order of InstIx");
             }
             for i in 0 .. b.len {
                 let iix = b.start.plus(i);
@@ -1579,7 +1591,7 @@ impl Func {
         // Resolve all labels
         let blocks = &self.blocks;
         for i in self.insns.iter_mut() {
-            resolveInsn(i, |name| lookup(blocks, name));
+            resolveInst(i, |name| lookup(blocks, name));
         }
         resolveLabel(&mut self.entry, |name| lookup(blocks, name));
     }
@@ -1599,12 +1611,12 @@ fn resolveLabel<F>(label: &mut Label, lookup: F)
     *label = resolved;
 }
 
-fn resolveInsn<F>(insn: &mut Insn, lookup: F)
+fn resolveInst<F>(insn: &mut Inst, lookup: F)
     where F: Copy + Fn(String) -> BlockIx
 {
     match insn {
-        Insn::Goto { ref mut target } => resolveLabel(target, lookup),
-        Insn::GotoCTF { cond:_, ref mut targetT, ref mut targetF } => {
+        Inst::Goto { ref mut target } => resolveLabel(target, lookup),
+        Inst::GotoCTF { cond:_, ref mut targetT, ref mut targetF } => {
             resolveLabel(targetT, lookup);
             resolveLabel(targetF, lookup);
         },
@@ -1640,13 +1652,23 @@ fn resolveInsn<F>(insn: &mut Insn, lookup: F)
 // * A reload for instruction i is considered to be live from i.R to i.U.
 //
 // * A spill for instruction i is considered to be live from i.D to i.S.
-pub enum Point { R, U, D, S }
+pub enum Point { Reload, Use, Def, Spill }
 impl Point {
-    pub fn isR(self) -> bool { match self { Point::R => true, _ => false } }
-    pub fn isU(self) -> bool { match self { Point::U => true, _ => false } }
-    pub fn isD(self) -> bool { match self { Point::D => true, _ => false } }
-    pub fn isS(self) -> bool { match self { Point::S => true, _ => false } }
-    pub fn isUorD(self) -> bool { self.isU() || self.isD() }
+    pub fn isReload(self) -> bool {
+        match self { Point::Reload => true, _ => false }
+    }
+    pub fn isUse(self) -> bool {
+        match self { Point::Use => true, _ => false }
+    }
+    pub fn isDef(self) -> bool {
+        match self { Point::Def => true, _ => false }
+    }
+    pub fn isSpill(self) -> bool {
+        match self { Point::Spill => true, _ => false }
+    }
+    pub fn isUseOrDef(self) -> bool {
+        self.isUse() || self.isDef()
+    }
 }
 impl PartialOrd for Point {
     // In short .. R < U < D < S.  This is probably what would be #derive'd
@@ -1656,10 +1678,10 @@ impl PartialOrd for Point {
         // no-op.
         fn convert(pt: &Point) -> u32 {
             match pt {
-                Point::R => 0,
-                Point::U => 1,
-                Point::D => 2,
-                Point::S => 3,
+                Point::Reload => 0,
+                Point::Use    => 1,
+                Point::Def    => 2,
+                Point::Spill  => 3,
             }
         }
         convert(self).partial_cmp(&convert(other))
@@ -1667,28 +1689,28 @@ impl PartialOrd for Point {
 }
 
 
-// See comments below on |Frag| for the meaning of |InsnPoint|.
+// See comments below on |RangeFrag| for the meaning of |InstPoint|.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Ord)]
-pub struct InsnPoint {
-    pub iix: InsnIx,
+pub struct InstPoint {
+    pub iix: InstIx,
     pub pt: Point
 }
-pub fn mkInsnPoint(iix: InsnIx, pt: Point) -> InsnPoint {
-    InsnPoint { iix, pt }
+pub fn mkInstPoint(iix: InstIx, pt: Point) -> InstPoint {
+    InstPoint { iix, pt }
 }
-pub fn InsnPoint_R(iix: InsnIx) -> InsnPoint {
-    InsnPoint { iix: iix, pt: Point::R }
+pub fn InstPoint_Reload(iix: InstIx) -> InstPoint {
+    InstPoint { iix: iix, pt: Point::Reload }
 }
-pub fn InsnPoint_U(iix: InsnIx) -> InsnPoint {
-    InsnPoint { iix: iix, pt: Point::U }
+pub fn InstPoint_Use(iix: InstIx) -> InstPoint {
+    InstPoint { iix: iix, pt: Point::Use }
 }
-pub fn InsnPoint_D(iix: InsnIx) -> InsnPoint {
-    InsnPoint { iix: iix, pt: Point::D }
+pub fn InstPoint_Def(iix: InstIx) -> InstPoint {
+    InstPoint { iix: iix, pt: Point::Def }
 }
-pub fn InsnPoint_S(iix: InsnIx) -> InsnPoint {
-    InsnPoint { iix: iix, pt: Point::S }
+pub fn InstPoint_Spill(iix: InstIx) -> InstPoint {
+    InstPoint { iix: iix, pt: Point::Spill }
 }
-impl PartialOrd for InsnPoint {
+impl PartialOrd for InstPoint {
     // Again .. don't assume anything about the #derive'd version.  These have
     // to be ordered using |iix| as the primary key and |pt| as the
     // secondary.
@@ -1697,37 +1719,37 @@ impl PartialOrd for InsnPoint {
             Some(Ordering::Less)    => Some(Ordering::Less),
             Some(Ordering::Greater) => Some(Ordering::Greater),
             Some(Ordering::Equal)   => self.pt.partial_cmp(&other.pt),
-            None => panic!("InsnPoint::partial_cmp: fail #1"),
+            None => panic!("InstPoint::partial_cmp: fail #1"),
         }
     }
 }
-impl Show for InsnPoint {
+impl Show for InstPoint {
     fn show(&self) -> String {
         self.iix.show() + &match self.pt {
-            Point::R => "/r",
-            Point::U => "/u",
-            Point::D => "/d",
-            Point::S => "/s"
+            Point::Reload => "/r",
+            Point::Use    => "/u",
+            Point::Def    => "/d",
+            Point::Spill  => "/s"
         }.to_string()
     }
 }
 
 
-// A handy summary hint for a Frag.
+// A handy summary hint for a RangeFrag.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum FragKind {
+pub enum RangeFragKind {
     Local,   // Fragment exists entirely inside one block
     LiveIn,  // Fragment is live in to a block, but ends inside it
     LiveOut, // Fragment is live out of a block, but starts inside it
     Thru     // Fragment is live through the block (starts and ends outside it)
 }
-impl Show for FragKind {
+impl Show for RangeFragKind {
     fn show(&self) -> String {
         match self {
-            FragKind::Local   => "Local",
-            FragKind::LiveIn  => "LiveIn",
-            FragKind::LiveOut => "LiveOut",
-            FragKind::Thru    => "Thru"
+            RangeFragKind::Local   => "Local",
+            RangeFragKind::LiveIn  => "LiveIn",
+            RangeFragKind::LiveOut => "LiveOut",
+            RangeFragKind::Thru    => "Thru"
         }.to_string()
     }
 }
@@ -1744,7 +1766,7 @@ impl Show for FragKind {
      Calculated from loop nesting depth, depth inside an if-tree, etc
      Suggested: u16
 
-   Frag (Live Range Fragment):
+   RangeFrag (Live Range Fragment):
    - Length (in instructions).  Can be calculated, = end - start + 1.
    - Number of uses (of the associated Reg)
      Suggested: u16
@@ -1752,12 +1774,12 @@ impl Show for FragKind {
    LR (Live Range, = a set of Live Range Fragments):
    - spill cost (can be calculated)
      = sum, for each frag:
-            frag.#uses / frag.len * frag.block.eef
+            frag.#uses / frag.len * frag.block.estFreq
        with the proviso that spill/reload LRs must have spill cost of infinity
      Do this with a f32 so we don't have to worry about scaling/overflow.
 */
 
-// A Live Range Fragment (Frag) describes a consecutive sequence of one or
+// A Live Range Fragment (RangeFrag) describes a consecutive sequence of one or
 // more instructions, in which a Reg is "live".  The sequence must exist
 // entirely inside only one basic block.
 //
@@ -1769,7 +1791,7 @@ impl Show for FragKind {
 // position, as described for |Point| above.
 //
 // When we come to generate spill/restore live ranges, Point::S and Point::R
-// also come into play.  Live ranges (and hence, Frags) that do not perform
+// also come into play.  Live ranges (and hence, RangeFrags) that do not perform
 // spills or restores should not use either of Point::S or Point::R.
 //
 // The set of positions denoted by
@@ -1777,28 +1799,28 @@ impl Show for FragKind {
 //    {0 .. #insns-1} x {Reload point, Use point, Def point, Spill point}
 //
 // is exactly the set of positions that we need to keep track of when mapping
-// live ranges to registers.  This the reason for the type InsnPoint.  Note
-// that InsnPoint values have a total ordering, at least within a single basic
+// live ranges to registers.  This the reason for the type InstPoint.  Note
+// that InstPoint values have a total ordering, at least within a single basic
 // block: the insn number is used as the primary key, and the Point part is
 // the secondary key, with Reload < Use < Def < Spill.
 //
-// Finally, a Frag has a |count| field, which is a u16 indicating how often
-// the associated storage unit (Reg) is mentioned inside the Frag.  It is
-// assumed that the Frag is associated with some Reg.  If not, the |count|
+// Finally, a RangeFrag has a |count| field, which is a u16 indicating how often
+// the associated storage unit (Reg) is mentioned inside the RangeFrag.  It is
+// assumed that the RangeFrag is associated with some Reg.  If not, the |count|
 // field is meaningless.
 //
 // The |bix| field is actually redundant, since the containing |Block| can be
 // inferred, laboriously, from |first| and |last|, providing you have a
 // |Block| table to hand.  It is included here for convenience.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Frag {
+pub struct RangeFrag {
     pub bix:   BlockIx,
-    pub kind:  FragKind,
-    pub first: InsnPoint,
-    pub last:  InsnPoint,
+    pub kind:  RangeFragKind,
+    pub first: InstPoint,
+    pub last:  InstPoint,
     pub count: u16
 }
-impl Show for Frag {
+impl Show for RangeFrag {
     fn show(&self) -> String {
         self.bix.show() + &"; count=".to_string()
             + &self.count.to_string() + &"; ".to_string()
@@ -1806,104 +1828,105 @@ impl Show for Frag {
             + &self.first.show() + &", " + &self.last.show() + &"]"
     }
 }
-pub fn mkFrag(blocks: &Vec_Block, bix: BlockIx,
-          first: InsnPoint, last: InsnPoint, count: u16) -> Frag {
+pub fn mkRangeFrag(blocks: &Vec_Block, bix: BlockIx,
+                   first: InstPoint, last: InstPoint, count: u16) -> RangeFrag {
     let block = &blocks[bix];
     debug_assert!(block.len >= 1);
-    debug_assert!(block.containsInsnIx(first.iix));
-    debug_assert!(block.containsInsnIx(last.iix));
+    debug_assert!(block.containsInstIx(first.iix));
+    debug_assert!(block.containsInstIx(last.iix));
     debug_assert!(first <= last);
     if first == last {
         debug_assert!(count == 1);
     }
     let first_iix_in_block = block.start.get();
     let last_iix_in_block  = first_iix_in_block + block.len - 1;
-    let first_pt_in_block  = InsnPoint_U(mkInsnIx(first_iix_in_block));
-    let last_pt_in_block   = InsnPoint_D(mkInsnIx(last_iix_in_block));
+    let first_pt_in_block  = InstPoint_Use(mkInstIx(first_iix_in_block));
+    let last_pt_in_block   = InstPoint_Def(mkInstIx(last_iix_in_block));
     let kind =
         match (first == first_pt_in_block, last == last_pt_in_block) {
-            (false, false) => FragKind::Local,
-            (false, true)  => FragKind::LiveOut,
-            (true,  false) => FragKind::LiveIn,
-            (true,  true)  => FragKind::Thru
+            (false, false) => RangeFragKind::Local,
+            (false, true)  => RangeFragKind::LiveOut,
+            (true,  false) => RangeFragKind::LiveIn,
+            (true,  true)  => RangeFragKind::Thru
         };
-    Frag { bix, kind, first, last, count }
+    RangeFrag { bix, kind, first, last, count }
 }
 
 
-// Comparison of Frags.  They form a partial order.
+// Comparison of RangeFrags.  They form a partial order.
 #[derive(PartialEq)]
 enum FCR { LT, GT, EQ, UN }
 
-fn cmpFrags(f1: &Frag, f2: &Frag) -> FCR {
+fn cmpRangeFrags(f1: &RangeFrag, f2: &RangeFrag) -> FCR {
     if f1.last < f2.first { return FCR::LT; }
     if f1.first > f2.last { return FCR::GT; }
     if f1.first == f2.first && f1.last == f2.last { return FCR::EQ; }
     FCR::UN
 }
-impl Frag {
-    pub fn contains(&self, ipt: &InsnPoint) -> bool {
+impl RangeFrag {
+    pub fn contains(&self, ipt: &InstPoint) -> bool {
         self.first <= *ipt && *ipt <= self.last
     }
 }
 
-//=============================================================================
-// Vectors of FragIxs, sorted so that the associated Frags are in ascending
-// order (per their InsnPoint fields).
 
-// The "fragment environment" (sometimes called 'fenv') to which the FragIxs
-// refer, is not stored here.
+//=============================================================================
+// Vectors of RangeFragIxs, sorted so that the associated RangeFrags are in
+// ascending order (per their InstPoint fields).
+//
+// The "fragment environment" (sometimes called 'fenv' or 'frag_env') to which
+// the RangeFragIxs refer, is not stored here.
 
 #[derive(Clone)]
-pub struct SortedFragIxs {
-    pub fragIxs: Vec::<FragIx>
+pub struct SortedRangeFragIxs {
+    pub fragIxs: Vec::<RangeFragIx>
 }
-impl SortedFragIxs {
+impl SortedRangeFragIxs {
     fn show(&self) -> String {
         self.fragIxs.show()
     }
 
-    pub fn show_with_fenv(&self, fenv: &Vec_Frag) -> String {
-        let mut frags = Vec_Frag::new();
+    pub fn show_with_fenv(&self, fenv: &Vec_RangeFrag) -> String {
+        let mut frags = Vec_RangeFrag::new();
         for fix in &self.fragIxs {
             frags.push(fenv[*fix]);
         }
         "SFIxs_".to_string() + &frags.show()
     }
 
-    fn check(&self, fenv: &Vec_Frag) {
+    fn check(&self, fenv: &Vec_RangeFrag) {
         let mut ok = true;
         for i in 1 .. self.fragIxs.len() {
             let prev_frag = &fenv[self.fragIxs[i-1]];
             let this_frag = &fenv[self.fragIxs[i-0]];
-            if cmpFrags(prev_frag, this_frag) != FCR::LT {
+            if cmpRangeFrags(prev_frag, this_frag) != FCR::LT {
                 ok = false;
                 break;
             }
         }
         if !ok {
-            panic!("SortedFragIxs::check: vector not ok");
+            panic!("SortedRangeFragIxs::check: vector not ok");
         }
     }
 
-    pub fn new(source: &Vec::<FragIx>, fenv: &Vec_Frag) -> Self {
-        let mut res = SortedFragIxs { fragIxs: source.clone() };
+    pub fn new(source: &Vec::<RangeFragIx>, fenv: &Vec_RangeFrag) -> Self {
+        let mut res = SortedRangeFragIxs { fragIxs: source.clone() };
         // check the source is ordered, and clone (or sort it)
         res.fragIxs.sort_unstable_by(
             |fix_a, fix_b| {
-                match cmpFrags(&fenv[*fix_a], &fenv[*fix_b]) {
+                match cmpRangeFrags(&fenv[*fix_a], &fenv[*fix_b]) {
                     FCR::LT => Ordering::Less,
                     FCR::GT => Ordering::Greater,
                     FCR::EQ | FCR::UN =>
-                        panic!("SortedFragIxs::new: overlapping or dup Frags!")
+                        panic!("SortedRangeFragIxs::new: overlapping Frags!")
                 }
             });
         res.check(fenv);
         res
     }
 
-    pub fn unit(fix: FragIx, fenv: &Vec_Frag) -> Self {
-        let mut res = SortedFragIxs { fragIxs: Vec::<FragIx>::new() };
+    pub fn unit(fix: RangeFragIx, fenv: &Vec_RangeFrag) -> Self {
+        let mut res = SortedRangeFragIxs { fragIxs: Vec::<RangeFragIx>::new() };
         res.fragIxs.push(fix);
         res.check(fenv);
         res
@@ -1911,12 +1934,13 @@ impl SortedFragIxs {
 }
 
 //=============================================================================
-// Further methods on SortedFragIxs.  These are needed by the core algorithm.
+// Further methods on SortedRangeFragIxs.  These are needed by the core
+// algorithm.
 
-impl SortedFragIxs {
+impl SortedRangeFragIxs {
     // Structural equality, at least.  Not equality in the sense of
-    // deferencing the contained FragIxes.
-    fn equals(&self, other: &SortedFragIxs) -> bool {
+    // deferencing the contained RangeFragIxes.
+    fn equals(&self, other: &SortedRangeFragIxs) -> bool {
         if self.fragIxs.len() != other.fragIxs.len() {
             return false;
         }
@@ -1928,22 +1952,22 @@ impl SortedFragIxs {
         true
     }
 
-    pub fn add(&mut self, to_add: &Self, fenv: &Vec_Frag) {
+    pub fn add(&mut self, to_add: &Self, fenv: &Vec_RangeFrag) {
         self.check(fenv);
         to_add.check(fenv);
         let sfixs_x = &self;
         let sfixs_y = &to_add;
         let mut ix = 0;
         let mut iy = 0;
-        let mut res = Vec::<FragIx>::new();
+        let mut res = Vec::<RangeFragIx>::new();
         while ix < sfixs_x.fragIxs.len() && iy < sfixs_y.fragIxs.len() {
             let fx = fenv[ sfixs_x.fragIxs[ix] ];
             let fy = fenv[ sfixs_y.fragIxs[iy] ];
-            match cmpFrags(&fx, &fy) {
+            match cmpRangeFrags(&fx, &fy) {
                 FCR::LT => { res.push(sfixs_x.fragIxs[ix]); ix += 1; },
                 FCR::GT => { res.push(sfixs_y.fragIxs[iy]); iy += 1; },
                 FCR::EQ | FCR::UN
-                    => panic!("SortedFragIxs::add: vectors intersect")
+                    => panic!("SortedRangeFragIxs::add: vectors intersect")
             }
         }
         // At this point, one or the other or both vectors are empty.  Hence
@@ -1963,7 +1987,7 @@ impl SortedFragIxs {
         self.check(fenv);
     }
 
-    pub fn can_add(&self, to_add: &Self, fenv: &Vec_Frag) -> bool {
+    pub fn can_add(&self, to_add: &Self, fenv: &Vec_RangeFrag) -> bool {
         // This is merely a partial evaluation of add() which returns |false|
         // exactly in the cases where add() would have panic'd.
         self.check(fenv);
@@ -1975,7 +1999,7 @@ impl SortedFragIxs {
         while ix < sfixs_x.fragIxs.len() && iy < sfixs_y.fragIxs.len() {
             let fx = fenv[ sfixs_x.fragIxs[ix] ];
             let fy = fenv[ sfixs_y.fragIxs[iy] ];
-            match cmpFrags(&fx, &fy) {
+            match cmpRangeFrags(&fx, &fy) {
                 FCR::LT => { ix += 1; },
                 FCR::GT => { iy += 1; },
                 FCR::EQ | FCR::UN => { return false; }
@@ -1988,23 +2012,23 @@ impl SortedFragIxs {
         true
     }
 
-    pub fn del(&mut self, to_del: &Self, fenv: &Vec_Frag) {
+    pub fn del(&mut self, to_del: &Self, fenv: &Vec_RangeFrag) {
         self.check(fenv);
         to_del.check(fenv);
         let sfixs_x = &self;
         let sfixs_y = &to_del;
         let mut ix = 0;
         let mut iy = 0;
-        let mut res = Vec::<FragIx>::new();
+        let mut res = Vec::<RangeFragIx>::new();
         while ix < sfixs_x.fragIxs.len() && iy < sfixs_y.fragIxs.len() {
             let fx = fenv[ sfixs_x.fragIxs[ix] ];
             let fy = fenv[ sfixs_y.fragIxs[iy] ];
-            match cmpFrags(&fx, &fy) {
+            match cmpRangeFrags(&fx, &fy) {
                 FCR::LT => { res.push(sfixs_x.fragIxs[ix]); ix += 1; },
                 FCR::EQ => { ix += 1; iy += 1; }
                 FCR::GT => { iy += 1; },
                 FCR::EQ | FCR::UN
-                    => panic!("SortedFragIxs::del: partial overlap")
+                    => panic!("SortedRangeFragIxs::del: partial overlap")
             }
         }
         debug_assert!(ix == sfixs_x.fragIxs.len()
@@ -2019,7 +2043,7 @@ impl SortedFragIxs {
     }
 
     pub fn can_add_if_we_first_del(&self, to_del: &Self, to_add: &Self,
-                               fenv: &Vec_Frag) -> bool {
+                                   fenv: &Vec_RangeFrag) -> bool {
         // For now, just do this the stupid way.  It would be possible to do
         // it without any allocation, but that sounds complex.
         let mut after_del = self.clone();
@@ -2032,50 +2056,51 @@ impl SortedFragIxs {
 
 //=============================================================================
 // Representing and printing live ranges.  These are represented by two
-// different but closely related types, RLR and VLR.
+// different but closely related types, RealRange and VirtualRange.
 
-// RLRs are live ranges for real regs (RRegs).  VLRs are live ranges for
-// virtual regs (VRegs).  VLRs are the fundamental unit of allocation.  Both
-// RLR and VLR pair the relevant kind of Reg with a vector of FragIxs in which
-// it is live.  The FragIxs are indices into some vector of Frags (a "fragment
+// RealRanges are live ranges for real regs (RealRegs).  VirtualRanges are
+// live ranges for virtual regs (VirtualRegs).  VirtualRanges are the
+// fundamental unit of allocation.  Both RealRange and VirtualRange pair the
+// relevant kind of Reg with a vector of RangeFragIxs in which it is live.
+// The RangeFragIxs are indices into some vector of RangeFrags (a "fragment
 // environment", 'fenv'), which is not specified here.  They are sorted so as
-// to give ascending order to the Frags which they refer to.
+// to give ascending order to the RangeFrags which they refer to.
 //
-// VLRs contain metrics.  Not all are initially filled in:
+// VirtualRanges contain metrics.  Not all are initially filled in:
 //
 // * |size| is the number of instructions in total spanned by the LR.  It must
 //   not be zero.
 //
-// * |cost| is an abstractified measure of the cost of spilling the LR.  The
-//   only constraint (w.r.t. correctness) is that normal LRs have a |Some|
+// * |spillCost| is an abstractified measure of the cost of spilling the LR.
+//   The only constraint (w.r.t. correctness) is that normal LRs have a |Some|
 //   value, whilst |None| is reserved for live ranges created for spills and
 //   reloads and interpreted to mean "infinity".  This is needed to guarantee
 //   that allocation can always succeed in the worst case, in which all of the
 //   original live ranges of the program are spilled.
 //
-// RLRs don't carry any metrics info since we are not trying to allocate them.
-// We merely need to work around them.
+// RealRanges don't carry any metrics info since we are not trying to allocate
+// them.  We merely need to work around them.
 //
-// I find it helpful to think of a live range, both RLRs and VLRs, as a
-// "renaming equivalence class".  That is, if you rename |reg| at some point
-// inside |sfrags|, then you must rename *all* occurrences of |reg| inside
-// |sfrags|, since otherwise the program will no longer work.
+// I find it helpful to think of a live range, both RealRange and
+// VirtualRange, as a "renaming equivalence class".  That is, if you rename
+// |reg| at some point inside |sfrags|, then you must rename *all* occurrences
+// of |reg| inside |sfrags|, since otherwise the program will no longer work.
 //
-// Invariants for RLR/VLR Frag sets (their |sfrags| fields):
+// Invariants for RealRange/VirtualRange RangeFrag sets (their |sfrags| fields):
 //
-// * Either |sfrags| contains just one Frag, in which case it *must* be
-//   FragKind::Local.
+// * Either |sfrags| contains just one RangeFrag, in which case it *must* be
+//   RangeFragKind::Local.
 //
-// * Or |sfrags| contains more than one Frag, in which case: at least one must
-//   be FragKind::LiveOut, at least one must be FragKind::LiveIn, and there
-//   may be zero or more FragKind::Thrus.
+// * Or |sfrags| contains more than one RangeFrag, in which case: at least one
+//   must be RangeFragKind::LiveOut, at least one must be RangeFragKind::LiveIn,
+//   and there may be zero or more RangeFragKind::Thrus.
 
 #[derive(Clone)]
-pub struct RLR {
-    pub rreg:   RReg,
-    pub sfrags: SortedFragIxs
+pub struct RealRange {
+    pub rreg:   RealReg,
+    pub sfrags: SortedRangeFragIxs
 }
-impl Show for RLR {
+impl Show for RealRange {
     fn show(&self) -> String {
         self.rreg.show()
             + &" ".to_string() + &self.sfrags.show()
@@ -2083,21 +2108,22 @@ impl Show for RLR {
 }
 
 
-// VLRs are live ranges for virtual regs (VRegs).  These do carry metrics info
-// and also the identity of the RReg to which they eventually got allocated.
+// VirtualRanges are live ranges for virtual regs (VirtualRegs).  These do carry
+// metrics info and also the identity of the RealReg to which they eventually
+// got allocated.
 
 #[derive(Clone)]
-pub struct VLR {
-    pub vreg:   VReg,
-    pub rreg:   Option<RReg>,
-    pub sfrags: SortedFragIxs,
-    pub size:   u16,
-    pub cost:   Option<f32>,
+pub struct VirtualRange {
+    pub vreg:      VirtualReg,
+    pub rreg:      Option<RealReg>,
+    pub sfrags:    SortedRangeFragIxs,
+    pub size:      u16,
+    pub spillCost: Option<f32>,
 }
-impl Show for VLR {
+impl Show for VirtualRange {
     fn show(&self) -> String {
         let cost_str: String;
-        match self.cost {
+        match self.spillCost {
             None => {
                 cost_str = "INFIN".to_string();
             },
@@ -2120,51 +2146,51 @@ impl Show for VLR {
 // Test cases
 
 #[test]
-fn test_SortedFragIxs() {
+fn test_SortedRangeFragIxs() {
 
-    // Create a Frag and FragIx from two InsnPoints.
-    fn gen_fix(fenv: &mut Vec_Frag,
-               first: InsnPoint, last: InsnPoint) -> FragIx {
+    // Create a RangeFrag and RangeFragIx from two InstPoints.
+    fn gen_fix(fenv: &mut Vec_RangeFrag,
+               first: InstPoint, last: InstPoint) -> RangeFragIx {
         assert!(first <= last);
-        let res = mkFragIx(fenv.len() as u32);
-        let frag = Frag { bix: mkBlockIx(123),
-                          kind: FragKind::Local, first, last, count: 0 };
+        let res = mkRangeFragIx(fenv.len() as u32);
+        let frag = RangeFrag { bix: mkBlockIx(123),
+                          kind: RangeFragKind::Local, first, last, count: 0 };
         fenv.push(frag);
         res
     }
 
-    fn getFrag(fenv: &Vec_Frag, fix: FragIx) -> &Frag {
+    fn getRangeFrag(fenv: &Vec_RangeFrag, fix: RangeFragIx) -> &RangeFrag {
         &fenv[fix]
     }
 
-    let iix3  = mkInsnIx(3);
-    let iix4  = mkInsnIx(4);
-    let iix5  = mkInsnIx(5);
-    let iix6  = mkInsnIx(6);
-    let iix7  = mkInsnIx(7);
-    let iix10 = mkInsnIx(10);
-    let iix12 = mkInsnIx(12);
-    let iix15 = mkInsnIx(15);
+    let iix3  = mkInstIx(3);
+    let iix4  = mkInstIx(4);
+    let iix5  = mkInstIx(5);
+    let iix6  = mkInstIx(6);
+    let iix7  = mkInstIx(7);
+    let iix10 = mkInstIx(10);
+    let iix12 = mkInstIx(12);
+    let iix15 = mkInstIx(15);
 
-    let fp_3u = InsnPoint_U(iix3);
-    let fp_3d = InsnPoint_D(iix3);
+    let fp_3u = InstPoint_Use(iix3);
+    let fp_3d = InstPoint_Def(iix3);
 
-    let fp_4u = InsnPoint_U(iix4);
+    let fp_4u = InstPoint_Use(iix4);
 
-    let fp_5u = InsnPoint_U(iix5);
-    let fp_5d = InsnPoint_D(iix5);
+    let fp_5u = InstPoint_Use(iix5);
+    let fp_5d = InstPoint_Def(iix5);
 
-    let fp_6u = InsnPoint_U(iix6);
-    let fp_6d = InsnPoint_D(iix6);
+    let fp_6u = InstPoint_Use(iix6);
+    let fp_6d = InstPoint_Def(iix6);
 
-    let fp_7u = InsnPoint_U(iix7);
-    let fp_7d = InsnPoint_D(iix7);
+    let fp_7u = InstPoint_Use(iix7);
+    let fp_7d = InstPoint_Def(iix7);
 
-    let fp_10u = InsnPoint_U(iix10);
-    let fp_12u = InsnPoint_U(iix12);
-    let fp_15u = InsnPoint_U(iix15);
+    let fp_10u = InstPoint_Use(iix10);
+    let fp_12u = InstPoint_Use(iix12);
+    let fp_15u = InstPoint_Use(iix15);
 
-    let mut fenv = Vec_Frag::new();
+    let mut fenv = Vec_RangeFrag::new();
 
     let fix_3u    = gen_fix(&mut fenv, fp_3u, fp_3u);
     let fix_3d    = gen_fix(&mut fenv, fp_3d, fp_3d);
@@ -2180,36 +2206,47 @@ fn test_SortedFragIxs() {
     let fix_15u   = gen_fix(&mut fenv, fp_15u, fp_15u);
 
     // Boundary checks for point ranges, 3u vs 3d
-    assert!(cmpFrags(getFrag(&fenv, fix_3u), getFrag(&fenv, fix_3u))
+    assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3u),
+                          getRangeFrag(&fenv, fix_3u))
             == FCR::EQ);
-    assert!(cmpFrags(getFrag(&fenv, fix_3u), getFrag(&fenv, fix_3d))
+    assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3u),
+                          getRangeFrag(&fenv, fix_3d))
             == FCR::LT);
-    assert!(cmpFrags(getFrag(&fenv, fix_3d), getFrag(&fenv, fix_3u))
+    assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3d),
+                          getRangeFrag(&fenv, fix_3u))
             == FCR::GT);
 
     // Boundary checks for point ranges, 3d vs 4u
-    assert!(cmpFrags(getFrag(&fenv, fix_3d), getFrag(&fenv, fix_3d))
+    assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3d),
+                          getRangeFrag(&fenv, fix_3d))
             == FCR::EQ);
-    assert!(cmpFrags(getFrag(&fenv, fix_3d), getFrag(&fenv, fix_4u))
+    assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3d),
+                          getRangeFrag(&fenv, fix_4u))
             == FCR::LT);
-    assert!(cmpFrags(getFrag(&fenv, fix_4u), getFrag(&fenv, fix_3d))
+    assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_4u),
+                          getRangeFrag(&fenv, fix_3d))
             == FCR::GT);
 
     // Partially overlapping
-    assert!(cmpFrags(getFrag(&fenv, fix_3d_5d), getFrag(&fenv, fix_3u_5u))
+    assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3d_5d),
+                          getRangeFrag(&fenv, fix_3u_5u))
             == FCR::UN);
-    assert!(cmpFrags(getFrag(&fenv, fix_3u_5u), getFrag(&fenv, fix_3d_5d))
+    assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3u_5u),
+                          getRangeFrag(&fenv, fix_3d_5d))
             == FCR::UN);
 
     // Completely overlapping: one contained within the other
-    assert!(cmpFrags(getFrag(&fenv, fix_3d_5u), getFrag(&fenv, fix_3u_5d))
+    assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3d_5u),
+                          getRangeFrag(&fenv, fix_3u_5d))
             == FCR::UN);
-    assert!(cmpFrags(getFrag(&fenv, fix_3u_5d), getFrag(&fenv, fix_3d_5u))
+    assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3u_5d),
+                          getRangeFrag(&fenv, fix_3d_5u))
             == FCR::UN);
 
-    // Create a SortedFragIxs from a bunch of Frag indices
-    fn genSFI(fenv: &Vec_Frag, frags: &Vec::<FragIx>) -> SortedFragIxs {
-        SortedFragIxs::new(&frags, fenv)
+    // Create a SortedRangeFragIxs from a bunch of RangeFrag indices
+    fn genSFI(fenv: &Vec_RangeFrag,
+              frags: &Vec::<RangeFragIx>) -> SortedRangeFragIxs {
+        SortedRangeFragIxs::new(&frags, fenv)
     }
 
     // Construction tests
