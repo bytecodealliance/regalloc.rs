@@ -246,29 +246,28 @@ where Ty: Clone {
         self.vek.resize(new_len as usize, value);
     }
 }
+
 impl<TyIx, Ty> Index<TyIx> for TVec<TyIx, Ty>
-where TyIx: IntoU32 {
+where TyIx: Into<u32> {
     type Output = Ty;
     fn index(&self, ix: TyIx) -> &Ty {
-        &self.vek[ix.into_u32() as usize]
+        &self.vek[ix.into() as usize]
     }
 }
+
 impl<TyIx, Ty> IndexMut<TyIx> for TVec<TyIx, Ty>
-where TyIx: IntoU32 {
+where TyIx: Into<u32> {
     fn index_mut(&mut self, ix: TyIx) -> &mut Ty {
-        &mut self.vek[ix.into_u32() as usize]
+        &mut self.vek[ix.into() as usize]
     }
 }
+
 impl<TyIx, Ty> Clone for TVec<TyIx, Ty>
 where Ty: Clone {
     // This is only needed for debug printing.
     fn clone(&self) -> Self {
         Self { vek: self.vek.clone(), ty_ix: PhantomData::<TyIx> }
     }
-}
-
-trait IntoU32 {
-    fn into_u32(&self) -> u32;
 }
 
 
@@ -307,8 +306,8 @@ macro_rules! generate_boilerplate {
                 self.plus(1)
             }
         }
-        impl IntoU32 for $TypeIx {
-            fn into_u32(&self) -> u32 {
+        impl Into<u32> for $TypeIx {
+            fn into(self) -> u32 {
                 self.get()
             }
         }
