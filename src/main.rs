@@ -113,6 +113,12 @@ impl Show for Value {
   }
 }
 
+#[derive(PartialEq)]
+enum RunStage {
+  BeforeRegalloc,
+  AfterRegalloc,
+}
+
 struct IState<'a> {
   func: &'a Func,
   nia: InstIx, // Program counter ("next instruction address")
@@ -123,10 +129,13 @@ struct IState<'a> {
   n_insns: usize, // Stats: number of insns executed
   n_spills: usize, // Stats: .. of which are spills
   n_reloads: usize, // Stats: .. of which are reloads
+  run_stage: RunStage,
 }
 
 impl<'a> IState<'a> {
-  fn new(func: &'a Func, maxRealRegs: usize, maxMem: usize) -> Self {
+  fn new(
+    func: &'a Func, maxRealRegs: usize, maxMem: usize, run_stage: RunStage,
+  ) -> Self {
     let mut state = IState {
       func,
       nia: func.blocks[func.entry.getBlockIx()].start,
@@ -137,6 +146,7 @@ impl<'a> IState<'a> {
       n_insns: 0,
       n_spills: 0,
       n_reloads: 0,
+      run_stage,
     };
     state.rregs.resize(maxRealRegs, None);
     state.mem.resize(maxMem, None);
@@ -163,6 +173,10 @@ impl<'a> IState<'a> {
   }
 
   fn getVirtualReg(&self, vreg: VirtualReg) -> Value {
+    debug_assert!(
+      self.run_stage != RunStage::AfterRegalloc,
+      "trying to get a vreg after regalloc"
+    );
     // The vector might be too small.  But in that case we'd be
     // reading the vreg uninitialised anyway, so just complain.
     match self.vregs.get(vreg.getIndex()) {
@@ -176,6 +190,10 @@ impl<'a> IState<'a> {
   }
 
   fn setVirtualReg(&mut self, vreg: VirtualReg, val: Value) {
+    debug_assert!(
+      self.run_stage != RunStage::AfterRegalloc,
+      "trying to set a vreg after regalloc"
+    );
     // Auto-resize the vector if necessary
     let ix = vreg.getIndex();
     if ix >= self.vregs.len() {
@@ -352,7 +370,9 @@ impl<'a> IState<'a> {
 }
 
 impl Func {
-  fn run(&self, who: &str, reg_universe: &RealRegUniverse) {
+  fn run(
+    &self, who: &str, reg_universe: &RealRegUniverse, run_stage: RunStage,
+  ) {
     println!("");
     println!(
       "Running stage '{}': Func: name='{}' entry='{}'",
@@ -361,8 +381,12 @@ impl Func {
       self.entry.show()
     );
 
-    let mut istate =
-      IState::new(&self, reg_universe.regs.len(), /*maxMem=*/ 1000);
+    let mut istate = IState::new(
+      &self,
+      reg_universe.regs.len(),
+      /*maxMem=*/ 1000,
+      run_stage,
+    );
     let mut done = false;
     while !done {
       done = istate.step();
@@ -437,8 +461,6 @@ fn main() {
 
   func.print("Initial");
 
-  func.run("Before allocation", &reg_universe);
-
   // Just so we can run it later.  Not needed for actual allocation.
   let original_func = func.clone();
 
@@ -463,8 +485,12 @@ fn main() {
 
   func.print("After allocation");
 
-  original_func.run("Before allocation", &reg_universe);
-  func.run("After allocation", &reg_universe);
+  original_func.run(
+    "Before allocation",
+    &reg_universe,
+    RunStage::BeforeRegalloc,
+  );
+  func.run("After allocation", &reg_universe, RunStage::AfterRegalloc);
 
   println!("");
 }
