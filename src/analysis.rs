@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::env;
+use std::fmt;
 use std::hash::Hash;
 use std::io::BufRead;
 use std::ops::Index;
@@ -16,7 +17,7 @@ use crate::data_structures::{
   mkBlockIx, mkInstIx, mkRangeFrag, mkRangeFragIx, mkRealRangeIx,
   mkVirtualRangeIx, Block, BlockIx, Func, InstPoint, InstPoint_Def,
   InstPoint_Use, Map, RangeFrag, RangeFragIx, RangeFragKind, RealRange,
-  RealRangeIx, Reg, Set, Show, SortedRangeFragIxs, TypedIxVec, VirtualRange,
+  RealRangeIx, Reg, Set, SortedRangeFragIxs, TypedIxVec, VirtualRange,
   VirtualRangeIx,
 };
 
@@ -477,13 +478,9 @@ impl Func {
       // Number of mentions of the associated Reg in this ProtoRangeFrag.
       uses: u16,
     }
-    impl Show for ProtoRangeFrag {
-      fn show(&self) -> String {
-        self.uses.show()
-          + &"x ".to_string()
-          + &self.first.show()
-          + &"-".to_string()
-          + &self.last.show()
+    impl fmt::Debug for ProtoRangeFrag {
+      fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "{:?}x {:?} - {:?}", self.uses, self.first, self.last)
       }
     }
     // END ProtoRangeFrag
@@ -909,12 +906,7 @@ pub fn run_analysis(
   let mut n = 0;
   println!("");
   for (def, uce) in def_sets_per_block.iter().zip(use_sets_per_block.iter()) {
-    println!(
-      "{:<3}   def {:<16}  use {}",
-      mkBlockIx(n).show(),
-      def.show(),
-      uce.show()
-    );
+    println!("{:<3?}   def {:<16?}  use {:?}", mkBlockIx(n), def, uce);
     n += 1;
   }
 
@@ -923,12 +915,7 @@ pub fn run_analysis(
   n = 0;
   println!("");
   for (preds, succs) in cfg_info.pred_map.iter().zip(cfg_info.succ_map.iter()) {
-    println!(
-      "{:<3}   preds {:<16}  succs {}",
-      mkBlockIx(n).show(),
-      preds.show(),
-      succs.show()
-    );
+    println!("{:<3?}   preds {:<16?}  succs {:?}", mkBlockIx(n), preds, succs);
     n += 1;
   }
 
@@ -936,12 +923,7 @@ pub fn run_analysis(
   println!("");
   for (depth, dom_by) in cfg_info.depth_map.iter().zip(cfg_info.dom_map.iter())
   {
-    println!(
-      "{:<3}   depth {}   dom_by {:<16}",
-      mkBlockIx(n).show(),
-      depth,
-      dom_by.show()
-    );
+    println!("{:<3?}   depth {}   dom_by {:<16?}", mkBlockIx(n), depth, dom_by);
     n += 1;
   }
 
@@ -973,10 +955,10 @@ pub fn run_analysis(
     livein_sets_per_block.iter().zip(liveout_sets_per_block.iter())
   {
     println!(
-      "{:<3}   livein {:<16}  liveout {:<16}",
-      mkBlockIx(n).show(),
-      livein.show(),
-      liveout.show()
+      "{:<3?}   livein {:<16?}  liveout {:<16?}",
+      mkBlockIx(n),
+      livein,
+      liveout
     );
     n += 1;
   }
@@ -991,13 +973,13 @@ pub fn run_analysis(
   println!("");
   n = 0;
   for frag in frag_env.iter() {
-    println!("{:<3}   {}", mkRangeFragIx(n).show(), frag.show());
+    println!("{:<3?}   {:?}", mkRangeFragIx(n), frag);
     n += 1;
   }
 
   println!("");
   for (reg, fragIxs) in fragIxs_per_reg.iter() {
-    println!("frags for {}   {}", reg.show(), fragIxs.show());
+    println!("frags for {:?}   {:?}", reg, fragIxs);
   }
 
   let (rlr_env, mut vlr_env) =
@@ -1007,14 +989,14 @@ pub fn run_analysis(
   println!("");
   n = 0;
   for rlr in rlr_env.iter() {
-    println!("{:<4}   {}", mkRealRangeIx(n).show(), rlr.show());
+    println!("{:<4?}   {:?}", mkRealRangeIx(n), rlr);
     n += 1;
   }
 
   println!("");
   n = 0;
   for vlr in vlr_env.iter() {
-    println!("{:<4}   {}", mkVirtualRangeIx(n).show(), vlr.show());
+    println!("{:<4?}   {:?}", mkVirtualRangeIx(n), vlr);
     n += 1;
   }
 

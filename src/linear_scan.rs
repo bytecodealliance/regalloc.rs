@@ -9,7 +9,7 @@ use crate::data_structures::{
   mkRangeFragIx, mkRealReg, mkSpillSlot, mkVirtualRangeIx, Block, BlockIx,
   Func, Inst, InstIx, InstPoint, InstPoint_Def, InstPoint_Reload,
   InstPoint_Spill, InstPoint_Use, Map, Point, RangeFrag, RangeFragIx,
-  RangeFragKind, RealRange, RealReg, RealRegUniverse, Reg, Set, Show,
+  RangeFragKind, RealRange, RealReg, RealRegUniverse, Reg, Set,
   SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx,
   VirtualReg,
 };

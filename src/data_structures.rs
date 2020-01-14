@@ -6,6 +6,7 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::env;
+use std::fmt;
 use std::hash::Hash;
 use std::io::BufRead;
 use std::marker::PhantomData;
@@ -27,7 +28,7 @@ pub struct Set<T> {
   set: FxHashSet<T>,
 }
 
-impl<T: Eq + Ord + Hash + Copy + Show> Set<T> {
+impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
   pub fn empty() -> Self {
     Self { set: FxHashSet::<T>::default() }
   }
@@ -113,22 +114,13 @@ impl<T: Eq + Ord + Hash + Copy + Show> Set<T> {
   }
 }
 
-impl<T: Eq + Ord + Hash + Copy + Show> Show for Set<T> {
-  fn show(&self) -> String {
-    let mut str = "{".to_string();
-    let mut first = true;
-    for item in self.to_vec().iter() {
-      if !first {
-        str += &", ".to_string();
-      }
-      first = false;
-      str += &item.show();
-    }
-    str + &"}".to_string()
+impl<T: Eq + Ord + Hash + Copy + fmt::Debug> fmt::Debug for Set<T> {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(fmt, "{:?}", self.set)
   }
 }
 
-impl<T: Eq + Ord + Hash + Copy + Show + Clone> Clone for Set<T> {
+impl<T: Eq + Ord + Hash + Copy + Clone + fmt::Debug> Clone for Set<T> {
   fn clone(&self) -> Self {
     let mut res = Set::<T>::empty();
     for item in self.set.iter() {
@@ -302,9 +294,9 @@ macro_rules! generate_boilerplate {
         MyRange { first: *self, lastPlus1 }
       }
     }
-    impl Show for $TypeIx {
-      fn show(&self) -> String {
-        $PrintingPrefix.to_string() + &self.get().to_string()
+    impl fmt::Debug for $TypeIx {
+      fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "{}{}", $PrintingPrefix, &self.get())
       }
     }
     impl PlusOne for $TypeIx {
@@ -330,90 +322,11 @@ generate_boilerplate!(VirtualRangeIx, mkVirtualRangeIx, VirtualRange, "vr");
 
 generate_boilerplate!(RealRangeIx, mkRealRangeIx, RealRange, "rr");
 
-//=============================================================================
-// A simple trait for printing things, a.k.a. "Let's play 'Spot the ex-Haskell
-// programmer'".
-
-pub trait Show {
-  fn show(&self) -> String;
-}
-impl Show for bool {
-  fn show(&self) -> String {
-    (if *self { "True" } else { "False" }).to_string()
-  }
-}
-impl Show for u16 {
-  fn show(&self) -> String {
-    self.to_string()
-  }
-}
-impl Show for u32 {
-  fn show(&self) -> String {
-    self.to_string()
-  }
-}
-impl Show for usize {
-  fn show(&self) -> String {
-    self.to_string()
-  }
-}
-impl Show for f32 {
-  fn show(&self) -> String {
-    self.to_string()
-  }
-}
-impl<T: Show> Show for &T {
-  fn show(&self) -> String {
-    (*self).show()
-  }
-}
-impl<T: Show> Show for Vec<T> {
-  fn show(&self) -> String {
-    let mut first = true;
-    let mut res = "[".to_string();
-    for item in self.iter() {
-      if !first {
-        res += &", ".to_string();
-      }
-      first = false;
-      res += &item.show();
-    }
-    res + &"]".to_string()
-  }
-}
-impl<TyIx, Ty: Show> Show for TypedIxVec<TyIx, Ty> {
+impl<TyIx, Ty: fmt::Debug> fmt::Debug for TypedIxVec<TyIx, Ty> {
   // This is something of a hack in the sense that it doesn't show the
   // indices, but oh well ..
-  fn show(&self) -> String {
-    self.vek.show()
-  }
-}
-impl<T: Show> Show for Option<T> {
-  fn show(&self) -> String {
-    match self {
-      None => "None".to_string(),
-      Some(x) => "Some(".to_string() + &x.show() + &")".to_string(),
-    }
-  }
-}
-impl<A: Show, B: Show> Show for (A, B) {
-  fn show(&self) -> String {
-    "(".to_string()
-      + &self.0.show()
-      + &",".to_string()
-      + &self.1.show()
-      + &")".to_string()
-  }
-}
-impl<A: Show, B: Show, C: Show> Show for (A, B, C) {
-  fn show(&self) -> String {
-    "(".to_string()
-      + &self.0.show()
-      + &",".to_string()
-      + &self.1.show()
-      + &",".to_string()
-      + &self.2.show()
-      + &")".to_string()
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(fmt, "{:?}", self.vek)
   }
 }
 
@@ -426,16 +339,18 @@ pub enum RegClass {
   I32,
   F32,
 }
-const N_REGCLASSES: usize = 2;
 
-impl Show for RegClass {
-  fn show(&self) -> String {
+impl fmt::Debug for RegClass {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     match self {
-      RegClass::I32 => "I".to_string(),
-      RegClass::F32 => "F".to_string(),
+      RegClass::I32 => write!(fmt, "I"),
+      RegClass::F32 => write!(fmt, "F"),
     }
   }
 }
+
+const NUM_REG_CLASSES: usize = 2;
+
 impl RegClass {
   fn rc_to_u32(self) -> u32 {
     match self {
@@ -522,11 +437,15 @@ impl Reg {
     }
   }
 }
-impl Show for Reg {
-  fn show(&self) -> String {
-    (if self.is_virtual() { "v" } else { "R" }).to_string()
-      + &self.get_class().show()
-      + &self.get_index().show()
+impl fmt::Debug for Reg {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(
+      fmt,
+      "{}{:?}{}",
+      if self.is_virtual() { "v" } else { "R" },
+      self.get_class(),
+      self.get_index()
+    )
   }
 }
 pub fn mkRealReg(rc: RegClass, enc: u8, index: u8) -> Reg {
@@ -572,9 +491,9 @@ impl RealReg {
     self.reg
   }
 }
-impl Show for RealReg {
-  fn show(&self) -> String {
-    self.reg.show()
+impl fmt::Debug for RealReg {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(fmt, "{:?}", self.reg)
   }
 }
 
@@ -602,9 +521,9 @@ impl VirtualReg {
     self.reg
   }
 }
-impl Show for VirtualReg {
-  fn show(&self) -> String {
-    self.reg.show()
+impl fmt::Debug for VirtualReg {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(fmt, "{:?}", self.reg)
   }
 }
 
@@ -617,7 +536,7 @@ impl Reg {
         debug_assert!(rreg.get_class() == vreg.get_class());
         *self = rreg.to_reg();
       } else {
-        panic!("Reg::apply_D_or_U: no mapping for {}", self.show());
+        panic!("Reg::apply_D_or_U: no mapping for {:?}", self);
       }
     }
   }
@@ -633,17 +552,15 @@ impl Reg {
       // Failure of this is serious and should be investigated.
       if mb_result_D != mb_result_U {
         panic!(
-          "Reg::apply_M: inconsistent mappings for {}: D={}, U={}",
-          vreg.show(),
-          mb_result_D.show(),
-          mb_result_U.show()
+          "Reg::apply_M: inconsistent mappings for {:?}: D={:?}, U={:?}",
+          vreg, mb_result_D, mb_result_U
         );
       }
       if let Some(rreg) = mb_result_D {
         debug_assert!(rreg.get_class() == vreg.get_class());
         *self = rreg.to_reg();
       } else {
-        panic!("Reg::apply: no mapping for {}", vreg.show());
+        panic!("Reg::apply: no mapping for {:?}", vreg);
       }
     }
   }
@@ -666,9 +583,9 @@ impl SpillSlot {
     self.get() as usize
   }
 }
-impl Show for SpillSlot {
-  fn show(&self) -> String {
-    "S".to_string() + &self.get().to_string()
+impl fmt::Debug for SpillSlot {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(fmt, "S{}", self.get())
   }
 }
 
@@ -719,7 +636,7 @@ pub struct RealRegUniverse {
   //
   // The effect of the above is that registers in |regs| must form
   // contiguous groups. This is checked by RealRegUniverse::check_is_sane().
-  pub allocable_by_class: [Option<(usize, usize)>; N_REGCLASSES],
+  pub allocable_by_class: [Option<(usize, usize)>; NUM_REG_CLASSES],
 }
 
 impl RealRegUniverse {
@@ -755,8 +672,8 @@ impl RealRegUniverse {
     // The allocatable regclass groupings defined by |allocable_first| and
     // |allocable_last| must be contiguous.
     if ok {
-      let mut regclass_used = [false; N_REGCLASSES];
-      for rc in 0..N_REGCLASSES {
+      let mut regclass_used = [false; NUM_REG_CLASSES];
+      for rc in 0..NUM_REG_CLASSES {
         regclass_used[rc] = false;
       }
       for i in 0..regs_allocable {
@@ -770,7 +687,7 @@ impl RealRegUniverse {
       // ensure that the groupings cover all allocated registers exactly
       // once, and that all classes are contiguous groups.
       let mut regs_visited = 0;
-      for rc in 0..N_REGCLASSES {
+      for rc in 0..NUM_REG_CLASSES {
         match self.allocable_by_class[rc] {
           None => {
             if regclass_used[rc] {
@@ -814,7 +731,7 @@ pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
   }
 
   let mut regs = Vec::<(RealReg, String)>::new();
-  let mut allocable_by_class = [None; N_REGCLASSES];
+  let mut allocable_by_class = [None; NUM_REG_CLASSES];
   let mut index = 0u8;
 
   if nI32 > 0 {
@@ -864,13 +781,11 @@ pub enum Label {
   Unresolved { name: String },
   Resolved { name: String, bix: BlockIx },
 }
-impl Show for Label {
-  fn show(&self) -> String {
+impl fmt::Debug for Label {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     match self {
-      Label::Unresolved { name } => "??:".to_string() + &name.to_string(),
-      Label::Resolved { name, bix } => {
-        bix.show() + &":".to_string() + &name.to_string()
-      }
+      Label::Unresolved { name } => write!(fmt, "??:{}", &name),
+      Label::Resolved { name, bix } => write!(fmt, "{:?}:{:?}", bix, name),
     }
   }
 }
@@ -916,11 +831,11 @@ pub fn RI_R(reg: Reg) -> RI {
 pub fn RI_I(imm: u32) -> RI {
   RI::Imm { imm }
 }
-impl Show for RI {
-  fn show(&self) -> String {
+impl fmt::Debug for RI {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     match self {
-      RI::Reg { reg } => reg.show(),
-      RI::Imm { imm } => imm.to_string(),
+      RI::Reg { reg } => reg.fmt(fmt),
+      RI::Imm { imm } => write!(fmt, "{}", imm),
     }
   }
 }
@@ -959,23 +874,11 @@ pub fn AM_RR(base: Reg, offset: Reg) -> AM {
   debug_assert!(offset.get_class() == RegClass::I32);
   AM::RR { base, offset }
 }
-impl Show for AM {
-  fn show(&self) -> String {
+impl fmt::Debug for AM {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     match self {
-      AM::RI { base, offset } => {
-        "[".to_string()
-          + &base.show()
-          + &" + ".to_string()
-          + &offset.show()
-          + &"]".to_string()
-      }
-      AM::RR { base, offset } => {
-        "[".to_string()
-          + &base.show()
-          + &" + ".to_string()
-          + &offset.show()
-          + &"]".to_string()
-      }
+      AM::RI { base, offset } => write!(fmt, "[{:?} {:?}]", base, offset),
+      AM::RR { base, offset } => write!(fmt, "[{:?} {:?}]", base, offset),
     }
   }
 }
@@ -1016,21 +919,30 @@ pub enum BinOp {
   CmpGE,
   CmpGT,
 }
-impl Show for BinOp {
-  fn show(&self) -> String {
-    match self {
-      BinOp::Add => "add".to_string(),
-      BinOp::Sub => "sub".to_string(),
-      BinOp::Mul => "mul".to_string(),
-      BinOp::Mod => "mod".to_string(),
-      BinOp::Shr => "shr".to_string(),
-      BinOp::And => "and".to_string(),
-      BinOp::CmpEQ => "cmpeq".to_string(),
-      BinOp::CmpLT => "cmplt".to_string(),
-      BinOp::CmpLE => "cmple".to_string(),
-      BinOp::CmpGE => "cmpge".to_string(),
-      BinOp::CmpGT => "cmpgt".to_string(),
-    }
+impl fmt::Debug for BinOp {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(
+      fmt,
+      "{}",
+      match self {
+        BinOp::Add => "add",
+        BinOp::Sub => "sub",
+        BinOp::Mul => "mul",
+        BinOp::Mod => "mod",
+        BinOp::Shr => "shr",
+        BinOp::And => "and",
+        BinOp::CmpEQ => "cmpeq",
+        BinOp::CmpLT => "cmplt",
+        BinOp::CmpLE => "cmple",
+        BinOp::CmpGE => "cmpge",
+        BinOp::CmpGT => "cmpgt",
+      }
+    )
+  }
+}
+impl fmt::Display for BinOp {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    (self as &dyn fmt::Debug).fmt(fmt)
   }
 }
 impl BinOp {
@@ -1088,14 +1000,23 @@ enum BinOpF {
   FMul,
   FDiv,
 }
-impl Show for BinOpF {
-  fn show(&self) -> String {
-    match self {
-      BinOpF::FAdd => "fadd".to_string(),
-      BinOpF::FSub => "fsub".to_string(),
-      BinOpF::FMul => "fmul".to_string(),
-      BinOpF::FDiv => "fdiv".to_string(),
-    }
+impl fmt::Debug for BinOpF {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(
+      fmt,
+      "{}",
+      match self {
+        BinOpF::FAdd => "fadd".to_string(),
+        BinOpF::FSub => "fsub".to_string(),
+        BinOpF::FMul => "fmul".to_string(),
+        BinOpF::FDiv => "fdiv".to_string(),
+      }
+    )
+  }
+}
+impl fmt::Display for BinOpF {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    (self as &dyn fmt::Debug).fmt(fmt)
   }
 }
 impl BinOpF {
@@ -1273,8 +1194,8 @@ pub fn i_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
   Inst::BinOpF { op: BinOpF::FDiv, dst, srcL, srcR }
 }
 
-impl Show for Inst {
-  fn show(&self) -> String {
+impl fmt::Debug for Inst {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     fn ljustify(s: String, w: usize) -> String {
       if s.len() >= w {
         s
@@ -1291,89 +1212,58 @@ impl Show for Inst {
     }
 
     match self {
-      Inst::Imm { dst, imm } => {
-        "imm     ".to_string()
-          + &dst.show()
-          + &", ".to_string()
-          + &imm.to_string()
-      }
-      Inst::ImmF { dst, imm } => {
-        "immf    ".to_string()
-          + &dst.show()
-          + &", ".to_string()
-          + &imm.to_string()
-      }
-      Inst::Copy { dst, src } => {
-        "copy    ".to_string() + &dst.show() + &", ".to_string() + &src.show()
-      }
-      Inst::BinOp { op, dst, srcL, srcR } => {
-        ljustify(op.show(), 7)
-          + &" ".to_string()
-          + &dst.show()
-          + &", ".to_string()
-          + &srcL.show()
-          + &", ".to_string()
-          + &srcR.show()
-      }
-      Inst::BinOpM { op, dst, srcR } => {
-        ljustify(op.show() + &"m".to_string(), 7)
-          + &" ".to_string()
-          + &dst.show()
-          + &", ".to_string()
-          + &srcR.show()
-      }
-      Inst::BinOpF { op, dst, srcL, srcR } => {
-        ljustify(op.show(), 7)
-          + &" ".to_string()
-          + &dst.show()
-          + &", ".to_string()
-          + &srcL.show()
-          + &", ".to_string()
-          + &srcR.show()
-      }
-      Inst::Load { dst, addr } => {
-        "load    ".to_string() + &dst.show() + &", ".to_string() + &addr.show()
-      }
-      Inst::LoadF { dst, addr } => {
-        "loadf   ".to_string() + &dst.show() + &", ".to_string() + &addr.show()
-      }
-      Inst::Store { addr, src } => {
-        "store   ".to_string() + &addr.show() + &", ".to_string() + &src.show()
-      }
+      Inst::Imm { dst, imm } => write!(fmt, "imm     {:?}, {:?}", dst, imm),
+      Inst::ImmF { dst, imm } => write!(fmt, "immf    {:?}, {:?}", dst, imm),
+      Inst::Copy { dst, src } => write!(fmt, "copy    {:?}, {:?}", dst, src),
+      Inst::BinOp { op, dst, srcL, srcR } => write!(
+        fmt,
+        "{} {:?}, {:?}, {:?}",
+        ljustify(op.to_string(), 7),
+        dst,
+        srcL,
+        srcR
+      ),
+      Inst::BinOpM { op, dst, srcR } => write!(
+        fmt,
+        "{} {:?}, {:?}",
+        ljustify(op.to_string() + &"m".to_string(), 7),
+        dst,
+        srcR
+      ),
+      Inst::BinOpF { op, dst, srcL, srcR } => write!(
+        fmt,
+        "{} {:?}, {:?}, {:?}",
+        ljustify(op.to_string(), 7),
+        dst,
+        srcL,
+        srcR
+      ),
+      Inst::Load { dst, addr } => write!(fmt, "load    {:?}, {:?}", dst, addr),
+      Inst::LoadF { dst, addr } => write!(fmt, "loadf   {:?}, {:?}", dst, addr),
+      Inst::Store { addr, src } => write!(fmt, "store   {:?}, {:?}", addr, src),
       Inst::StoreF { addr, src } => {
-        "storef  ".to_string() + &addr.show() + &", ".to_string() + &src.show()
+        write!(fmt, "storef  {:?}, {:?}", addr, src)
       }
-      Inst::Spill { dst, src } => {
-        "SPILL   ".to_string() + &dst.show() + &", ".to_string() + &src.show()
-      }
-      Inst::Spill { dst, src } => {
-        "SPILLF  ".to_string() + &dst.show() + &", ".to_string() + &src.show()
-      }
-      Inst::Reload { dst, src } => {
-        "RELOAD  ".to_string() + &dst.show() + &", ".to_string() + &src.show()
-      }
-      Inst::ReloadF { dst, src } => {
-        "RELOADF ".to_string() + &dst.show() + &", ".to_string() + &src.show()
-      }
-      Inst::Goto { target } => "goto    ".to_string() + &target.show(),
-      Inst::GotoCTF { cond, targetT, targetF } => {
-        "goto    if ".to_string()
-          + &cond.show()
-          + &" then ".to_string()
-          + &targetT.show()
-          + &" else ".to_string()
-          + &targetF.show()
-      }
+      Inst::Spill { dst, src } => write!(fmt, "SPILL   {:?}, {:?}", dst, src),
+      Inst::SpillF { dst, src } => write!(fmt, "SPILLF  {:?}, {:?}", dst, src),
+      Inst::Reload { dst, src } => write!(fmt, "RELOAD  {:?}, {:?}", dst, src),
+      Inst::ReloadF { dst, src } => write!(fmt, "RELOAD  {:?}, {:?}", dst, src),
+      Inst::Goto { target } => write!(fmt, "goto    {:?}", target),
+      Inst::GotoCTF { cond, targetT, targetF } => write!(
+        fmt,
+        "goto    if {:?} then {:?} else {:?}",
+        cond, targetT, targetF
+      ),
       Inst::PrintS { str } => {
         let mut res = "prints '".to_string();
         for c in str.chars() {
           res += &(if c == '\n' { "\\n".to_string() } else { c.to_string() });
         }
-        res + &"'".to_string()
+        write!(fmt, "{}'", res)
       }
-      Inst::PrintI { reg } => "printi ".to_string() + &reg.show(),
-      Inst::Finish {} => "finish ".to_string(),
-      _ => "other".to_string(),
+      Inst::PrintI { reg } => write!(fmt, "printi {:?}", reg),
+      Inst::PrintF { reg } => write!(fmt, "printf {:?}", reg),
+      Inst::Finish {} => write!(fmt, "finish"),
     }
   }
 }
@@ -1390,9 +1280,7 @@ impl Inst {
         vec![targetT.getBlockIx(), targetF.getBlockIx()]
       }
       Inst::Finish {} => vec![],
-      _other => {
-        panic!("Inst::getTargets: incorrectly applied to: {}", self.show())
-      }
+      _other => panic!("Inst::getTargets: incorrectly applied to: {:?}", self),
     }
   }
 
@@ -1447,7 +1335,7 @@ impl Inst {
         uce.insert(*reg);
       }
       Inst::Finish {} => {}
-      _other => panic!("Inst::get_reg_usage: unhandled: {}", self.show()),
+      _other => panic!("Inst::get_reg_usage: unhandled: {:?}", self),
     }
     // Failure of either of these is serious and should be investigated.
     debug_assert!(!def.intersects(&m0d));
@@ -1504,7 +1392,7 @@ impl Inst {
       }
     }
     if !ok {
-      panic!("Inst::mapRegs_D_U: unhandled: {}", self.show());
+      panic!("Inst::mapRegs_D_U: unhandled: {:?}", self);
     }
   }
 }
@@ -1614,21 +1502,16 @@ impl Func {
 
   pub fn print(&self, who: &str) {
     println!("");
-    println!(
-      "Func {}: name='{}' entry='{}' {{",
-      who,
-      self.name,
-      self.entry.show()
-    );
+    println!("Func {}: name='{}' entry='{:?}' {{", who, self.name, self.entry);
     let mut ix = 0;
     for b in self.blocks.iter() {
       if ix > 0 {
         println!("");
       }
-      println!("  {}:{}", mkBlockIx(ix).show(), b.name);
+      println!("  {:?}:{}", mkBlockIx(ix), b.name);
       for i in b.start.get()..b.start.get() + b.len {
         let ixI = mkInstIx(i);
-        println!("      {:<3}   {}", ixI.show(), self.insns[ixI].show());
+        println!("      {:<3?}   {:?}", ixI, self.insns[ixI]);
       }
       ix += 1;
     }
@@ -1835,16 +1718,19 @@ impl PartialOrd for InstPoint {
     }
   }
 }
-impl Show for InstPoint {
-  fn show(&self) -> String {
-    self.iix.show()
-      + &match self.pt {
+impl fmt::Debug for InstPoint {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(
+      fmt,
+      "{:?}{}",
+      self.iix,
+      match self.pt {
         Point::Reload => "/r",
         Point::Use => "/u",
         Point::Def => "/d",
         Point::Spill => "/s",
       }
-      .to_string()
+    )
   }
 }
 
@@ -1856,15 +1742,14 @@ pub enum RangeFragKind {
   LiveOut, // Fragment is live out of a block, but starts inside it
   Thru,    // Fragment is live through the block (starts and ends outside it)
 }
-impl Show for RangeFragKind {
-  fn show(&self) -> String {
+impl fmt::Debug for RangeFragKind {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     match self {
-      RangeFragKind::Local => "Local",
-      RangeFragKind::LiveIn => "LiveIn",
-      RangeFragKind::LiveOut => "LiveOut",
-      RangeFragKind::Thru => "Thru",
+      RangeFragKind::Local => write!(fmt, "Local"),
+      RangeFragKind::LiveIn => write!(fmt, "LiveIn"),
+      RangeFragKind::LiveOut => write!(fmt, "LiveOut"),
+      RangeFragKind::Thru => write!(fmt, "Thru"),
     }
-    .to_string()
   }
 }
 
@@ -1934,18 +1819,13 @@ pub struct RangeFrag {
   pub last: InstPoint,
   pub count: u16,
 }
-impl Show for RangeFrag {
-  fn show(&self) -> String {
-    self.bix.show()
-      + &"; count=".to_string()
-      + &self.count.to_string()
-      + &"; ".to_string()
-      + &self.kind.show()
-      + &" [".to_string()
-      + &self.first.show()
-      + &", "
-      + &self.last.show()
-      + &"]"
+impl fmt::Debug for RangeFrag {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(
+      fmt,
+      "{:?}; count={}; {:?} [{:?} {:?}]",
+      self.bix, self.count, self.kind, self.first, self.last
+    )
   }
 }
 pub fn mkRangeFrag(
@@ -2004,11 +1884,12 @@ impl RangeFrag {
 pub struct SortedRangeFragIxs {
   pub fragIxs: Vec<RangeFragIx>,
 }
-impl SortedRangeFragIxs {
-  fn show(&self) -> String {
-    self.fragIxs.show()
+impl fmt::Debug for SortedRangeFragIxs {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    self.fragIxs.fmt(fmt)
   }
-
+}
+impl SortedRangeFragIxs {
   pub fn show_with_fenv(
     &self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> String {
@@ -2016,7 +1897,7 @@ impl SortedRangeFragIxs {
     for fix in &self.fragIxs {
       frags.push(fenv[*fix]);
     }
-    "SFIxs_".to_string() + &frags.show()
+    format!("SFIxs_{:?}", &frags)
   }
 
   fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
@@ -2255,9 +2136,9 @@ pub struct RealRange {
   pub rreg: RealReg,
   pub sortedFrags: SortedRangeFragIxs,
 }
-impl Show for RealRange {
-  fn show(&self) -> String {
-    self.rreg.show() + &" ".to_string() + &self.sortedFrags.show()
+impl fmt::Debug for RealRange {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(fmt, "{:?} {:?}", self.rreg, self.sortedFrags)
   }
 }
 
@@ -2273,29 +2154,18 @@ pub struct VirtualRange {
   pub size: u16,
   pub spillCost: Option<f32>,
 }
-impl Show for VirtualRange {
-  fn show(&self) -> String {
-    let cost_str: String;
-    match self.spillCost {
-      None => {
-        cost_str = "INFIN".to_string();
-      }
-      Some(c) => {
-        cost_str = format!("{:<5.2}", c);
-      }
-    }
-    let mut res = self.vreg.show();
+
+impl fmt::Debug for VirtualRange {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    let cost_str = match self.spillCost {
+      None => "INFIN".to_string(),
+      Some(c) => format!("{:<5.2}", c),
+    };
+    write!(fmt, "{:?}", self.vreg)?;
     if self.rreg.is_some() {
-      res += &"->".to_string();
-      res += &self.rreg.unwrap().show();
+      write!(fmt, " -> {:?}", self.rreg.unwrap())?;
     }
-    res
-      + &" s=".to_string()
-      + &self.size.to_string()
-      + &",c=".to_string()
-      + &cost_str
-      + &" ".to_string()
-      + &self.sortedFrags.show()
+    write!(fmt, " s={}, c={} {:?}", self.size, cost_str, self.sortedFrags)
   }
 }
 

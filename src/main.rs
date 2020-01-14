@@ -63,6 +63,7 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::env;
+use std::fmt;
 use std::hash::Hash;
 use std::io::BufRead;
 use std::ops::Index;
@@ -73,7 +74,7 @@ use std::{fs, io};
 
 use data_structures::{
   make_universe, BinOp, Block, BlockIx, Func, Inst, InstIx, Label, RealReg,
-  RealRegUniverse, Reg, Show, SpillSlot, VirtualReg, AM, RI,
+  RealRegUniverse, Reg, SpillSlot, VirtualReg, AM, RI,
 };
 
 //=============================================================================
@@ -104,11 +105,11 @@ impl Value {
     }
   }
 }
-impl Show for Value {
-  fn show(&self) -> String {
+impl fmt::Debug for Value {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     match self {
-      Value::U32(n) => n.show(),
-      Value::F32(n) => n.show(),
+      Value::U32(n) => write!(fmt, "{}", n),
+      Value::F32(n) => write!(fmt, "{}", n),
     }
   }
 }
@@ -156,9 +157,9 @@ impl<'a> IState<'a> {
   fn get_real_reg(&self, rreg: RealReg) -> Value {
     // No automatic resizing.  If the rreg doesn't exist, just fail.
     match self.rregs.get(rreg.get_index()) {
-      None => panic!("IState::get_real_reg: invalid rreg {}", rreg.show()),
+      None => panic!("IState::get_real_reg: invalid rreg {:?}", rreg),
       Some(None) => {
-        panic!("IState::get_real_reg: read of uninit rreg {}", rreg.show())
+        panic!("IState::get_real_reg: read of uninit rreg {:?}", rreg)
       }
       Some(Some(val)) => *val,
     }
@@ -167,7 +168,7 @@ impl<'a> IState<'a> {
   fn setRealReg(&mut self, rreg: RealReg, val: Value) {
     // No automatic resizing.  If the rreg doesn't exist, just fail.
     match self.rregs.get_mut(rreg.get_index()) {
-      None => panic!("IState::setRealReg: invalid rreg {}", rreg.show()),
+      None => panic!("IState::setRealReg: invalid rreg {:?}", rreg),
       Some(valP) => *valP = Some(val),
     }
   }
@@ -182,8 +183,8 @@ impl<'a> IState<'a> {
     match self.vregs.get(vreg.get_index()) {
             None |          // indexing error
             Some(None) =>   // entry present, but has never been written
-                panic!("IState::get_virtual_reg: read of uninit vreg {}",
-                       vreg.show()),
+                panic!("IState::get_virtual_reg: read of uninit vreg {:?}",
+                       vreg),
             Some(Some(val))
                 => *val
         }
@@ -358,10 +359,10 @@ impl<'a> IState<'a> {
         self.nia = self.func.blocks[target.getBlockIx()].start;
       }
       Inst::PrintS { str } => print!("{}", str),
-      Inst::PrintI { reg } => print!("{}", self.get_reg(*reg).toU32().show()),
+      Inst::PrintI { reg } => print!("{:?}", self.get_reg(*reg).toU32()),
       Inst::Finish {} => done = true,
       _ => {
-        println!("Interp: unhandled: {}", insn.show());
+        println!("Interp: unhandled: {:?}", insn);
         panic!("IState::step: unhandled insn");
       }
     }
@@ -375,10 +376,8 @@ impl Func {
   ) {
     println!("");
     println!(
-      "Running stage '{}': Func: name='{}' entry='{}'",
-      who,
-      self.name,
-      self.entry.show()
+      "Running stage '{}': Func: name='{}' entry='{:?}'",
+      who, self.name, self.entry
     );
 
     let mut istate = IState::new(

@@ -9,10 +9,11 @@ use crate::data_structures::{
   mkRangeFragIx, mkRealReg, mkSpillSlot, mkVirtualRangeIx, rc_from_u32, Block,
   BlockIx, Func, Inst, InstIx, InstPoint, InstPoint_Def, InstPoint_Reload,
   InstPoint_Spill, InstPoint_Use, Map, Point, RangeFrag, RangeFragIx,
-  RangeFragKind, RealRange, RealReg, RealRegUniverse, Reg, Set, Show,
+  RangeFragKind, RealRange, RealReg, RealRegUniverse, Reg, Set,
   SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx,
   VirtualReg,
 };
+use std::fmt;
 
 //=============================================================================
 // The as-yet-unallocated VirtualReg LR prio queue
@@ -90,7 +91,7 @@ impl VirtualRangePrioQ {
       }
       first = false;
       res += &"TODO  ".to_string();
-      res += &vlr_env[*vlrix].show();
+      res += &format!("{:?}", &vlr_env[*vlrix]);
     }
     res
   }
@@ -238,7 +239,7 @@ impl PerRealReg {
   fn show2_with_envs(
     &self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> String {
-    "assigned: ".to_string() + &self.vlrixs_assigned.show()
+    "assigned: ".to_string() + &format!("{:?}", &self.vlrixs_assigned)
   }
 }
 
@@ -269,12 +270,12 @@ enum BridgeKind {
   // operated on, and finally re-spilled.
   DtoS, // A bridge for a DEF.  This connects the def to the spill.
 }
-impl Show for BridgeKind {
-  fn show(&self) -> String {
+impl fmt::Debug for BridgeKind {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     match self {
-      BridgeKind::RtoU => "R->U".to_string(),
-      BridgeKind::RtoS => "R->S".to_string(),
-      BridgeKind::DtoS => "D->S".to_string(),
+      BridgeKind::RtoU => write!(fmt, "R->U"),
+      BridgeKind::RtoS => write!(fmt, "R->S"),
+      BridgeKind::DtoS => write!(fmt, "D->S"),
     }
   }
 }
@@ -294,15 +295,14 @@ struct EditListItem {
   vlrix: VirtualRangeIx,
   kind: BridgeKind,
 }
-impl Show for EditListItem {
-  fn show(&self) -> String {
-    "ELI { for ".to_string()
-      + &self.vlrix.show()
-      + &" add '".to_string()
-      + &self.kind.show()
-      + &"' ".to_string()
-      + &self.slot.show()
-      + &" }".to_string()
+
+impl fmt::Debug for EditListItem {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(
+      fmt,
+      "ELI {{ for {:?} add '{:?}' {:?} }}",
+      self.vlrix, self.kind, self.slot
+    )
   }
 }
 
@@ -335,7 +335,7 @@ fn print_RA_state(
     println!("{}", prioQ.show_with_envs(&vlr_env));
   }
   for eli in editList {
-    println!("{}", eli.show());
+    println!("{:?}", eli);
   }
   println!(">>>>");
 }
@@ -449,11 +449,7 @@ pub fn alloc_main(
   while let Some(curr_vlrix) = prioQ.get_longest_VirtualRange(&vlr_env) {
     let curr_vlr = &vlr_env[curr_vlrix];
 
-    println!(
-      "-- considering        {}:  {}",
-      curr_vlrix.show(),
-      curr_vlr.show()
-    );
+    println!("-- considering        {:?}:  {:?}", curr_vlrix, curr_vlr);
 
     debug_assert!(curr_vlr.vreg.to_reg().is_virtual());
     let curr_vlr_rc = curr_vlr.vreg.get_class().rc_to_usize();
@@ -463,8 +459,8 @@ pub fn alloc_main(
         None => {
           // Urk.  This is very ungood.  Game over.
           let s = format!(
-            "no available registers for class {}",
-            rc_from_u32(curr_vlr_rc as u32).show()
+            "no available registers for class {:?}",
+            rc_from_u32(curr_vlr_rc as u32)
           );
           return Err(s);
         }
@@ -485,7 +481,7 @@ pub fn alloc_main(
     if let Some(rregNo) = rreg_to_use {
       // Yay!
       let rreg = reg_universe.regs[rregNo].0;
-      println!("--   direct alloc to  {}", rreg.show());
+      println!("--   direct alloc to  {:?}", rreg);
       perRealReg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
       debug_assert!(curr_vlr.rreg.is_none());
       // Directly modify bits of vlr_env.  This means we have to abandon
@@ -534,9 +530,8 @@ pub fn alloc_main(
     if let Some((rregNo, vlrix_to_evict, _)) = best_so_far {
       // Evict ..
       println!(
-        "--   evict            {}:  {}",
-        vlrix_to_evict.show(),
-        &vlr_env[vlrix_to_evict].show()
+        "--   evict            {:?}:  {:?}",
+        vlrix_to_evict, &vlr_env[vlrix_to_evict]
       );
       debug_assert!(vlrix_to_evict != curr_vlrix);
       perRealReg[rregNo].del_VirtualRange(vlrix_to_evict, &vlr_env, &frag_env);
@@ -544,7 +539,7 @@ pub fn alloc_main(
       debug_assert!(vlr_env[vlrix_to_evict].rreg.is_some());
       // .. and reassign.
       let rreg = reg_universe.regs[rregNo].0;
-      println!("--   then alloc to    {}", rreg.show());
+      println!("--   then alloc to    {:?}", rreg);
       perRealReg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
       debug_assert!(curr_vlr.rreg.is_none());
       // Directly modify bits of vlr_env.  This means we have to abandon
@@ -684,9 +679,8 @@ pub fn alloc_main(
       let new_vlr_fix = mkRangeFragIx(frag_env.len() as u32);
       frag_env.push(new_vlr_frag);
       println!(
-        "--     new RangeFrag       {}  :=  {}",
-        &new_vlr_fix.show(),
-        &new_vlr_frag.show()
+        "--     new RangeFrag       {:?}  :=  {:?}",
+        &new_vlr_fix, &new_vlr_frag
       );
       let new_vlr_sfixs = SortedRangeFragIxs::unit(new_vlr_fix, &frag_env);
       let new_vlr = VirtualRange {
@@ -698,9 +692,8 @@ pub fn alloc_main(
       };
       let new_vlrix = mkVirtualRangeIx(vlr_env.len() as u32);
       println!(
-        "--     new VirtualRange        {}  :=  {}",
-        new_vlrix.show(),
-        &new_vlr.show()
+        "--     new VirtualRange        {:?}  :=  {:?}",
+        new_vlrix, &new_vlr
       );
       vlr_env.push(new_vlr);
       prioQ.add_VirtualRange(new_vlrix);
@@ -710,7 +703,7 @@ pub fn alloc_main(
         vlrix: new_vlrix,
         kind: sri.kind,
       };
-      println!("--     new ELI        {}", &new_eli.show());
+      println!("--     new ELI        {:?}", &new_eli);
       editList.push(new_eli);
     }
 
@@ -786,7 +779,7 @@ pub fn alloc_main(
   fn showMap(m: &Map<VirtualReg, RealReg>) -> String {
     let mut vec: Vec<(&VirtualReg, &RealReg)> = m.iter().collect();
     vec.sort_by(|p1, p2| p1.0.partial_cmp(p2.0).unwrap());
-    vec.show()
+    format!("{:?}", vec)
   }
 
   fn is_sane(frag: &RangeFrag) -> bool {
