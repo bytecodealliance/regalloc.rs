@@ -407,7 +407,7 @@ pub fn alloc_main(
     perRealReg.push(PerRealReg::new(&frag_env));
   }
   for rlr in rlr_env.iter() {
-    let rregIndex = rlr.rreg.getIndex();
+    let rregIndex = rlr.rreg.get_index();
     // Ignore RealRanges for RealRegs that are not part of the allocatable
     // set.  As far as the allocator is concerned, such RealRegs simply
     // don't exist.
@@ -455,8 +455,8 @@ pub fn alloc_main(
       curr_vlr.show()
     );
 
-    debug_assert!(curr_vlr.vreg.toReg().isVirtual());
-    let curr_vlr_rc = curr_vlr.vreg.getClass().rc_to_usize();
+    debug_assert!(curr_vlr.vreg.to_reg().is_virtual());
+    let curr_vlr_rc = curr_vlr.vreg.get_class().rc_to_usize();
 
     let (first_in_rc, last_in_rc) =
       match reg_universe.allocable_by_class[curr_vlr_rc] {
@@ -609,13 +609,13 @@ pub fn alloc_main(
     }
     let mut sri_vec = Vec::<SpillAndOrReloadInfo>::new();
     let curr_vlr_vreg = curr_vlr.vreg;
-    let curr_vlr_reg = curr_vlr_vreg.toReg();
+    let curr_vlr_reg = curr_vlr_vreg.to_reg();
 
     for fix in &curr_vlr.sortedFrags.fragIxs {
       let frag: &RangeFrag = &frag_env[*fix];
       for iix in frag.first.iix.dotdot(frag.last.iix.plus(1)) {
         let insn: &Inst = &func.insns[iix];
-        let (regs_d, regs_m, regs_u) = insn.getRegUsage();
+        let (regs_d, regs_m, regs_u) = insn.get_reg_usage();
         // If this insn doesn't mention the vreg we're spilling for,
         // move on.
         if !regs_d.contains(curr_vlr_reg)

@@ -491,30 +491,31 @@ pub struct Reg {
   do_not_access_this_directly: u32,
 }
 impl Reg {
-  pub fn isVirtual(self) -> bool {
+  pub fn is_virtual(self) -> bool {
     (self.do_not_access_this_directly & 0x8000_0000) != 0
   }
-  pub fn getClass(self) -> RegClass {
+  pub fn get_class(self) -> RegClass {
     rc_from_u32((self.do_not_access_this_directly >> 28) & 0x7)
   }
-  pub fn getIndex(self) -> usize {
+  pub fn get_index(self) -> usize {
     // Return type is usize because typically we will want to use the
     // result for indexing into a Vec
-    if self.isVirtual() {
+    if self.is_virtual() {
       (self.do_not_access_this_directly & ((1 << 28) - 1)) as usize
     } else {
       (self.do_not_access_this_directly & ((1 << 8) - 1)) as usize
     }
   }
-  pub fn getEnc(self) -> u8 {
-    if self.isVirtual() {
-      panic!("Reg::getEnc on virtual register")
+  // TODO rename; what does "enc" mean?
+  pub fn get_enc(self) -> u8 {
+    if self.is_virtual() {
+      panic!("Reg::get_enc on virtual register")
     } else {
       ((self.do_not_access_this_directly >> 8) & ((1 << 8) - 1)) as u8
     }
   }
-  pub fn asVirtualReg(self) -> Option<VirtualReg> {
-    if self.isVirtual() {
+  pub fn as_virtual_reg(self) -> Option<VirtualReg> {
+    if self.is_virtual() {
       Some(VirtualReg { reg: self })
     } else {
       None
@@ -523,9 +524,9 @@ impl Reg {
 }
 impl Show for Reg {
   fn show(&self) -> String {
-    (if self.isVirtual() { "v" } else { "R" }).to_string()
-      + &self.getClass().show()
-      + &self.getIndex().show()
+    (if self.is_virtual() { "v" } else { "R" }).to_string()
+      + &self.get_class().show()
+      + &self.get_index().show()
   }
 }
 pub fn mkRealReg(rc: RegClass, enc: u8, index: u8) -> Reg {
@@ -552,22 +553,22 @@ pub struct RealReg {
   reg: Reg,
 }
 impl Reg /* !!not RealReg!! */ {
-  pub fn toRealReg(self) -> RealReg {
-    if self.isVirtual() {
-      panic!("Reg::toRealReg: this is a virtual register")
+  pub fn to_real_reg(self) -> RealReg {
+    if self.is_virtual() {
+      panic!("Reg::to_real_reg: this is a virtual register")
     } else {
       RealReg { reg: self }
     }
   }
 }
 impl RealReg {
-  pub fn getClass(self) -> RegClass {
-    self.reg.getClass()
+  pub fn get_class(self) -> RegClass {
+    self.reg.get_class()
   }
-  pub fn getIndex(self) -> usize {
-    self.reg.getIndex()
+  pub fn get_index(self) -> usize {
+    self.reg.get_index()
   }
-  pub fn toReg(self) -> Reg {
+  pub fn to_reg(self) -> Reg {
     self.reg
   }
 }
@@ -582,22 +583,22 @@ pub struct VirtualReg {
   reg: Reg,
 }
 impl Reg /* !!not VirtualReg!! */ {
-  pub fn toVirtualReg(self) -> VirtualReg {
-    if self.isVirtual() {
+  pub fn to_virtual_reg(self) -> VirtualReg {
+    if self.is_virtual() {
       VirtualReg { reg: self }
     } else {
-      panic!("Reg::toVirtualReg: this is a real register")
+      panic!("Reg::to_virtual_reg: this is a real register")
     }
   }
 }
 impl VirtualReg {
-  pub fn getClass(self) -> RegClass {
-    self.reg.getClass()
+  pub fn get_class(self) -> RegClass {
+    self.reg.get_class()
   }
-  pub fn getIndex(self) -> usize {
-    self.reg.getIndex()
+  pub fn get_index(self) -> usize {
+    self.reg.get_index()
   }
-  pub fn toReg(self) -> Reg {
+  pub fn to_reg(self) -> Reg {
     self.reg
   }
 }
@@ -611,10 +612,10 @@ impl Reg {
   // Apply a vreg-rreg mapping to a Reg.  This used for registers used in
   // either a read- or a write-role.
   fn apply_D_or_U(&mut self, map: &Map<VirtualReg, RealReg>) {
-    if let Some(vreg) = self.asVirtualReg() {
+    if let Some(vreg) = self.as_virtual_reg() {
       if let Some(rreg) = map.get(&vreg) {
-        debug_assert!(rreg.getClass() == vreg.getClass());
-        *self = rreg.toReg();
+        debug_assert!(rreg.get_class() == vreg.get_class());
+        *self = rreg.to_reg();
       } else {
         panic!("Reg::apply_D_or_U: no mapping for {}", self.show());
       }
@@ -626,7 +627,7 @@ impl Reg {
   fn apply_M(
     &mut self, mapD: &Map<VirtualReg, RealReg>, mapU: &Map<VirtualReg, RealReg>,
   ) {
-    if let Some(vreg) = self.asVirtualReg() {
+    if let Some(vreg) = self.as_virtual_reg() {
       let mb_result_D = mapD.get(&vreg);
       let mb_result_U = mapU.get(&vreg);
       // Failure of this is serious and should be investigated.
@@ -639,8 +640,8 @@ impl Reg {
         );
       }
       if let Some(rreg) = mb_result_D {
-        debug_assert!(rreg.getClass() == vreg.getClass());
-        *self = rreg.toReg();
+        debug_assert!(rreg.get_class() == vreg.get_class());
+        *self = rreg.to_reg();
       } else {
         panic!("Reg::apply: no mapping for {}", vreg.show());
       }
@@ -691,7 +692,7 @@ impl Show for SpillSlot {
 
 pub struct RealRegUniverse {
   // The registers themselves.  All must be real registers, and all must
-  // have their index number (.getIndex()) equal to the array index here,
+  // have their index number (.get_index()) equal to the array index here,
   // since this is the only place where we map index numbers to actual
   // registers.
   pub regs: Vec<(RealReg, String)>,
@@ -746,7 +747,7 @@ impl RealRegUniverse {
     if ok {
       for i in 0..regs_len {
         let (reg, _name) = &self.regs[i];
-        if ok && (reg.toReg().isVirtual() || reg.getIndex() != i) {
+        if ok && (reg.to_reg().is_virtual() || reg.get_index() != i) {
           ok = false;
         }
       }
@@ -760,7 +761,7 @@ impl RealRegUniverse {
       }
       for i in 0..regs_allocable {
         let (reg, _name) = &self.regs[i];
-        let rc = reg.getClass().rc_to_u32() as usize;
+        let rc = reg.get_class().rc_to_u32() as usize;
         regclass_used[rc] = true;
       }
       // Scan forward through each grouping, checking that the listed
@@ -783,7 +784,7 @@ impl RealRegUniverse {
             if ok {
               for i in first..last + 1 {
                 let (reg, _name) = &self.regs[i];
-                if ok && rc_from_u32(rc as u32) != reg.getClass() {
+                if ok && rc_from_u32(rc as u32) != reg.get_class() {
                   ok = false;
                 }
                 regs_visited += 1;
@@ -820,7 +821,7 @@ pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
     let first = index as usize;
     for i in 0..nI32 {
       let name = format!("R{}", i).to_string();
-      let reg = mkRealReg(RegClass::I32, /*enc=*/ 0, index).toRealReg();
+      let reg = mkRealReg(RegClass::I32, /*enc=*/ 0, index).to_real_reg();
       regs.push((reg, name));
       index += 1;
     }
@@ -832,7 +833,7 @@ pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
     let first = index as usize;
     for i in 0..nF32 {
       let name = format!("F{}", i).to_string();
-      let reg = mkRealReg(RegClass::F32, /*enc=*/ 0, index).toRealReg();
+      let reg = mkRealReg(RegClass::F32, /*enc=*/ 0, index).to_real_reg();
       regs.push((reg, name));
       index += 1;
     }
@@ -909,7 +910,7 @@ pub enum RI {
   Imm { imm: u32 },
 }
 pub fn RI_R(reg: Reg) -> RI {
-  debug_assert!(reg.getClass() == RegClass::I32);
+  debug_assert!(reg.get_class() == RegClass::I32);
   RI::Reg { reg }
 }
 pub fn RI_I(imm: u32) -> RI {
@@ -946,16 +947,16 @@ pub enum AM {
   RR { base: Reg, offset: Reg },
 }
 pub fn AM_R(base: Reg) -> AM {
-  debug_assert!(base.getClass() == RegClass::I32);
+  debug_assert!(base.get_class() == RegClass::I32);
   AM::RI { base, offset: 0 }
 }
 pub fn AM_RI(base: Reg, offset: u32) -> AM {
-  debug_assert!(base.getClass() == RegClass::I32);
+  debug_assert!(base.get_class() == RegClass::I32);
   AM::RI { base, offset }
 }
 pub fn AM_RR(base: Reg, offset: Reg) -> AM {
-  debug_assert!(base.getClass() == RegClass::I32);
-  debug_assert!(offset.getClass() == RegClass::I32);
+  debug_assert!(base.get_class() == RegClass::I32);
+  debug_assert!(offset.get_class() == RegClass::I32);
   AM::RR { base, offset }
 }
 impl Show for AM {
@@ -1133,37 +1134,37 @@ pub enum Inst {
 }
 
 pub fn i_imm(dst: Reg, imm: u32) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
   Inst::Imm { dst, imm }
 }
 pub fn i_copy(dst: Reg, src: Reg) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
-  debug_assert!(src.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(src.get_class() == RegClass::I32);
   Inst::Copy { dst, src }
 }
 // For BinOp variants see below
 
 pub fn i_load(dst: Reg, addr: AM) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
   Inst::Load { dst, addr }
 }
 pub fn i_store(addr: AM, src: Reg) -> Inst {
-  debug_assert!(src.getClass() == RegClass::I32);
+  debug_assert!(src.get_class() == RegClass::I32);
   Inst::Store { addr, src }
 }
 pub fn i_spill(dst: SpillSlot, src: RealReg) -> Inst {
-  debug_assert!(src.getClass() == RegClass::I32);
+  debug_assert!(src.get_class() == RegClass::I32);
   Inst::Spill { dst, src }
 }
 pub fn i_reload(dst: RealReg, src: SpillSlot) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
   Inst::Reload { dst, src }
 }
 pub fn i_goto<'a>(target: &'a str) -> Inst {
   Inst::Goto { target: mkUnresolved(target.to_string()) }
 }
 pub fn i_goto_ctf<'a>(cond: Reg, targetT: &'a str, targetF: &'a str) -> Inst {
-  debug_assert!(cond.getClass() == RegClass::I32);
+  debug_assert!(cond.get_class() == RegClass::I32);
   Inst::GotoCTF {
     cond,
     targetT: mkUnresolved(targetT.to_string()),
@@ -1174,7 +1175,7 @@ pub fn i_print_s<'a>(str: &'a str) -> Inst {
   Inst::PrintS { str: str.to_string() }
 }
 pub fn i_print_i(reg: Reg) -> Inst {
-  debug_assert!(reg.getClass() == RegClass::I32);
+  debug_assert!(reg.get_class() == RegClass::I32);
   Inst::PrintI { reg }
 }
 pub fn i_finish() -> Inst {
@@ -1182,93 +1183,93 @@ pub fn i_finish() -> Inst {
 }
 
 pub fn i_add(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
-  debug_assert!(srcL.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
   Inst::BinOp { op: BinOp::Add, dst, srcL, srcR }
 }
 pub fn i_sub(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
-  debug_assert!(srcL.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
   Inst::BinOp { op: BinOp::Sub, dst, srcL, srcR }
 }
 pub fn i_mul(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
-  debug_assert!(srcL.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
   Inst::BinOp { op: BinOp::Mul, dst, srcL, srcR }
 }
 pub fn i_mod(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
-  debug_assert!(srcL.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
   Inst::BinOp { op: BinOp::Mod, dst, srcL, srcR }
 }
 pub fn i_shr(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
-  debug_assert!(srcL.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
   Inst::BinOp { op: BinOp::Shr, dst, srcL, srcR }
 }
 pub fn i_and(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
-  debug_assert!(srcL.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
   Inst::BinOp { op: BinOp::And, dst, srcL, srcR }
 }
 pub fn i_cmp_eq(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
-  debug_assert!(srcL.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
   Inst::BinOp { op: BinOp::CmpEQ, dst, srcL, srcR }
 }
 pub fn i_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
-  debug_assert!(srcL.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
   Inst::BinOp { op: BinOp::CmpLT, dst, srcL, srcR }
 }
 pub fn i_cmp_le(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
-  debug_assert!(srcL.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
   Inst::BinOp { op: BinOp::CmpLE, dst, srcL, srcR }
 }
 pub fn i_cmp_ge(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
-  debug_assert!(srcL.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
   Inst::BinOp { op: BinOp::CmpGE, dst, srcL, srcR }
 }
 pub fn i_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
-  debug_assert!(srcL.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
   Inst::BinOp { op: BinOp::CmpGT, dst, srcL, srcR }
 }
 
 // 2-operand versions of i_add and i_sub, for experimentation
 pub fn i_addm(dst: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
   Inst::BinOpM { op: BinOp::Add, dst, srcR }
 }
 pub fn i_subm(dst: Reg, srcR: RI) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::I32);
+  debug_assert!(dst.get_class() == RegClass::I32);
   Inst::BinOpM { op: BinOp::Sub, dst, srcR }
 }
 
 pub fn i_fadd(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::F32);
-  debug_assert!(srcL.getClass() == RegClass::F32);
-  debug_assert!(srcR.getClass() == RegClass::F32);
+  debug_assert!(dst.get_class() == RegClass::F32);
+  debug_assert!(srcL.get_class() == RegClass::F32);
+  debug_assert!(srcR.get_class() == RegClass::F32);
   Inst::BinOpF { op: BinOpF::FAdd, dst, srcL, srcR }
 }
 pub fn i_fsub(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::F32);
-  debug_assert!(srcL.getClass() == RegClass::F32);
-  debug_assert!(srcR.getClass() == RegClass::F32);
+  debug_assert!(dst.get_class() == RegClass::F32);
+  debug_assert!(srcL.get_class() == RegClass::F32);
+  debug_assert!(srcR.get_class() == RegClass::F32);
   Inst::BinOpF { op: BinOpF::FSub, dst, srcL, srcR }
 }
 pub fn i_fmul(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::F32);
-  debug_assert!(srcL.getClass() == RegClass::F32);
-  debug_assert!(srcR.getClass() == RegClass::F32);
+  debug_assert!(dst.get_class() == RegClass::F32);
+  debug_assert!(srcL.get_class() == RegClass::F32);
+  debug_assert!(srcR.get_class() == RegClass::F32);
   Inst::BinOpF { op: BinOpF::FMul, dst, srcL, srcR }
 }
 pub fn i_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
-  debug_assert!(dst.getClass() == RegClass::F32);
-  debug_assert!(srcL.getClass() == RegClass::F32);
-  debug_assert!(srcR.getClass() == RegClass::F32);
+  debug_assert!(dst.get_class() == RegClass::F32);
+  debug_assert!(srcL.get_class() == RegClass::F32);
+  debug_assert!(srcR.get_class() == RegClass::F32);
   Inst::BinOpF { op: BinOpF::FDiv, dst, srcL, srcR }
 }
 
@@ -1408,7 +1409,7 @@ impl Inst {
   //
   // Also the following must hold: the union of |def| and |use| must be
   // disjoint from |mod|.
-  pub fn getRegUsage(&self) -> (Set<Reg>, Set<Reg>, Set<Reg>) {
+  pub fn get_reg_usage(&self) -> (Set<Reg>, Set<Reg>, Set<Reg>) {
     let mut def = Set::<Reg>::empty();
     let mut m0d = Set::<Reg>::empty();
     let mut uce = Set::<Reg>::empty();
@@ -1446,7 +1447,7 @@ impl Inst {
         uce.insert(*reg);
       }
       Inst::Finish {} => {}
-      _other => panic!("Inst::getRegUsage: unhandled: {}", self.show()),
+      _other => panic!("Inst::get_reg_usage: unhandled: {}", self.show()),
     }
     // Failure of either of these is serious and should be investigated.
     debug_assert!(!def.intersects(&m0d));

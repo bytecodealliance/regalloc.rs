@@ -323,7 +323,7 @@ impl Func {
       let mut uce = Set::empty();
       for iix in b.start.dotdot(b.start.plus(b.len)) {
         let insn = &self.insns[iix];
-        let (regs_d, regs_m, regs_u) = insn.getRegUsage();
+        let (regs_d, regs_m, regs_u) = insn.get_reg_usage();
         // Add to |uce|, any registers for which the first event
         // in this block is a read.  Dealing with the "first event"
         // constraint is a bit tricky.
@@ -537,7 +537,7 @@ impl Func {
       //         id(state.iter().collect()).show());
       //println!("QQQQ insn {} {}", iix.show(), insn.show());
 
-      let (regs_d, regs_m, regs_u) = insn.getRegUsage();
+      let (regs_d, regs_m, regs_u) = insn.get_reg_usage();
 
       // Examine reads.  This is pretty simple.  They simply extend an
       // existing ProtoRangeFrag to the U point of the reading insn.
@@ -814,16 +814,16 @@ fn merge_RangeFrags(
       let sortedFrags = SortedRangeFragIxs::new(&fragIxs.to_vec(), &frag_env);
       let size = 0;
       let spillCost = Some(0.0);
-      if reg.isVirtual() {
+      if reg.is_virtual() {
         resV.push(VirtualRange {
-          vreg: reg.toVirtualReg(),
+          vreg: reg.to_virtual_reg(),
           rreg: None,
           sortedFrags,
           size,
           spillCost,
         });
       } else {
-        resR.push(RealRange { rreg: reg.toRealReg(), sortedFrags });
+        resR.push(RealRange { rreg: reg.to_real_reg(), sortedFrags });
       }
     }
 
