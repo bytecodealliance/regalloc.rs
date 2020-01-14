@@ -2,6 +2,9 @@
 #![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
+use log::{self, error, info, warn};
+use pretty_env_logger;
+
 /* TODOs, 11 Dec 2019
 
 MVP (without these, the implementation is useless in practice):
@@ -375,7 +378,7 @@ impl Func {
 //=============================================================================
 // Top level
 
-enum RAAlgorithm {
+enum RegAllocAlgorithm {
   Backtracking,
   LinearScan,
 }
@@ -392,6 +395,8 @@ fn usage(argv0: &String) {
 }
 
 fn main() {
+  pretty_env_logger::init();
+
   let args: Vec<String> = env::args().collect();
   if args.len() != 5 {
     usage(&args[0]);
@@ -401,7 +406,7 @@ fn main() {
   let mut func = match crate::tests::find_Func(&args[2]) {
     Ok(func) => func,
     Err(available_func_names) => {
-      println!("{}: can't find Func with name '{}'", args[0], args[2]);
+      error!("can't find Func with name '{}'", args[2]);
       println!("{}: available Func names are:", args[0]);
       for name in available_func_names {
         println!("{}:     {}", args[0], name);
@@ -420,8 +425,8 @@ fn main() {
     };
 
   let reg_alloc_kind = match args[1].as_str() {
-    "bt" => RAAlgorithm::Backtracking,
-    "lsra" => RAAlgorithm::LinearScan,
+    "bt" => RegAllocAlgorithm::Backtracking,
+    "lsra" => RegAllocAlgorithm::LinearScan,
     _ => {
       usage(&args[0]);
       return;
@@ -438,19 +443,19 @@ fn main() {
   let original_func = func.clone();
 
   let alloc_res = match reg_alloc_kind {
-    RAAlgorithm::Backtracking => {
-      println!("Using the backtracking allocator");
+    RegAllocAlgorithm::Backtracking => {
+      info!("Using the backtracking allocator");
       crate::backtracking::alloc_main(&mut func, &reg_universe)
     }
-    RAAlgorithm::LinearScan => {
-      println!("Using the linear scan allocator.");
+    RegAllocAlgorithm::LinearScan => {
+      info!("Using the linear scan allocator.");
       crate::linear_scan::alloc_main(&mut func, &reg_universe)
     }
   };
 
   match alloc_res {
     Err(s) => {
-      println!("{}: allocation failed: {}", args[0], s);
+      error!("{}: allocation failed: {}", args[0], s);
       return;
     }
     Ok(_) => {}
