@@ -2,12 +2,12 @@
 
 use crate::data_structures::{
     BlockIx, Set, Func, Map, TypedIxVec, mkBlockIx, Reg, RangeFragIx,
-    Vec_RangeFrag, InstPoint, Show, mkInstIx, InstPoint_Use, InstPoint_Def,
-    RangeFrag, mkRangeFrag, mkRangeFragIx, Vec_RealRange, Vec_VirtualRange,
-    RangeFragKind, SortedRangeFragIxs, RealRange, VirtualRange, Vec_Block,
+    InstPoint, Show, mkInstIx, InstPoint_Use, InstPoint_Def,
+    RangeFrag, mkRangeFrag, mkRangeFragIx,
+    RangeFragKind, SortedRangeFragIxs, RealRange, VirtualRange,
     VirtualRangeIx, mkVirtualRangeIx, SpillSlot, mkRealReg, InstIx, Inst,
     Point, mkInstPoint, mkSpillSlot, RealReg, VirtualReg, i_spill, i_reload,
-    Vec_Inst, Block, InstPoint_Reload, InstPoint_Spill, RealRegUniverse,
+    Block, InstPoint_Reload, InstPoint_Spill, RealRegUniverse,
     rc_from_u32
 };
 use crate::analysis::run_analysis;
@@ -25,7 +25,7 @@ struct VirtualRangePrioQ {
     unallocated: Vec::<VirtualRangeIx>
 }
 impl VirtualRangePrioQ {
-    fn new(vlr_env: &Vec_VirtualRange) -> Self {
+    fn new(vlr_env: &TypedIxVec::<VirtualRangeIx, VirtualRange>) -> Self {
         let mut res = Self { unallocated: Vec::new() };
         for vlrix in mkVirtualRangeIx(0)
                      .dotdot( mkVirtualRangeIx(vlr_env.len()) ) {
@@ -50,7 +50,7 @@ impl VirtualRangePrioQ {
     // with the largest |size| value.  Remove the ref from |unallocated| and
     // return the LRIx for said entry.
     #[inline(never)]
-    fn get_longest_VirtualRange(&mut self, vlr_env: &Vec_VirtualRange)
+    fn get_longest_VirtualRange(&mut self, vlr_env: &TypedIxVec::<VirtualRangeIx, VirtualRange>)
                                 -> Option<VirtualRangeIx> {
         if self.unallocated.len() == 0 {
             return None;
@@ -79,7 +79,10 @@ impl VirtualRangePrioQ {
     }
 
     #[inline(never)]
-    fn show_with_envs(&self, vlr_env: &Vec_VirtualRange) -> String {
+    fn show_with_envs(
+           &self,
+           vlr_env: &TypedIxVec::<VirtualRangeIx, VirtualRange>
+       ) -> String {
         let mut res = "".to_string();
         let mut first = true;
         for vlrix in self.unallocated.iter() {
@@ -111,7 +114,7 @@ struct PerRealReg {
     vlrixs_assigned: Vec::<VirtualRangeIx>
 }
 impl PerRealReg {
-    fn new(fenv: &Vec_RangeFrag) -> Self {
+    fn new(fenv: &TypedIxVec::<RangeFragIx, RangeFrag>) -> Self {
         Self {
             frags_in_use: SortedRangeFragIxs::new(&vec![], fenv),
             vlrixs_assigned: Vec::<VirtualRangeIx>::new()
@@ -119,7 +122,8 @@ impl PerRealReg {
     }
 
     #[inline(never)]
-    fn add_RealRange(&mut self, to_add: &RealRange, fenv: &Vec_RangeFrag) {
+    fn add_RealRange(&mut self, to_add: &RealRange,
+                     fenv: &TypedIxVec::<RangeFragIx, RangeFrag>) {
         // Commit this register to |to_add|, irrevocably.  Don't add it to
         // |vlrixs_assigned| since we will never want to later evict the
         // assignment.
@@ -127,22 +131,33 @@ impl PerRealReg {
     }
 
     #[inline(never)]
-    fn can_add_VirtualRange_without_eviction(&self, to_add: &VirtualRange,
-                                    fenv: &Vec_RangeFrag) -> bool {
+    fn can_add_VirtualRange_without_eviction(
+           &self, to_add: &VirtualRange,
+           fenv: &TypedIxVec::<RangeFragIx, RangeFrag>
+       ) -> bool
+    {
         self.frags_in_use.can_add(&to_add.sortedFrags, fenv)
     }
 
     #[inline(never)]
-    fn add_VirtualRange(&mut self, to_add_vlrix: VirtualRangeIx,
-               vlr_env: &Vec_VirtualRange, fenv: &Vec_RangeFrag) {
+    fn add_VirtualRange(
+           &mut self, to_add_vlrix: VirtualRangeIx,
+           vlr_env: &TypedIxVec::<VirtualRangeIx, VirtualRange>,
+           fenv: &TypedIxVec::<RangeFragIx, RangeFrag>
+        )
+    {
         let vlr = &vlr_env[to_add_vlrix];
         self.frags_in_use.add(&vlr.sortedFrags, fenv);
         self.vlrixs_assigned.push(to_add_vlrix);
     }
 
     #[inline(never)]
-    fn del_VirtualRange(&mut self, to_del_vlrix: VirtualRangeIx,
-               vlr_env: &Vec_VirtualRange, fenv: &Vec_RangeFrag) {
+    fn del_VirtualRange(
+           &mut self, to_del_vlrix: VirtualRangeIx,
+           vlr_env: &TypedIxVec::<VirtualRangeIx, VirtualRange>,
+           fenv: &TypedIxVec::<RangeFragIx, RangeFrag>
+       )
+    {
         debug_assert!(self.vlrixs_assigned.len() > 0);
         // Remove it from |vlrixs_assigned|
         let mut found = None;
@@ -165,10 +180,12 @@ impl PerRealReg {
     }
 
     #[inline(never)]
-    fn find_best_evict_VirtualRange(&self, would_like_to_add: &VirtualRange,
-                           vlr_env: &Vec_VirtualRange,
-                           frag_env: &Vec_RangeFrag)
-                           -> Option<(VirtualRangeIx, f32)> {
+    fn find_best_evict_VirtualRange(
+           &self, would_like_to_add: &VirtualRange,
+           vlr_env: &TypedIxVec::<VirtualRangeIx, VirtualRange>,
+           frag_env: &TypedIxVec::<RangeFragIx, RangeFrag>)
+        -> Option<(VirtualRangeIx, f32)>
+    {
         // |would_like_to_add| presumably doesn't fit here.  See if eviction
         // of any of the existing LRs would make it allocable, and if so
         // return that LR and its cost.  Valid candidates VirtualRanges must
@@ -215,11 +232,13 @@ impl PerRealReg {
     }
 
     #[inline(never)]
-    fn show1_with_envs(&self, fenv: &Vec_RangeFrag) -> String {
+    fn show1_with_envs(&self, fenv: &TypedIxVec::<RangeFragIx, RangeFrag>)
+                       -> String {
         "in_use:   ".to_string() + &self.frags_in_use.show_with_fenv(&fenv)
     }
     #[inline(never)]
-    fn show2_with_envs(&self, fenv: &Vec_RangeFrag) -> String {
+    fn show2_with_envs(&self, fenv: &TypedIxVec::<RangeFragIx, RangeFrag>)
+                       -> String {
         "assigned: ".to_string() + &self.vlrixs_assigned.show()
     }
 }
@@ -297,7 +316,8 @@ fn print_RA_state(who: &str,
                   prioQ: &VirtualRangePrioQ, perRealReg: &Vec::<PerRealReg>,
                   editList: &Vec::<EditListItem>,
                   // The context (environment)
-                  vlr_env: &Vec_VirtualRange, frag_env: &Vec_RangeFrag)
+                  vlr_env: &TypedIxVec::<VirtualRangeIx, VirtualRange>,
+                  frag_env: &TypedIxVec::<RangeFragIx, RangeFrag>)
 {
     println!("<<<<====---- RA state at '{}' ----====", who);
     for ix in 0 .. perRealReg.len() {
@@ -340,7 +360,7 @@ fn print_RA_state(who: &str,
 /*
 fn show_commit_tab(commit_tab: &Vec::<SortedRangeFragIxs>,
                    who: &str,
-                   context: &Vec_RangeFrag) -> String {
+                   context: &TypedIxVec::<RangeFragIx, RangeFrag>) -> String {
     let mut res = "Commit Table at '".to_string()
                   + &who.to_string() + &"'\n".to_string();
     let mut rregNo = 0;
@@ -983,8 +1003,8 @@ pub fn alloc_main(func: &mut Func,
     let mut curSnR = 0; // cursor in |spillsAndReloads|
     let mut curB = mkBlockIx(0); // cursor in Func::blocks
 
-    let mut newInsts = Vec_Inst::new();
-    let mut newBlocks = Vec_Block::new();
+    let mut newInsts = TypedIxVec::<InstIx, Inst>::new();
+    let mut newBlocks = TypedIxVec::<BlockIx, Block>::new();
 
     for iix in mkInstIx(0) .dotdot( mkInstIx(func.insns.len()) ) {
 

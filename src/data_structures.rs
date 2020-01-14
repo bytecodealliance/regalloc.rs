@@ -224,6 +224,12 @@ where Ty: Clone {
             ty_ix: PhantomData::<TyIx>
         }
     }
+    pub fn fromVec(vek: Vec<Ty>) -> Self {
+        Self {
+            vek,
+            ty_ix: PhantomData::<TyIx>
+        }
+    }
     fn append(&mut self, other: &mut TypedIxVec<TyIx, Ty>) {
         // FIXME what if this overflows?
         self.vek.append(&mut other.vek);
@@ -274,10 +280,7 @@ where Ty: Clone {
 //=============================================================================
 
 macro_rules! generate_boilerplate {
-    ($TypeIx:ident, $mkTypeIx: ident,
-     $Type:ident,
-     $Vec_Type:ident, $mk_Vec_Type:ident,
-     $PrintingPrefix:expr) => {
+    ($TypeIx:ident, $mkTypeIx: ident, $Type:ident, $PrintingPrefix:expr) => {
         #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
         // Firstly, the indexing type (TypeIx)
         pub enum $TypeIx {
@@ -311,29 +314,18 @@ macro_rules! generate_boilerplate {
                 self.get()
             }
         }
-        // Secondly, the vector of the actual type (Type) as indexed only by
-        // the indexing type (TypeIx)
-        pub type $Vec_Type = TypedIxVec<$TypeIx, $Type>;
-        pub fn $mk_Vec_Type(vek: Vec<$Type>) -> $Vec_Type {
-            TypedIxVec { vek, ty_ix: PhantomData::<$TypeIx> }
-        }
     }
 }
 
-generate_boilerplate!(InstIx, mkInstIx, Inst,
-                      Vec_Inst, mk_Vec_Inst, "i");
+generate_boilerplate!(InstIx, mkInstIx, Inst, "i");
 
-generate_boilerplate!(BlockIx, mkBlockIx, Block,
-                      Vec_Block, mk_Vec_Block, "b");
+generate_boilerplate!(BlockIx, mkBlockIx, Block, "b");
 
-generate_boilerplate!(RangeFragIx, mkRangeFragIx, RangeFrag,
-                      Vec_RangeFrag, mk_Vec_RangeFrag, "f");
+generate_boilerplate!(RangeFragIx, mkRangeFragIx, RangeFrag, "f");
 
-generate_boilerplate!(VirtualRangeIx, mkVirtualRangeIx, VirtualRange,
-                      Vec_VirtualRange, mk_Vec_VirtualRange, "vlr");
+generate_boilerplate!(VirtualRangeIx, mkVirtualRangeIx, VirtualRange, "vr");
 
-generate_boilerplate!(RealRangeIx, mkRealRangeIx, RealRange,
-                      Vec_RealRange, mk_Vec_RealRange, "rlr");
+generate_boilerplate!(RealRangeIx, mkRealRangeIx, RealRange, "rr");
 
 
 //=============================================================================
@@ -1479,8 +1471,8 @@ pub struct Func {
     pub name:         String,
     pub entry:        Label,
     pub nVirtualRegs: u32,
-    pub insns:        Vec_Inst,    // indexed by InstIx
-    pub blocks:       Vec_Block    // indexed by BlockIx
+    pub insns:        TypedIxVec::<InstIx, Inst>,    // indexed by InstIx
+    pub blocks:       TypedIxVec::<BlockIx, Block>    // indexed by BlockIx
     // Note that |blocks| must be in order of increasing |Block::start|
     // fields.  Code that wants to traverse the blocks in some other order
     // must represent the ordering some other way; rearranging Func::blocks is
@@ -1498,7 +1490,7 @@ impl Clone for Func {
 }
 
 // Find a block Ix for a block name
-fn lookup(blocks: &Vec_Block, name: String) -> BlockIx {
+fn lookup(blocks: &TypedIxVec::<BlockIx, Block>, name: String) -> BlockIx {
     let mut bix = 0;
     for b in blocks.iter() {
         if b.name == name {
@@ -1515,8 +1507,8 @@ impl Func {
             name: name.to_string(),
             entry: Label::Unresolved { name: entry.to_string() },
             nVirtualRegs: 0,
-            insns: Vec_Inst::new(),
-            blocks: Vec_Block::new()
+            insns: TypedIxVec::<InstIx, Inst>::new(),
+            blocks: TypedIxVec::<BlockIx, Block>::new()
         }
     }
 
@@ -1548,7 +1540,8 @@ impl Func {
     }
 
     // Add a block to the Func
-    pub fn block<'a>(&mut self, name: &'a str, mut insns: Vec_Inst) {
+    pub fn block<'a>(&mut self, name: &'a str,
+                     mut insns: TypedIxVec::<InstIx, Inst>) {
         let start = self.insns.len();
         let len = insns.len() as u32;
         self.insns.append(&mut insns);
@@ -1828,7 +1821,7 @@ impl Show for RangeFrag {
             + &self.first.show() + &", " + &self.last.show() + &"]"
     }
 }
-pub fn mkRangeFrag(blocks: &Vec_Block, bix: BlockIx,
+pub fn mkRangeFrag(blocks: &TypedIxVec::<BlockIx, Block>, bix: BlockIx,
                    first: InstPoint, last: InstPoint, count: u16) -> RangeFrag {
     let block = &blocks[bix];
     debug_assert!(block.len >= 1);
@@ -1890,15 +1883,16 @@ impl SortedRangeFragIxs {
         self.fragIxs.show()
     }
 
-    pub fn show_with_fenv(&self, fenv: &Vec_RangeFrag) -> String {
-        let mut frags = Vec_RangeFrag::new();
+    pub fn show_with_fenv(&self, fenv: &TypedIxVec::<RangeFragIx, RangeFrag>)
+                          -> String {
+        let mut frags = TypedIxVec::<RangeFragIx, RangeFrag>::new();
         for fix in &self.fragIxs {
             frags.push(fenv[*fix]);
         }
         "SFIxs_".to_string() + &frags.show()
     }
 
-    fn check(&self, fenv: &Vec_RangeFrag) {
+    fn check(&self, fenv: &TypedIxVec::<RangeFragIx, RangeFrag>) {
         let mut ok = true;
         for i in 1 .. self.fragIxs.len() {
             let prev_frag = &fenv[self.fragIxs[i-1]];
@@ -1913,7 +1907,8 @@ impl SortedRangeFragIxs {
         }
     }
 
-    pub fn new(source: &Vec::<RangeFragIx>, fenv: &Vec_RangeFrag) -> Self {
+    pub fn new(source: &Vec::<RangeFragIx>,
+               fenv: &TypedIxVec::<RangeFragIx, RangeFrag>) -> Self {
         let mut res = SortedRangeFragIxs { fragIxs: source.clone() };
         // check the source is ordered, and clone (or sort it)
         res.fragIxs.sort_unstable_by(
@@ -1929,7 +1924,8 @@ impl SortedRangeFragIxs {
         res
     }
 
-    pub fn unit(fix: RangeFragIx, fenv: &Vec_RangeFrag) -> Self {
+    pub fn unit(fix: RangeFragIx, fenv: &TypedIxVec::<RangeFragIx, RangeFrag>)
+                -> Self {
         let mut res = SortedRangeFragIxs { fragIxs: Vec::<RangeFragIx>::new() };
         res.fragIxs.push(fix);
         res.check(fenv);
@@ -1956,7 +1952,8 @@ impl SortedRangeFragIxs {
         true
     }
 
-    pub fn add(&mut self, to_add: &Self, fenv: &Vec_RangeFrag) {
+    pub fn add(&mut self, to_add: &Self,
+               fenv: &TypedIxVec::<RangeFragIx, RangeFrag>) {
         self.check(fenv);
         to_add.check(fenv);
         let sfixs_x = &self;
@@ -1998,7 +1995,8 @@ impl SortedRangeFragIxs {
         self.check(fenv);
     }
 
-    pub fn can_add(&self, to_add: &Self, fenv: &Vec_RangeFrag) -> bool {
+    pub fn can_add(&self, to_add: &Self,
+                   fenv: &TypedIxVec::<RangeFragIx, RangeFrag>) -> bool {
         // This is merely a partial evaluation of add() which returns |false|
         // exactly in the cases where add() would have panic'd.
         self.check(fenv);
@@ -2023,7 +2021,8 @@ impl SortedRangeFragIxs {
         true
     }
 
-    pub fn del(&mut self, to_del: &Self, fenv: &Vec_RangeFrag) {
+    pub fn del(&mut self, to_del: &Self,
+               fenv: &TypedIxVec::<RangeFragIx, RangeFrag>) {
         self.check(fenv);
         to_del.check(fenv);
         let sfixs_x = &self;
@@ -2058,7 +2057,8 @@ impl SortedRangeFragIxs {
     }
 
     pub fn can_add_if_we_first_del(&self, to_del: &Self, to_add: &Self,
-                                   fenv: &Vec_RangeFrag) -> bool {
+                                   fenv: &TypedIxVec::<RangeFragIx, RangeFrag>)
+                                   -> bool {
         // For now, just do this the stupid way.  It would be possible to do
         // it without any allocation, but that sounds complex.
         let mut after_del = self.clone();
@@ -2165,7 +2165,7 @@ impl Show for VirtualRange {
 fn test_SortedRangeFragIxs() {
 
     // Create a RangeFrag and RangeFragIx from two InstPoints.
-    fn gen_fix(fenv: &mut Vec_RangeFrag,
+    fn gen_fix(fenv: &mut TypedIxVec::<RangeFragIx, RangeFrag>,
                first: InstPoint, last: InstPoint) -> RangeFragIx {
         assert!(first <= last);
         let res = mkRangeFragIx(fenv.len() as u32);
@@ -2175,7 +2175,8 @@ fn test_SortedRangeFragIxs() {
         res
     }
 
-    fn getRangeFrag(fenv: &Vec_RangeFrag, fix: RangeFragIx) -> &RangeFrag {
+    fn getRangeFrag(fenv: &TypedIxVec::<RangeFragIx, RangeFrag>,
+                    fix: RangeFragIx) -> &RangeFrag {
         &fenv[fix]
     }
 
@@ -2206,7 +2207,7 @@ fn test_SortedRangeFragIxs() {
     let fp_12u = InstPoint_Use(iix12);
     let fp_15u = InstPoint_Use(iix15);
 
-    let mut fenv = Vec_RangeFrag::new();
+    let mut fenv = TypedIxVec::<RangeFragIx, RangeFrag>::new();
 
     let fix_3u    = gen_fix(&mut fenv, fp_3u, fp_3u);
     let fix_3d    = gen_fix(&mut fenv, fp_3d, fp_3d);
@@ -2260,7 +2261,7 @@ fn test_SortedRangeFragIxs() {
             == None);
 
     // Create a SortedRangeFragIxs from a bunch of RangeFrag indices
-    fn genSFI(fenv: &Vec_RangeFrag,
+    fn genSFI(fenv: &TypedIxVec::<RangeFragIx, RangeFrag>,
               frags: &Vec::<RangeFragIx>) -> SortedRangeFragIxs {
         SortedRangeFragIxs::new(&frags, fenv)
     }

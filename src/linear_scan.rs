@@ -5,7 +5,7 @@ use crate::data_structures::{
     i_reload, i_spill, mkBlockIx, mkRangeFrag, mkRangeFragIx, mkInstIx, mkInstPoint, mkRealReg, mkSpillSlot, mkVirtualRangeIx,
     Block, BlockIx, RangeFrag, RangeFragIx, RangeFragKind, Func, Inst, InstIx, InstPoint, InstPoint_Def,
     InstPoint_Reload, InstPoint_Spill, InstPoint_Use, Map, Point, RealReg, Reg, Set, Show, SpillSlot,
-    SortedRangeFragIxs, TypedIxVec, VirtualRangeIx, VirtualReg, Vec_Block, Vec_RangeFrag, Vec_Inst, Vec_RealRange, Vec_VirtualRange, RealRange, VirtualRange,
+    SortedRangeFragIxs, TypedIxVec, VirtualRangeIx, VirtualReg, RealRange, VirtualRange,
     RealRegUniverse
 };
 

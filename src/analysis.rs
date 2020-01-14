@@ -13,11 +13,11 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 
 use crate::data_structures::{
-    BlockIx, Set, Func, Map, TypedIxVec, mkBlockIx, Reg, RangeFragIx,
-    Vec_RangeFrag, InstPoint, Show, mkInstIx, InstPoint_Use, InstPoint_Def,
-    RangeFrag, mkRangeFrag, mkRangeFragIx, Vec_RealRange, Vec_VirtualRange,
+    Block, BlockIx, Set, Func, Map, TypedIxVec, mkBlockIx, Reg, RangeFragIx,
+    InstPoint, Show, mkInstIx, InstPoint_Use, InstPoint_Def,
+    RangeFrag, mkRangeFrag, mkRangeFragIx,
     RangeFragKind, SortedRangeFragIxs, RealRange, VirtualRange,
-    Vec_Block, mkRealRangeIx, mkVirtualRangeIx
+    RealRangeIx, mkRealRangeIx, VirtualRangeIx, mkVirtualRangeIx
 };
 
 
@@ -434,10 +434,12 @@ impl Func {
     // to |outMap|, the associated RangeFragIxs, segregated by Reg.  |bix|,
     // |livein| and |liveout| are expected to be valid in the context of the
     // Func |self| (duh!)
-    fn get_RangeFrags_for_block(&self, bix: BlockIx,
-                                livein: &Set::<Reg>, liveout: &Set::<Reg>,
-                                outMap: &mut Map::<Reg, Vec::<RangeFragIx>>,
-                                outFEnv: &mut Vec_RangeFrag)
+    fn get_RangeFrags_for_block(
+            &self, bix: BlockIx,
+            livein: &Set::<Reg>, liveout: &Set::<Reg>,
+            outMap: &mut Map::<Reg, Vec::<RangeFragIx>>,
+            outFEnv: &mut TypedIxVec::<RangeFragIx, RangeFrag>
+        )
     {
         //println!("QQQQ --- block {}", bix.show());
         // BEGIN ProtoRangeFrag
@@ -669,12 +671,12 @@ impl Func {
            &self,
            livein_sets_per_block:  &TypedIxVec::<BlockIx, Set<Reg>>,
            liveout_sets_per_block: &TypedIxVec::<BlockIx, Set<Reg>>
-       ) -> (Map::<Reg, Vec<RangeFragIx>>, Vec_RangeFrag)
+       ) -> (Map::<Reg, Vec<RangeFragIx>>, TypedIxVec::<RangeFragIx, RangeFrag>)
     {
         debug_assert!(livein_sets_per_block.len()  == self.blocks.len());
         debug_assert!(liveout_sets_per_block.len() == self.blocks.len());
         let mut resMap  = Map::<Reg, Vec<RangeFragIx>>::default();
-        let mut resFEnv = Vec_RangeFrag::new();
+        let mut resFEnv = TypedIxVec::<RangeFragIx, RangeFrag>::new();
         for bix in mkBlockIx(0) .dotdot( mkBlockIx(self.blocks.len()) ) {
             self.get_RangeFrags_for_block(bix,
                                      &livein_sets_per_block[bix],
@@ -691,12 +693,13 @@ impl Func {
 
 #[inline(never)]
 fn merge_RangeFrags(fragIx_vecs_per_reg: &Map::<Reg, Vec<RangeFragIx>>,
-               frag_env: &Vec_RangeFrag,
-               cfg_info: &CFGInfo)
-               -> (Vec_RealRange, Vec_VirtualRange)
+                    frag_env: &TypedIxVec::<RangeFragIx, RangeFrag>,
+                    cfg_info: &CFGInfo)
+                    -> (TypedIxVec::<RealRangeIx, RealRange>,
+                        TypedIxVec::<VirtualRangeIx, VirtualRange>)
 {
-    let mut resR = Vec_RealRange::new();
-    let mut resV = Vec_VirtualRange::new();
+    let mut resR = TypedIxVec::<RealRangeIx, RealRange>::new();
+    let mut resV = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
     for (reg, all_fragIxs_for_reg) in fragIx_vecs_per_reg.iter() {
 
         // BEGIN merge |all_fragIxs_for_reg| entries as much as possible.
@@ -828,8 +831,11 @@ fn merge_RangeFrags(fragIx_vecs_per_reg: &Map::<Reg, Vec<RangeFragIx>>,
 //
 // all the while being very careful to avoid overflow.
 #[inline(never)]
-fn set_VirtualRange_metrics(vlrs: &mut Vec_VirtualRange,
-                            fenv: &Vec_RangeFrag, blocks: &Vec_Block)
+fn set_VirtualRange_metrics(
+       vlrs: &mut TypedIxVec::<VirtualRangeIx, VirtualRange>,
+       fenv: &TypedIxVec::<RangeFragIx, RangeFrag>,
+       blocks: &TypedIxVec::<BlockIx, Block>
+   )
 {
     for vlr in vlrs.iter_mut() {
         debug_assert!(vlr.size == 0 && vlr.spillCost == Some(0.0));
@@ -869,7 +875,10 @@ fn set_VirtualRange_metrics(vlrs: &mut Vec_VirtualRange,
 
 #[inline(never)]
 pub fn run_analysis(func: &mut Func)
-                    -> Result<(Vec_RealRange, Vec_VirtualRange, Vec_RangeFrag),
+                    -> Result<(TypedIxVec::<RealRangeIx, RealRange>,
+                               TypedIxVec::<VirtualRangeIx, VirtualRange>,
+                               TypedIxVec::<RangeFragIx, RangeFrag>
+                              ),
                               String> {
 
     let (def_sets_per_block, use_sets_per_block) = func.calc_def_and_use();
