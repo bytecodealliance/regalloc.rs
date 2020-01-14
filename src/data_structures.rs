@@ -16,6 +16,8 @@ use std::ops::Range;
 use std::slice::{Iter, IterMut};
 use std::{fs, io};
 
+use crate::interface::Function;
+
 //=============================================================================
 // Maps
 
@@ -163,10 +165,15 @@ trait PlusOne {
   fn plus_one(&self) -> Self;
 }
 
+trait PlusN: PlusOne {
+  fn plus_n(&self, n: usize) -> Self;
+}
+
 #[derive(Clone, Copy)]
 pub struct MyRange<T> {
   first: T,
   lastPlus1: T,
+  len: usize,
 }
 impl<T: Copy + PartialOrd + PlusOne> IntoIterator for MyRange<T> {
   type Item = T;
@@ -176,10 +183,32 @@ impl<T: Copy + PartialOrd + PlusOne> IntoIterator for MyRange<T> {
   }
 }
 
-impl<T> MyRange<T> {
+impl<T: Copy + Eq + Ord + PlusOne + PlusN> MyRange<T> {
   /// Create a new range object.
-  pub fn new(from: T, to: T) -> MyRange<T> {
-    MyRange { first: from, lastPlus1: to }
+  pub fn new(from: T, len: usize) -> MyRange<T> {
+    MyRange { first: from, lastPlus1: from.plus_n(len), len }
+  }
+
+  pub fn start(&self) -> T {
+    self.first
+  }
+
+  pub fn first(&self) -> T {
+    assert!(self.len() > 0);
+    self.start()
+  }
+
+  pub fn last(&self) -> T {
+    assert!(self.len() > 0);
+    self.start().plus_n(self.len() - 1)
+  }
+
+  pub fn len(&self) -> usize {
+    self.len
+  }
+
+  pub fn contains(&self, t: T) -> bool {
+    t >= self.first && t < self.first.plus_n(self.len)
   }
 }
 
@@ -211,7 +240,7 @@ pub struct TypedIxVec<TyIx, Ty> {
 impl<TyIx, Ty> TypedIxVec<TyIx, Ty>
 where
   Ty: Clone,
-  TyIx: From<u32>,
+  TyIx: From<u32> + Copy + Eq + Ord + PlusOne + PlusN,
 {
   pub fn new() -> Self {
     Self { vek: Vec::new(), ty_ix: PhantomData::<TyIx> }
@@ -244,7 +273,7 @@ where
     &self.vek[..]
   }
   pub fn range(&self) -> MyRange<TyIx> {
-    MyRange::new(TyIx::from(0), TyIx::from(self.len()))
+    MyRange::new(TyIx::from(0), self.len() as usize)
   }
 }
 
@@ -305,7 +334,8 @@ macro_rules! generate_boilerplate {
         $TypeIx::$TypeIx(self.get() - delta)
       }
       pub fn dotdot(&self, lastPlus1: $TypeIx) -> MyRange<$TypeIx> {
-        MyRange { first: *self, lastPlus1 }
+        let len = (lastPlus1.get() - self.get()) as usize;
+        MyRange::new(*self, len)
       }
     }
     impl fmt::Debug for $TypeIx {
@@ -316,6 +346,11 @@ macro_rules! generate_boilerplate {
     impl PlusOne for $TypeIx {
       fn plus_one(&self) -> Self {
         self.plus(1)
+      }
+    }
+    impl PlusN for $TypeIx {
+      fn plus_n(&self, n: usize) -> Self {
+        self.plus(n as u32)
       }
     }
     impl Into<u32> for $TypeIx {
@@ -975,25 +1010,20 @@ impl fmt::Debug for RangeFrag {
   }
 }
 
-// TODO: convert to use Function trait/interface instead.
-use crate::tests::Block;
-
-pub fn mkRangeFrag(
-  blocks: &TypedIxVec<BlockIx, Block>, bix: BlockIx, first: InstPoint,
-  last: InstPoint, count: u16,
+pub fn mkRangeFrag<F: Function>(
+  f: &F, bix: BlockIx, first: InstPoint, last: InstPoint, count: u16,
 ) -> RangeFrag {
-  let block = &blocks[bix];
-  debug_assert!(block.len >= 1);
-  debug_assert!(block.containsInstIx(first.iix));
-  debug_assert!(block.containsInstIx(last.iix));
+  debug_assert!(f.block_insns(bix).len() >= 1);
+  debug_assert!(f.block_insns(bix).contains(first.iix));
+  debug_assert!(f.block_insns(bix).contains(last.iix));
   debug_assert!(first <= last);
   if first == last {
     debug_assert!(count == 1);
   }
-  let first_iix_in_block = block.start.get();
-  let last_iix_in_block = first_iix_in_block + block.len - 1;
-  let first_pt_in_block = InstPoint_Use(mkInstIx(first_iix_in_block));
-  let last_pt_in_block = InstPoint_Def(mkInstIx(last_iix_in_block));
+  let first_iix_in_block = f.block_insns(bix).first();
+  let last_iix_in_block = f.block_insns(bix).last();
+  let first_pt_in_block = InstPoint_Use(first_iix_in_block);
+  let last_pt_in_block = InstPoint_Def(last_iix_in_block);
   let kind = match (first == first_pt_in_block, last == last_pt_in_block) {
     (false, false) => RangeFragKind::Local,
     (false, true) => RangeFragKind::LiveOut,

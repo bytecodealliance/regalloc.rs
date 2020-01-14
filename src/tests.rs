@@ -1116,15 +1116,21 @@ impl interface::Function for Func {
     &self.insns.elems()
   }
 
+  fn get_insn(&self, iix: InstIx) -> &Inst {
+    &self.insns[iix]
+  }
+
+  fn entry_block(&self) -> BlockIx {
+    mkBlockIx(0)
+  }
+
   fn blocks(&self) -> MyRange<BlockIx> {
     self.blocks.range()
   }
 
   /// Provide the range of instruction indices contained in each block.
   fn block_insns(&self, block: BlockIx) -> MyRange<InstIx> {
-    let start = self.blocks[block].start;
-    let end = start.plus(self.blocks[block].len);
-    MyRange::new(start, end)
+    MyRange::new(self.blocks[block].start, self.blocks[block].len as usize)
   }
 
   /// Get CFG successors: indexed by block, provide a list of successor blocks.

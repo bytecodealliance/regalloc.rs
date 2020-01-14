@@ -67,8 +67,14 @@ pub trait Function {
   /// Allow access to the underlying vector of instructions.
   fn insns(&self) -> &[Self::Inst];
 
+  /// Get an instruction with a type-safe InstIx index.
+  fn get_insn(&self, insn: InstIx) -> &Self::Inst;
+
   /// Allow iteration over basic blocks (in instruction order).
   fn blocks(&self) -> MyRange<BlockIx>;
+
+  /// Get the index of the entry block.
+  fn entry_block(&self) -> BlockIx;
 
   /// Provide the range of instruction indices contained in each block.
   fn block_insns(&self, block: BlockIx) -> MyRange<InstIx>;
