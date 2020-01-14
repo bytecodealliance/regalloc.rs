@@ -494,3 +494,73 @@ fn main() {
 
   println!("");
 }
+
+mod test_utils {
+  use super::*;
+
+  pub fn bt(func_name: &str, num_gpr: usize, num_fpu: usize) {
+    let mut func = crate::tests::find_Func(func_name).unwrap();
+    let reg_universe = make_universe(num_gpr, num_fpu);
+    crate::backtracking::alloc_main(&mut func, &reg_universe).unwrap_or_else(
+      |err| {
+        panic!("allocation failed: {}", err);
+      },
+    );
+    func.run("After allocation", &reg_universe, RunStage::AfterRegalloc);
+  }
+}
+
+#[test]
+fn bt_badness() {
+  test_utils::bt("badness", 1, 0);
+}
+
+#[test]
+fn bt_straight_line() {
+  test_utils::bt("straight_line", 1, 0);
+}
+
+#[test]
+fn bt_fill_then_sum() {
+  test_utils::bt("fill_then_sum", 8, 8);
+}
+
+#[test]
+fn bt_ssort() {
+  test_utils::bt("ssort", 8, 8);
+}
+
+#[test]
+fn bt_3_loops() {
+  test_utils::bt("3_loops", 8, 8);
+}
+
+#[test]
+fn bt_stmts() {
+  test_utils::bt("stmts", 8, 8);
+}
+
+#[test]
+fn bt_needs_splitting() {
+  test_utils::bt("needs_splitting", 8, 8);
+}
+
+#[test]
+fn bt_needs_splitting2() {
+  test_utils::bt("needs_splitting2", 8, 8);
+}
+
+#[test]
+fn bt_qsort() {
+  test_utils::bt("qsort", 8, 8);
+}
+
+#[test]
+fn bt_fill_then_sum_2a() {
+  test_utils::bt("fill_then_sum_2a", 8, 8);
+}
+
+#[test]
+fn bt_ssort_2a() {
+  test_utils::bt("ssort_2a", 8, 8);
+}

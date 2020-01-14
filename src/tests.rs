@@ -1556,7 +1556,7 @@ fn test__ssort_2a() -> Func {
 
 // This is the list of available tests.  This function returns either the
 // requested Func, or if not found, a list of the available ones.
-pub fn find_Func(name: &String) -> Result<Func, Vec<String>> {
+pub fn find_Func(name: &str) -> Result<Func, Vec<String>> {
   // This is really stupid.  Fortunately it's not performance critical :)
   let all_Funcs = vec![
     test__badness(),          // Whatever the current badness is
