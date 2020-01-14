@@ -421,10 +421,9 @@ impl Reg {
       (self.do_not_access_this_directly & ((1 << 8) - 1)) as usize
     }
   }
-  // TODO rename; what does "enc" mean?
-  pub fn get_enc(self) -> u8 {
+  pub fn get_hw_encoding(self) -> u8 {
     if self.is_virtual() {
-      panic!("Reg::get_enc on virtual register")
+      panic!("Virtual register does not have a hardware encoding")
     } else {
       ((self.do_not_access_this_directly >> 8) & ((1 << 8) - 1)) as u8
     }
@@ -486,6 +485,9 @@ impl RealReg {
   }
   pub fn get_index(self) -> usize {
     self.reg.get_index()
+  }
+  pub fn get_hw_encoding(self) -> usize {
+    self.reg.get_hw_encoding() as usize
   }
   pub fn to_reg(self) -> Reg {
     self.reg

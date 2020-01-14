@@ -56,6 +56,7 @@ mod backtracking;
 mod data_structures;
 mod linear_scan;
 mod tests;
+mod interface;
 
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
