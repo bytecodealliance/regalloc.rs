@@ -5,14 +5,14 @@
 
 use crate::analysis::run_analysis;
 use crate::data_structures::{
-  i_reload, i_spill, mkBlockIx, mkInstIx, mkInstPoint, mkRangeFrag,
-  mkRangeFragIx, mkRealReg, mkSpillSlot, mkVirtualRangeIx, rc_from_u32, Block,
-  BlockIx, Func, Inst, InstIx, InstPoint, InstPoint_Def, InstPoint_Reload,
-  InstPoint_Spill, InstPoint_Use, Map, Point, RangeFrag, RangeFragIx,
-  RangeFragKind, RealRange, RealReg, RealRegUniverse, Reg, Set,
-  SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx,
-  VirtualReg,
+  mkBlockIx, mkInstIx, mkInstPoint, mkRangeFrag, mkRangeFragIx, mkRealReg,
+  mkSpillSlot, mkVirtualRangeIx, BlockIx, InstIx, InstPoint, InstPoint_Def,
+  InstPoint_Reload, InstPoint_Spill, InstPoint_Use, Map, Point, RangeFrag,
+  RangeFragIx, RangeFragKind, RealRange, RealReg, RealRegUniverse, Reg,
+  RegClass, Set, SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange,
+  VirtualRangeIx, VirtualReg,
 };
+use crate::tests::{i_reload, i_spill, Block, Func, Inst};
 use std::fmt;
 
 //=============================================================================
@@ -460,7 +460,7 @@ pub fn alloc_main(
           // Urk.  This is very ungood.  Game over.
           let s = format!(
             "no available registers for class {:?}",
-            rc_from_u32(curr_vlr_rc as u32)
+            RegClass::rc_from_u32(curr_vlr_rc as u32)
           );
           return Err(s);
         }

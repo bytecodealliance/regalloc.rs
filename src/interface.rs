@@ -39,12 +39,12 @@ pub use crate::data_structures::RealRegUniverse;
 
 /// Register uses for a given instruction.
 pub struct InstRegUses {
-  used: Set<Reg>,    // registers that are read.
-  defined: Set<Reg>, // registers that are written.
-  modified: Set<Reg>, // registers that are modified.
-                     // Note that `modified` is distinct from just `used`+`defined` because the
-                     // vreg must live in the same real reg both before and after the
-                     // instruction.
+  pub used: Set<Reg>,    // registers that are read.
+  pub defined: Set<Reg>, // registers that are written.
+  pub modified: Set<Reg>, // registers that are modified.
+                          // Note that `modified` is distinct from just `used`+`defined` because
+                          // the vreg must live in the same real reg both before and after the
+                          // instruction.
 }
 
 // TypedIxVector, so that the interface can speak about vectors of blocks and
@@ -73,8 +73,8 @@ pub trait Function {
   /// Provide the range of instruction indices contained in each block.
   fn block_insns(&self, block: BlockIx) -> MyRange<InstIx>;
 
-  /// Get CFG successors: indexed by block, provide a list of successor blocks.
-  fn block_succs(&self) -> TypedIxVec<BlockIx, Vec<BlockIx>>;
+  /// Get CFG successors for a given block.
+  fn block_succs(&self, block: BlockIx) -> Vec<BlockIx>;
 
   /// Provide the defined, used, and modified registers for an instruction.
   fn get_regs(&self, insn: &Self::Inst) -> InstRegUses;

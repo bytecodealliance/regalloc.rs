@@ -54,9 +54,9 @@ Performance:
 mod analysis;
 mod backtracking;
 mod data_structures;
+mod interface;
 mod linear_scan;
 mod tests;
-mod interface;
 
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
@@ -73,9 +73,10 @@ use std::ops::Range;
 use std::slice::{Iter, IterMut};
 use std::{fs, io};
 
+use tests::{make_universe, BinOp, Block, Func, Inst, Label, AM, RI};
+
 use data_structures::{
-  make_universe, BinOp, Block, BlockIx, Func, Inst, InstIx, Label, RealReg,
-  RealRegUniverse, Reg, SpillSlot, VirtualReg, AM, RI,
+  BlockIx, InstIx, RealReg, RealRegUniverse, Reg, SpillSlot, VirtualReg,
 };
 
 //=============================================================================

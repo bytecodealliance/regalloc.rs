@@ -15,11 +15,12 @@ use std::{fs, io};
 
 use crate::data_structures::{
   mkBlockIx, mkInstIx, mkRangeFrag, mkRangeFragIx, mkRealRangeIx,
-  mkVirtualRangeIx, Block, BlockIx, Func, InstPoint, InstPoint_Def,
-  InstPoint_Use, Map, RangeFrag, RangeFragIx, RangeFragKind, RealRange,
-  RealRangeIx, Reg, Set, SortedRangeFragIxs, TypedIxVec, VirtualRange,
-  VirtualRangeIx,
+  mkVirtualRangeIx, BlockIx, InstPoint, InstPoint_Def, InstPoint_Use, Map,
+  RangeFrag, RangeFragIx, RangeFragKind, RealRange, RealRangeIx, Reg, Set,
+  SortedRangeFragIxs, TypedIxVec, VirtualRange, VirtualRangeIx,
 };
+
+use crate::tests::{Block, Func, Inst};
 
 //=============================================================================
 // Queues

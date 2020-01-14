@@ -5,14 +5,15 @@
 
 use crate::analysis::run_analysis;
 use crate::data_structures::{
-  i_reload, i_spill, mkBlockIx, mkInstIx, mkInstPoint, mkRangeFrag,
-  mkRangeFragIx, mkRealReg, mkSpillSlot, mkVirtualRangeIx, Block, BlockIx,
-  Func, Inst, InstIx, InstPoint, InstPoint_Def, InstPoint_Reload,
-  InstPoint_Spill, InstPoint_Use, Map, Point, RangeFrag, RangeFragIx,
-  RangeFragKind, RealRange, RealReg, RealRegUniverse, Reg, Set,
+  mkBlockIx, mkInstIx, mkInstPoint, mkRangeFrag, mkRangeFragIx, mkRealReg,
+  mkSpillSlot, mkVirtualRangeIx, BlockIx, InstIx, InstPoint, InstPoint_Def,
+  InstPoint_Reload, InstPoint_Spill, InstPoint_Use, Map, Point, RangeFrag,
+  RangeFragIx, RangeFragKind, RealRange, RealReg, RealRegUniverse, Reg, Set,
   SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx,
   VirtualReg,
 };
+
+use crate::tests::{i_reload, i_spill, Block, Func, Inst};
 
 // Allocator top level.  |func| is modified so that, when this function
 // returns, it will contain no VirtualReg uses.  Allocation can fail if there

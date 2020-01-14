@@ -1,13 +1,848 @@
 /// Test cases.  The list of them is right at the bottom, function |find_Func|.
 /// Add new ones there.
+///
+/// As part of this set of test cases, we define a mini IR and implement the `Function` trait for
+/// it so that we can use the regalloc public interface.
+use crate::interface;
+
 use crate::data_structures::{
-  i_add, i_addm, i_and, i_cmp_eq, i_cmp_ge, i_cmp_gt, i_cmp_le, i_cmp_lt,
-  i_copy, i_finish, i_goto, i_goto_ctf, i_imm, i_load, i_mod, i_mul, i_print_i,
-  i_print_s, i_shr, i_store, i_sub, i_subm, is_goto_insn, mkInstIx, mkRealReg,
-  mkTextLabel, mkVirtualReg, remapControlFlowTarget, BinOp, Func, Inst, InstIx,
-  Label, RealReg, Reg, RegClass, SpillSlot, TypedIxVec, AM, AM_R, AM_RI, AM_RR,
-  RI, RI_I, RI_R,
+  mkBlockIx, mkInstIx, mkRealReg, mkSpillSlot, mkVirtualReg, BlockIx, InstIx,
+  Map, MyRange, RealReg, RealRegUniverse, Reg, RegClass, Set, SpillSlot,
+  TypedIxVec, VirtualReg, NUM_REG_CLASSES,
 };
+
+use std::fmt;
+
+//=============================================================================
+// Definition of instructions, and printing thereof.  Destinations are on the
+// left.
+
+#[derive(Clone)]
+pub enum Label {
+  Unresolved { name: String },
+  Resolved { name: String, bix: BlockIx },
+}
+impl fmt::Debug for Label {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      Label::Unresolved { name } => write!(fmt, "??:{}", &name),
+      Label::Resolved { name, bix } => write!(fmt, "{:?}:{:?}", bix, name),
+    }
+  }
+}
+impl Label {
+  pub fn getBlockIx(&self) -> BlockIx {
+    match self {
+      Label::Resolved { name: _, bix } => *bix,
+      Label::Unresolved { .. } => {
+        panic!("Label::getBlockIx: unresolved label!")
+      }
+    }
+  }
+
+  pub fn remapControlFlow(&mut self, from: &String, to: &String) {
+    match self {
+      Label::Resolved { .. } => {
+        panic!("Label::remapControlFlow on resolved label");
+      }
+      Label::Unresolved { name } => {
+        if name == from {
+          *name = to.clone();
+        }
+      }
+    }
+  }
+}
+pub fn mkTextLabel(n: usize) -> String {
+  "L".to_string() + &n.to_string()
+}
+fn mkUnresolved(name: String) -> Label {
+  Label::Unresolved { name }
+}
+
+#[derive(Copy, Clone)]
+pub enum RI {
+  Reg { reg: Reg },
+  Imm { imm: u32 },
+}
+pub fn RI_R(reg: Reg) -> RI {
+  debug_assert!(reg.get_class() == RegClass::I32);
+  RI::Reg { reg }
+}
+pub fn RI_I(imm: u32) -> RI {
+  RI::Imm { imm }
+}
+impl fmt::Debug for RI {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      RI::Reg { reg } => reg.fmt(fmt),
+      RI::Imm { imm } => write!(fmt, "{}", imm),
+    }
+  }
+}
+impl RI {
+  fn addRegReadsTo(&self, uce: &mut Set<Reg>) {
+    match self {
+      RI::Reg { reg } => uce.insert(*reg),
+      RI::Imm { .. } => {}
+    }
+  }
+  fn apply_D_or_U(&mut self, map: &Map<VirtualReg, RealReg>) {
+    match self {
+      RI::Reg { ref mut reg } => {
+        reg.apply_D_or_U(map);
+      }
+      RI::Imm { .. } => {}
+    }
+  }
+}
+
+#[derive(Copy, Clone)]
+pub enum AM {
+  RI { base: Reg, offset: u32 },
+  RR { base: Reg, offset: Reg },
+}
+pub fn AM_R(base: Reg) -> AM {
+  debug_assert!(base.get_class() == RegClass::I32);
+  AM::RI { base, offset: 0 }
+}
+pub fn AM_RI(base: Reg, offset: u32) -> AM {
+  debug_assert!(base.get_class() == RegClass::I32);
+  AM::RI { base, offset }
+}
+pub fn AM_RR(base: Reg, offset: Reg) -> AM {
+  debug_assert!(base.get_class() == RegClass::I32);
+  debug_assert!(offset.get_class() == RegClass::I32);
+  AM::RR { base, offset }
+}
+impl fmt::Debug for AM {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      AM::RI { base, offset } => write!(fmt, "[{:?} {:?}]", base, offset),
+      AM::RR { base, offset } => write!(fmt, "[{:?} {:?}]", base, offset),
+    }
+  }
+}
+impl AM {
+  fn addRegReadsTo(&self, uce: &mut Set<Reg>) {
+    match self {
+      AM::RI { base, .. } => uce.insert(*base),
+      AM::RR { base, offset } => {
+        uce.insert(*base);
+        uce.insert(*offset);
+      }
+    }
+  }
+  fn apply_D_or_U(&mut self, map: &Map<VirtualReg, RealReg>) {
+    match self {
+      AM::RI { ref mut base, .. } => {
+        base.apply_D_or_U(map);
+      }
+      AM::RR { ref mut base, ref mut offset } => {
+        base.apply_D_or_U(map);
+        offset.apply_D_or_U(map);
+      }
+    }
+  }
+}
+
+#[derive(Copy, Clone)]
+pub enum BinOp {
+  Add,
+  Sub,
+  Mul,
+  Mod,
+  Shr,
+  And,
+  CmpEQ,
+  CmpLT,
+  CmpLE,
+  CmpGE,
+  CmpGT,
+}
+impl fmt::Debug for BinOp {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(
+      fmt,
+      "{}",
+      match self {
+        BinOp::Add => "add",
+        BinOp::Sub => "sub",
+        BinOp::Mul => "mul",
+        BinOp::Mod => "mod",
+        BinOp::Shr => "shr",
+        BinOp::And => "and",
+        BinOp::CmpEQ => "cmpeq",
+        BinOp::CmpLT => "cmplt",
+        BinOp::CmpLE => "cmple",
+        BinOp::CmpGE => "cmpge",
+        BinOp::CmpGT => "cmpgt",
+      }
+    )
+  }
+}
+impl fmt::Display for BinOp {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    (self as &dyn fmt::Debug).fmt(fmt)
+  }
+}
+impl BinOp {
+  pub fn calc(self, argL: u32, argR: u32) -> u32 {
+    match self {
+      BinOp::Add => u32::wrapping_add(argL, argR),
+      BinOp::Sub => u32::wrapping_sub(argL, argR),
+      BinOp::Mul => u32::wrapping_mul(argL, argR),
+      BinOp::Mod => argL % argR,
+      BinOp::Shr => argL >> (argR & 31),
+      BinOp::And => argL & argR,
+      BinOp::CmpEQ => {
+        if argL == argR {
+          1
+        } else {
+          0
+        }
+      }
+      BinOp::CmpLT => {
+        if argL < argR {
+          1
+        } else {
+          0
+        }
+      }
+      BinOp::CmpLE => {
+        if argL <= argR {
+          1
+        } else {
+          0
+        }
+      }
+      BinOp::CmpGE => {
+        if argL >= argR {
+          1
+        } else {
+          0
+        }
+      }
+      BinOp::CmpGT => {
+        if argL > argR {
+          1
+        } else {
+          0
+        }
+      }
+    }
+  }
+}
+
+#[derive(Copy, Clone)]
+enum BinOpF {
+  FAdd,
+  FSub,
+  FMul,
+  FDiv,
+}
+impl fmt::Debug for BinOpF {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(
+      fmt,
+      "{}",
+      match self {
+        BinOpF::FAdd => "fadd".to_string(),
+        BinOpF::FSub => "fsub".to_string(),
+        BinOpF::FMul => "fmul".to_string(),
+        BinOpF::FDiv => "fdiv".to_string(),
+      }
+    )
+  }
+}
+impl fmt::Display for BinOpF {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    (self as &dyn fmt::Debug).fmt(fmt)
+  }
+}
+impl BinOpF {
+  fn calc(self, argL: f32, argR: f32) -> f32 {
+    match self {
+      BinOpF::FAdd => argL + argR,
+      BinOpF::FSub => argL - argR,
+      BinOpF::FMul => argL * argR,
+      BinOpF::FDiv => argL / argR,
+    }
+  }
+}
+
+#[derive(Clone)]
+pub enum Inst {
+  Imm { dst: Reg, imm: u32 },
+  ImmF { dst: Reg, imm: f32 },
+  Copy { dst: Reg, src: Reg },
+  BinOp { op: BinOp, dst: Reg, srcL: Reg, srcR: RI },
+  BinOpM { op: BinOp, dst: Reg, srcR: RI }, // "mod" semantics for |dst|
+  BinOpF { op: BinOpF, dst: Reg, srcL: Reg, srcR: Reg },
+  Load { dst: Reg, addr: AM },
+  LoadF { dst: Reg, addr: AM },
+  Store { addr: AM, src: Reg },
+  StoreF { addr: AM, src: Reg },
+  Spill { dst: SpillSlot, src: RealReg },
+  SpillF { dst: SpillSlot, src: RealReg },
+  Reload { dst: RealReg, src: SpillSlot },
+  ReloadF { dst: RealReg, src: SpillSlot },
+  Goto { target: Label },
+  GotoCTF { cond: Reg, targetT: Label, targetF: Label },
+  PrintS { str: String },
+  PrintI { reg: Reg },
+  PrintF { reg: Reg },
+  Finish {},
+}
+
+pub fn i_imm(dst: Reg, imm: u32) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::Imm { dst, imm }
+}
+pub fn i_copy(dst: Reg, src: Reg) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(src.get_class() == RegClass::I32);
+  Inst::Copy { dst, src }
+}
+// For BinOp variants see below
+
+pub fn i_load(dst: Reg, addr: AM) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::Load { dst, addr }
+}
+pub fn i_store(addr: AM, src: Reg) -> Inst {
+  debug_assert!(src.get_class() == RegClass::I32);
+  Inst::Store { addr, src }
+}
+pub fn i_spill(dst: SpillSlot, src: RealReg) -> Inst {
+  debug_assert!(src.get_class() == RegClass::I32);
+  Inst::Spill { dst, src }
+}
+pub fn i_reload(dst: RealReg, src: SpillSlot) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::Reload { dst, src }
+}
+pub fn i_goto<'a>(target: &'a str) -> Inst {
+  Inst::Goto { target: mkUnresolved(target.to_string()) }
+}
+pub fn i_goto_ctf<'a>(cond: Reg, targetT: &'a str, targetF: &'a str) -> Inst {
+  debug_assert!(cond.get_class() == RegClass::I32);
+  Inst::GotoCTF {
+    cond,
+    targetT: mkUnresolved(targetT.to_string()),
+    targetF: mkUnresolved(targetF.to_string()),
+  }
+}
+pub fn i_print_s<'a>(str: &'a str) -> Inst {
+  Inst::PrintS { str: str.to_string() }
+}
+pub fn i_print_i(reg: Reg) -> Inst {
+  debug_assert!(reg.get_class() == RegClass::I32);
+  Inst::PrintI { reg }
+}
+pub fn i_finish() -> Inst {
+  Inst::Finish {}
+}
+
+pub fn i_add(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::Add, dst, srcL, srcR }
+}
+pub fn i_sub(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::Sub, dst, srcL, srcR }
+}
+pub fn i_mul(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::Mul, dst, srcL, srcR }
+}
+pub fn i_mod(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::Mod, dst, srcL, srcR }
+}
+pub fn i_shr(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::Shr, dst, srcL, srcR }
+}
+pub fn i_and(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::And, dst, srcL, srcR }
+}
+pub fn i_cmp_eq(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::CmpEQ, dst, srcL, srcR }
+}
+pub fn i_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::CmpLT, dst, srcL, srcR }
+}
+pub fn i_cmp_le(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::CmpLE, dst, srcL, srcR }
+}
+pub fn i_cmp_ge(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::CmpGE, dst, srcL, srcR }
+}
+pub fn i_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  debug_assert!(srcL.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::CmpGT, dst, srcL, srcR }
+}
+
+// 2-operand versions of i_add and i_sub, for experimentation
+pub fn i_addm(dst: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::BinOpM { op: BinOp::Add, dst, srcR }
+}
+pub fn i_subm(dst: Reg, srcR: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::BinOpM { op: BinOp::Sub, dst, srcR }
+}
+
+pub fn i_fadd(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::F32);
+  debug_assert!(srcL.get_class() == RegClass::F32);
+  debug_assert!(srcR.get_class() == RegClass::F32);
+  Inst::BinOpF { op: BinOpF::FAdd, dst, srcL, srcR }
+}
+pub fn i_fsub(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::F32);
+  debug_assert!(srcL.get_class() == RegClass::F32);
+  debug_assert!(srcR.get_class() == RegClass::F32);
+  Inst::BinOpF { op: BinOpF::FSub, dst, srcL, srcR }
+}
+pub fn i_fmul(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::F32);
+  debug_assert!(srcL.get_class() == RegClass::F32);
+  debug_assert!(srcR.get_class() == RegClass::F32);
+  Inst::BinOpF { op: BinOpF::FMul, dst, srcL, srcR }
+}
+pub fn i_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::F32);
+  debug_assert!(srcL.get_class() == RegClass::F32);
+  debug_assert!(srcR.get_class() == RegClass::F32);
+  Inst::BinOpF { op: BinOpF::FDiv, dst, srcL, srcR }
+}
+
+impl fmt::Debug for Inst {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn ljustify(s: String, w: usize) -> String {
+      if s.len() >= w {
+        s
+      } else {
+        // BEGIN hack
+        let mut need = w - s.len();
+        if need > 5 {
+          need = 5;
+        }
+        let extra = [" ", "  ", "   ", "    ", "     "][need - 1];
+        // END hack
+        s + &extra.to_string()
+      }
+    }
+
+    match self {
+      Inst::Imm { dst, imm } => write!(fmt, "imm     {:?}, {:?}", dst, imm),
+      Inst::ImmF { dst, imm } => write!(fmt, "immf    {:?}, {:?}", dst, imm),
+      Inst::Copy { dst, src } => write!(fmt, "copy    {:?}, {:?}", dst, src),
+      Inst::BinOp { op, dst, srcL, srcR } => write!(
+        fmt,
+        "{} {:?}, {:?}, {:?}",
+        ljustify(op.to_string(), 7),
+        dst,
+        srcL,
+        srcR
+      ),
+      Inst::BinOpM { op, dst, srcR } => write!(
+        fmt,
+        "{} {:?}, {:?}",
+        ljustify(op.to_string() + &"m".to_string(), 7),
+        dst,
+        srcR
+      ),
+      Inst::BinOpF { op, dst, srcL, srcR } => write!(
+        fmt,
+        "{} {:?}, {:?}, {:?}",
+        ljustify(op.to_string(), 7),
+        dst,
+        srcL,
+        srcR
+      ),
+      Inst::Load { dst, addr } => write!(fmt, "load    {:?}, {:?}", dst, addr),
+      Inst::LoadF { dst, addr } => write!(fmt, "loadf   {:?}, {:?}", dst, addr),
+      Inst::Store { addr, src } => write!(fmt, "store   {:?}, {:?}", addr, src),
+      Inst::StoreF { addr, src } => {
+        write!(fmt, "storef  {:?}, {:?}", addr, src)
+      }
+      Inst::Spill { dst, src } => write!(fmt, "SPILL   {:?}, {:?}", dst, src),
+      Inst::SpillF { dst, src } => write!(fmt, "SPILLF  {:?}, {:?}", dst, src),
+      Inst::Reload { dst, src } => write!(fmt, "RELOAD  {:?}, {:?}", dst, src),
+      Inst::ReloadF { dst, src } => write!(fmt, "RELOAD  {:?}, {:?}", dst, src),
+      Inst::Goto { target } => write!(fmt, "goto    {:?}", target),
+      Inst::GotoCTF { cond, targetT, targetF } => write!(
+        fmt,
+        "goto    if {:?} then {:?} else {:?}",
+        cond, targetT, targetF
+      ),
+      Inst::PrintS { str } => {
+        let mut res = "prints '".to_string();
+        for c in str.chars() {
+          res += &(if c == '\n' { "\\n".to_string() } else { c.to_string() });
+        }
+        write!(fmt, "{}'", res)
+      }
+      Inst::PrintI { reg } => write!(fmt, "printi {:?}", reg),
+      Inst::PrintF { reg } => write!(fmt, "printf {:?}", reg),
+      Inst::Finish {} => write!(fmt, "finish"),
+    }
+  }
+}
+
+impl Inst {
+  // Returns a vector of BlockIxs, being those that this insn might jump to.
+  // This might contain duplicates (although it would be pretty strange if
+  // it did). This function should not be applied to non-control-flow
+  // instructions.  The labels are assumed all to be "resolved".
+  pub fn getTargets(&self) -> Vec<BlockIx> {
+    match self {
+      Inst::Goto { target } => vec![target.getBlockIx()],
+      Inst::GotoCTF { cond: _, targetT, targetF } => {
+        vec![targetT.getBlockIx(), targetF.getBlockIx()]
+      }
+      Inst::Finish {} => vec![],
+      _other => panic!("Inst::getTargets: incorrectly applied to: {:?}", self),
+    }
+  }
+
+  // Returns three sets of regs, (def, mod, use), being those def'd
+  // (written), those mod'd (modified) and those use'd (read) by the
+  // instruction, respectively.  Note "use" is sometimes written as "uce"
+  // below since "use" is a Rust reserved word, and similarly "mod" is
+  // written "m0d" (that's a zero, not capital-o).
+  //
+  // Be careful here.  If an instruction really modifies a register -- as is
+  // typical for x86 -- that register needs to be in the |mod| set, and not
+  // in the |def| and |use| sets.  *Any* mistake in describing register uses
+  // here will almost certainly lead to incorrect register allocations.
+  //
+  // Also the following must hold: the union of |def| and |use| must be
+  // disjoint from |mod|.
+  pub fn get_reg_usage(&self) -> (Set<Reg>, Set<Reg>, Set<Reg>) {
+    let mut def = Set::<Reg>::empty();
+    let mut m0d = Set::<Reg>::empty();
+    let mut uce = Set::<Reg>::empty();
+    match self {
+      Inst::Imm { dst, imm: _ } => {
+        def.insert(*dst);
+      }
+      Inst::Copy { dst, src } => {
+        def.insert(*dst);
+        uce.insert(*src);
+      }
+      Inst::BinOp { op: _, dst, srcL, srcR } => {
+        def.insert(*dst);
+        uce.insert(*srcL);
+        srcR.addRegReadsTo(&mut uce);
+      }
+      Inst::BinOpM { op: _, dst, srcR } => {
+        m0d.insert(*dst);
+        srcR.addRegReadsTo(&mut uce);
+      }
+      Inst::Store { addr, src } => {
+        addr.addRegReadsTo(&mut uce);
+        uce.insert(*src);
+      }
+      Inst::Load { dst, addr } => {
+        def.insert(*dst);
+        addr.addRegReadsTo(&mut uce);
+      }
+      Inst::Goto { .. } => {}
+      Inst::GotoCTF { cond, targetT: _, targetF: _ } => {
+        uce.insert(*cond);
+      }
+      Inst::PrintS { .. } => {}
+      Inst::PrintI { reg } => {
+        uce.insert(*reg);
+      }
+      Inst::Finish {} => {}
+      _other => panic!("Inst::get_reg_usage: unhandled: {:?}", self),
+    }
+    // Failure of either of these is serious and should be investigated.
+    debug_assert!(!def.intersects(&m0d));
+    debug_assert!(!uce.intersects(&m0d));
+    (def, m0d, uce)
+  }
+
+  // Apply the specified VirtualReg->RealReg mappings to the instruction,
+  // thusly:
+  // * For registers mentioned in a read role, apply mapU.
+  // * For registers mentioned in a write role, apply mapD.
+  // * For registers mentioned in a modify role, mapU and mapD *must* agree
+  //   (if not, our caller is buggy).  So apply either map to that register.
+  pub fn mapRegs_D_U(
+    &mut self, mapD: &Map<VirtualReg, RealReg>, mapU: &Map<VirtualReg, RealReg>,
+  ) {
+    let mut ok = true;
+    match self {
+      Inst::Imm { dst, imm: _ } => {
+        dst.apply_D_or_U(mapD);
+      }
+      Inst::Copy { dst, src } => {
+        dst.apply_D_or_U(mapD);
+        src.apply_D_or_U(mapU);
+      }
+      Inst::BinOp { op: _, dst, srcL, srcR } => {
+        dst.apply_D_or_U(mapD);
+        srcL.apply_D_or_U(mapU);
+        srcR.apply_D_or_U(mapU);
+      }
+      Inst::BinOpM { op: _, dst, srcR } => {
+        dst.apply_M(mapD, mapU);
+        srcR.apply_D_or_U(mapU);
+      }
+      Inst::Store { addr, src } => {
+        addr.apply_D_or_U(mapU);
+        src.apply_D_or_U(mapU);
+      }
+      Inst::Load { dst, addr } => {
+        dst.apply_D_or_U(mapD);
+        addr.apply_D_or_U(mapU);
+      }
+      Inst::Goto { .. } => {}
+      Inst::GotoCTF { cond, targetT: _, targetF: _ } => {
+        cond.apply_D_or_U(mapU);
+      }
+      Inst::PrintS { .. } => {}
+      Inst::PrintI { reg } => {
+        reg.apply_D_or_U(mapU);
+      }
+      Inst::Finish {} => {}
+      _ => {
+        ok = false;
+      }
+    }
+    if !ok {
+      panic!("Inst::mapRegs_D_U: unhandled: {:?}", self);
+    }
+  }
+}
+
+fn is_control_flow_insn(insn: &Inst) -> bool {
+  match insn {
+    Inst::Goto { .. } | Inst::GotoCTF { .. } | Inst::Finish {} => true,
+    _ => false,
+  }
+}
+
+pub fn is_goto_insn(insn: &Inst) -> Option<Label> {
+  match insn {
+    Inst::Goto { target } => Some(target.clone()),
+    _ => None,
+  }
+}
+
+pub fn remapControlFlowTarget(insn: &mut Inst, from: &String, to: &String) {
+  match insn {
+    Inst::Goto { ref mut target } => {
+      target.remapControlFlow(from, to);
+    }
+    Inst::GotoCTF { cond: _, ref mut targetT, ref mut targetF } => {
+      targetT.remapControlFlow(from, to);
+      targetF.remapControlFlow(from, to);
+    }
+    _ => (),
+  }
+}
+
+//=============================================================================
+// Definition of Block and Func, and printing thereof.
+
+pub struct Block {
+  pub name: String,
+  pub start: InstIx,
+  pub len: u32,
+  pub estFreq: u16, // Estimated execution frequency
+}
+pub fn mkBlock(name: String, start: InstIx, len: u32) -> Block {
+  Block { name, start, len, estFreq: 1 }
+}
+impl Clone for Block {
+  // This is only needed for debug printing.
+  fn clone(&self) -> Self {
+    Block {
+      name: self.name.clone(),
+      start: self.start,
+      len: self.len,
+      estFreq: self.estFreq,
+    }
+  }
+}
+impl Block {
+  pub fn containsInstIx(&self, iix: InstIx) -> bool {
+    iix.get() >= self.start.get() && iix.get() < self.start.get() + self.len
+  }
+}
+
+pub struct Func {
+  pub name: String,
+  pub entry: Label,
+  pub nVirtualRegs: u32,
+  pub insns: TypedIxVec<InstIx, Inst>, // indexed by InstIx
+  pub blocks: TypedIxVec<BlockIx, Block>, // indexed by BlockIx
+                                       // Note that |blocks| must be in order of increasing |Block::start|
+                                       // fields.  Code that wants to traverse the blocks in some other order
+                                       // must represent the ordering some other way; rearranging Func::blocks is
+                                       // not allowed.
+}
+impl Clone for Func {
+  // This is only needed for debug printing.
+  fn clone(&self) -> Self {
+    Func {
+      name: self.name.clone(),
+      entry: self.entry.clone(),
+      nVirtualRegs: self.nVirtualRegs,
+      insns: self.insns.clone(),
+      blocks: self.blocks.clone(),
+    }
+  }
+}
+
+// Find a block Ix for a block name
+fn lookup(blocks: &TypedIxVec<BlockIx, Block>, name: String) -> BlockIx {
+  let mut bix = 0;
+  for b in blocks.iter() {
+    if b.name == name {
+      return mkBlockIx(bix);
+    }
+    bix += 1;
+  }
+  panic!("Func::lookup: can't resolve label name '{}'", name);
+}
+
+impl Func {
+  pub fn new<'a>(name: &'a str, entry: &'a str) -> Self {
+    Func {
+      name: name.to_string(),
+      entry: Label::Unresolved { name: entry.to_string() },
+      nVirtualRegs: 0,
+      insns: TypedIxVec::<InstIx, Inst>::new(),
+      blocks: TypedIxVec::<BlockIx, Block>::new(),
+    }
+  }
+
+  pub fn print(&self, who: &str) {
+    println!("");
+    println!("Func {}: name='{}' entry='{:?}' {{", who, self.name, self.entry);
+    let mut ix = 0;
+    for b in self.blocks.iter() {
+      if ix > 0 {
+        println!("");
+      }
+      println!("  {:?}:{}", mkBlockIx(ix), b.name);
+      for i in b.start.get()..b.start.get() + b.len {
+        let ixI = mkInstIx(i);
+        println!("      {:<3?}   {:?}", ixI, self.insns[ixI]);
+      }
+      ix += 1;
+    }
+    println!("}}");
+  }
+
+  // Get a new VirtualReg name
+  pub fn newVirtualReg(&mut self, rc: RegClass) -> Reg {
+    let v = mkVirtualReg(rc, self.nVirtualRegs);
+    self.nVirtualRegs += 1;
+    v
+  }
+
+  // Add a block to the Func
+  pub fn block<'a>(
+    &mut self, name: &'a str, mut insns: TypedIxVec<InstIx, Inst>,
+  ) {
+    let start = self.insns.len();
+    let len = insns.len() as u32;
+    self.insns.append(&mut insns);
+    let b = mkBlock(name.to_string(), mkInstIx(start), len);
+    self.blocks.push(b);
+  }
+
+  // All blocks have been added.  Resolve labels and we're good to go.
+  /* .finish(): check
+        - all blocks nonempty
+        - all blocks end in i_finish, i_goto or i_goto_ctf
+        - no blocks have those insns before the end
+        - blocks are in increasing order of ::start fields
+        - all referenced blocks actually exist
+        - convert references to block numbers
+  */
+  pub fn finish(&mut self) {
+    for bix in mkBlockIx(0).dotdot(mkBlockIx(self.blocks.len())) {
+      let b = &self.blocks[bix];
+      if b.len == 0 {
+        panic!("Func::done: a block is empty");
+      }
+      if bix > mkBlockIx(0)
+        && self.blocks[bix.minus(1)].start >= self.blocks[bix].start
+      {
+        panic!("Func: blocks are not in increasing order of InstIx");
+      }
+      for i in 0..b.len {
+        let iix = b.start.plus(i);
+        if i == b.len - 1 && !is_control_flow_insn(&self.insns[iix]) {
+          panic!("Func: block must end in control flow insn");
+        }
+        if i != b.len - 1 && is_control_flow_insn(&self.insns[iix]) {
+          panic!("Func: block contains control flow insn not at end");
+        }
+      }
+    }
+
+    // Resolve all labels
+    let blocks = &self.blocks;
+    for i in self.insns.iter_mut() {
+      resolveInst(i, |name| lookup(blocks, name));
+    }
+    resolveLabel(&mut self.entry, |name| lookup(blocks, name));
+  }
+}
+
+fn resolveLabel<F>(label: &mut Label, lookup: F)
+where
+  F: Fn(String) -> BlockIx,
+{
+  let resolved = match label {
+    Label::Unresolved { name } => {
+      Label::Resolved { name: name.clone(), bix: lookup(name.clone()) }
+    }
+    Label::Resolved { .. } => panic!("resolveLabel: is already resolved!"),
+  };
+  *label = resolved;
+}
+
+fn resolveInst<F>(insn: &mut Inst, lookup: F)
+where
+  F: Copy + Fn(String) -> BlockIx,
+{
+  match insn {
+    Inst::Goto { ref mut target } => resolveLabel(target, lookup),
+    Inst::GotoCTF { cond: _, ref mut targetT, ref mut targetF } => {
+      resolveLabel(targetT, lookup);
+      resolveLabel(targetF, lookup);
+    }
+    _ => (),
+  }
+}
 
 enum Stmt {
   Vanilla { insn: Inst },
@@ -269,6 +1104,161 @@ impl Blockifier {
 
     func
   }
+}
+
+// --------------------------------------------------
+// Implementation of `Function` trait for test cases.
+
+impl interface::Function for Func {
+  type Inst = Inst;
+
+  fn insns(&self) -> &[Inst] {
+    &self.insns.elems()
+  }
+
+  fn blocks(&self) -> MyRange<BlockIx> {
+    self.blocks.range()
+  }
+
+  /// Provide the range of instruction indices contained in each block.
+  fn block_insns(&self, block: BlockIx) -> MyRange<InstIx> {
+    let start = self.blocks[block].start;
+    let end = start.plus(self.blocks[block].len);
+    MyRange::new(start, end)
+  }
+
+  /// Get CFG successors: indexed by block, provide a list of successor blocks.
+  fn block_succs(&self, block: BlockIx) -> Vec<BlockIx> {
+    let last_insn = self.blocks[block].start.plus(self.blocks[block].len - 1);
+    self.insns[last_insn].getTargets()
+  }
+
+  /// Provide the defined, used, and modified registers for an instruction.
+  fn get_regs(&self, insn: &Self::Inst) -> interface::InstRegUses {
+    let (d, m, u) = insn.get_reg_usage();
+    interface::InstRegUses { used: u, defined: d, modified: m }
+  }
+
+  /// Map each register slot through a virt -> phys mapping indexed
+  /// by virtual register. The two separate maps provide the
+  /// mapping to use for uses (which semantically occur just prior
+  /// to the instruction's effect) and defs (which semantically occur
+  /// just after the instruction's effect). Regs that were "modified"
+  /// can use either map; the vreg should be the same in both.
+  fn map_regs(
+    &self, insn: &mut Self::Inst, pre_map: &Map<VirtualReg, RealReg>,
+    post_map: &Map<VirtualReg, RealReg>,
+  ) {
+    insn.mapRegs_D_U(
+      /* define-map = */ post_map, /* use-map = */ pre_map,
+    );
+  }
+
+  /// Allow the regalloc to query whether this is a move.
+  fn is_move(&self, insn: &Self::Inst) -> Option<(Reg, Reg)> {
+    match insn {
+      &Inst::Copy { dst, src } => Some((src, dst)),
+      _ => None,
+    }
+  }
+
+  /// How many logical spill slots does the given regclass require?  E.g., on a
+  /// 64-bit machine, spill slots may nominally be 64-bit words, but a 128-bit
+  /// vector value will require two slots.  The regalloc will always align on
+  /// this size.
+  fn get_spillslot_size(&self, regclass: RegClass) -> SpillSlot {
+    // For our simple test ISA, every value occupies one spill slot.
+    mkSpillSlot(1)
+  }
+
+  /// Generate a spill instruction for insertion into the instruction sequence.
+  fn gen_spill(&self, from_reg: RealReg, to_slot: SpillSlot) -> Self::Inst {
+    match from_reg.get_class() {
+      RegClass::I32 => Inst::Spill { dst: to_slot, src: from_reg },
+      RegClass::F32 => Inst::SpillF { dst: to_slot, src: from_reg },
+      _ => panic!("Unused register class in test ISA was used"),
+    }
+  }
+
+  /// Generate a reload instruction for insertion into the instruction sequence.
+  fn gen_reload(&self, from_slot: SpillSlot, to_reg: RealReg) -> Self::Inst {
+    match to_reg.get_class() {
+      RegClass::I32 => Inst::Reload { src: from_slot, dst: to_reg },
+      RegClass::F32 => Inst::ReloadF { src: from_slot, dst: to_reg },
+      _ => panic!("Unused register class in test ISA was used"),
+    }
+  }
+
+  /// Generate a register-to-register move for insertion into the instruction sequence.
+  fn gen_move(&self, from_reg: RealReg, to_reg: RealReg) -> Self::Inst {
+    Inst::Copy { src: from_reg.to_reg(), dst: to_reg.to_reg() }
+  }
+
+  /// Try to alter an existing instruction to use a value directly in a
+  /// spillslot (accessing memory directly) instead of the given register. May
+  /// be useful on ISAs that have mem/reg ops, like x86.
+  ///
+  /// Note that this is not *quite* just fusing a load with the op; if the
+  /// value is def'd or modified, it should be written back to the spill slot
+  /// as well. In other words, it is just using the spillslot as if it were a
+  /// real register, for reads and/or writes.
+  fn maybe_direct_reload(
+    &self, insn: &Self::Inst, reg: VirtualReg, slot: SpillSlot,
+  ) -> Option<Self::Inst> {
+    // test ISA does not have register-memory ALU instruction forms.
+    None
+  }
+}
+
+// Create a universe for testing, with nI32 |I32| class regs and nF32 |F32|
+// class regs.
+
+pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
+  let total_regs = nI32 + nF32;
+  if total_regs >= 256 {
+    panic!("make_universe: too many regs, cannot represent");
+  }
+
+  let mut regs = Vec::<(RealReg, String)>::new();
+  let mut allocable_by_class = [None; NUM_REG_CLASSES];
+  let mut index = 0u8;
+
+  if nI32 > 0 {
+    let first = index as usize;
+    for i in 0..nI32 {
+      let name = format!("R{}", i).to_string();
+      let reg = mkRealReg(RegClass::I32, /*enc=*/ 0, index).to_real_reg();
+      regs.push((reg, name));
+      index += 1;
+    }
+    let last = index as usize - 1;
+    allocable_by_class[RegClass::I32.rc_to_usize()] = Some((first, last));
+  }
+
+  if nF32 > 0 {
+    let first = index as usize;
+    for i in 0..nF32 {
+      let name = format!("F{}", i).to_string();
+      let reg = mkRealReg(RegClass::F32, /*enc=*/ 0, index).to_real_reg();
+      regs.push((reg, name));
+      index += 1;
+    }
+    let last = index as usize - 1;
+    allocable_by_class[RegClass::F32.rc_to_usize()] = Some((first, last));
+  }
+
+  debug_assert!(index as usize == total_regs);
+
+  let allocable = regs.len();
+  let univ = RealRegUniverse {
+    regs,
+    // for this example, all regs are allocable
+    allocable,
+    allocable_by_class,
+  };
+  univ.check_is_sane();
+
+  univ
 }
 
 // Whatever the current badness is
