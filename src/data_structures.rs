@@ -1854,14 +1854,18 @@ pub fn mkRangeFrag(blocks: &Vec_Block, bix: BlockIx,
 
 
 // Comparison of RangeFrags.  They form a partial order.
-#[derive(PartialEq)]
-enum FCR { LT, GT, EQ, UN }
 
-fn cmpRangeFrags(f1: &RangeFrag, f2: &RangeFrag) -> FCR {
-    if f1.last < f2.first { return FCR::LT; }
-    if f1.first > f2.last { return FCR::GT; }
-    if f1.first == f2.first && f1.last == f2.last { return FCR::EQ; }
-    FCR::UN
+fn cmpRangeFrags(f1: &RangeFrag, f2: &RangeFrag) -> Option<Ordering> {
+    if f1.last < f2.first {
+        return Some(Ordering::Less);
+    }
+    if f1.first > f2.last {
+        return Some(Ordering::Greater);
+    }
+    if f1.first == f2.first && f1.last == f2.last {
+        return Some(Ordering::Equal);
+    }
+    None
 }
 impl RangeFrag {
     pub fn contains(&self, ipt: &InstPoint) -> bool {
@@ -1899,7 +1903,7 @@ impl SortedRangeFragIxs {
         for i in 1 .. self.fragIxs.len() {
             let prev_frag = &fenv[self.fragIxs[i-1]];
             let this_frag = &fenv[self.fragIxs[i-0]];
-            if cmpRangeFrags(prev_frag, this_frag) != FCR::LT {
+            if cmpRangeFrags(prev_frag, this_frag) != Some(Ordering::Less) {
                 ok = false;
                 break;
             }
@@ -1915,9 +1919,9 @@ impl SortedRangeFragIxs {
         res.fragIxs.sort_unstable_by(
             |fix_a, fix_b| {
                 match cmpRangeFrags(&fenv[*fix_a], &fenv[*fix_b]) {
-                    FCR::LT => Ordering::Less,
-                    FCR::GT => Ordering::Greater,
-                    FCR::EQ | FCR::UN =>
+                    Some(Ordering::Less)    => Ordering::Less,
+                    Some(Ordering::Greater) => Ordering::Greater,
+                    Some(Ordering::Equal) | None =>
                         panic!("SortedRangeFragIxs::new: overlapping Frags!")
                 }
             });
@@ -1964,10 +1968,17 @@ impl SortedRangeFragIxs {
             let fx = fenv[ sfixs_x.fragIxs[ix] ];
             let fy = fenv[ sfixs_y.fragIxs[iy] ];
             match cmpRangeFrags(&fx, &fy) {
-                FCR::LT => { res.push(sfixs_x.fragIxs[ix]); ix += 1; },
-                FCR::GT => { res.push(sfixs_y.fragIxs[iy]); iy += 1; },
-                FCR::EQ | FCR::UN
-                    => panic!("SortedRangeFragIxs::add: vectors intersect")
+                Some(Ordering::Less) => {
+                    res.push(sfixs_x.fragIxs[ix]);
+                    ix += 1;
+                },
+                Some(Ordering::Greater) => {
+                    res.push(sfixs_y.fragIxs[iy]);
+                    iy += 1;
+                },
+                Some(Ordering::Equal) | None => {
+                    panic!("SortedRangeFragIxs::add: vectors intersect")
+                }
             }
         }
         // At this point, one or the other or both vectors are empty.  Hence
@@ -2000,9 +2011,9 @@ impl SortedRangeFragIxs {
             let fx = fenv[ sfixs_x.fragIxs[ix] ];
             let fy = fenv[ sfixs_y.fragIxs[iy] ];
             match cmpRangeFrags(&fx, &fy) {
-                FCR::LT => { ix += 1; },
-                FCR::GT => { iy += 1; },
-                FCR::EQ | FCR::UN => { return false; }
+                Some(Ordering::Less)         => { ix += 1; },
+                Some(Ordering::Greater)      => { iy += 1; },
+                Some(Ordering::Equal) | None => { return false; }
             }
         }
         // At this point, one or the other or both vectors are empty.  So
@@ -2024,11 +2035,15 @@ impl SortedRangeFragIxs {
             let fx = fenv[ sfixs_x.fragIxs[ix] ];
             let fy = fenv[ sfixs_y.fragIxs[iy] ];
             match cmpRangeFrags(&fx, &fy) {
-                FCR::LT => { res.push(sfixs_x.fragIxs[ix]); ix += 1; },
-                FCR::EQ => { ix += 1; iy += 1; }
-                FCR::GT => { iy += 1; },
-                FCR::EQ | FCR::UN
-                    => panic!("SortedRangeFragIxs::del: partial overlap")
+                Some(Ordering::Less) => {
+                    res.push(sfixs_x.fragIxs[ix]);
+                    ix += 1;
+                },
+                Some(Ordering::Equal)   => { ix += 1; iy += 1; }
+                Some(Ordering::Greater) => { iy += 1; },
+                Some(Ordering::Equal) | None => {
+                    panic!("SortedRangeFragIxs::del: partial overlap")
+                }
             }
         }
         debug_assert!(ix == sfixs_x.fragIxs.len()
@@ -2083,27 +2098,28 @@ impl SortedRangeFragIxs {
 //
 // I find it helpful to think of a live range, both RealRange and
 // VirtualRange, as a "renaming equivalence class".  That is, if you rename
-// |reg| at some point inside |sfrags|, then you must rename *all* occurrences
-// of |reg| inside |sfrags|, since otherwise the program will no longer work.
+// |reg| at some point inside |sortedFrags|, then you must rename *all*
+// occurrences of |reg| inside |sortedFrags|, since otherwise the program will
+// no longer work.
 //
 // Invariants for RealRange/VirtualRange RangeFrag sets (their |sfrags| fields):
 //
-// * Either |sfrags| contains just one RangeFrag, in which case it *must* be
-//   RangeFragKind::Local.
+// * Either |sortedFrags| contains just one RangeFrag, in which case it *must*
+//   be RangeFragKind::Local.
 //
-// * Or |sfrags| contains more than one RangeFrag, in which case: at least one
-//   must be RangeFragKind::LiveOut, at least one must be RangeFragKind::LiveIn,
-//   and there may be zero or more RangeFragKind::Thrus.
+// * Or |sortedFrags| contains more than one RangeFrag, in which case: at
+//   least one must be RangeFragKind::LiveOut, at least one must be
+//   RangeFragKind::LiveIn, and there may be zero or more RangeFragKind::Thrus.
 
 #[derive(Clone)]
 pub struct RealRange {
-    pub rreg:   RealReg,
-    pub sfrags: SortedRangeFragIxs
+    pub rreg:        RealReg,
+    pub sortedFrags: SortedRangeFragIxs
 }
 impl Show for RealRange {
     fn show(&self) -> String {
         self.rreg.show()
-            + &" ".to_string() + &self.sfrags.show()
+            + &" ".to_string() + &self.sortedFrags.show()
     }
 }
 
@@ -2114,11 +2130,11 @@ impl Show for RealRange {
 
 #[derive(Clone)]
 pub struct VirtualRange {
-    pub vreg:      VirtualReg,
-    pub rreg:      Option<RealReg>,
-    pub sfrags:    SortedRangeFragIxs,
-    pub size:      u16,
-    pub spillCost: Option<f32>,
+    pub vreg:        VirtualReg,
+    pub rreg:        Option<RealReg>,
+    pub sortedFrags: SortedRangeFragIxs,
+    pub size:        u16,
+    pub spillCost:   Option<f32>,
 }
 impl Show for VirtualRange {
     fn show(&self) -> String {
@@ -2138,7 +2154,7 @@ impl Show for VirtualRange {
         }
         res + &" s=".to_string() + &self.size.to_string()
             + &",c=".to_string() + &cost_str
-            + &" ".to_string() + &self.sfrags.show()
+            + &" ".to_string() + &self.sortedFrags.show()
     }
 }
 
@@ -2208,40 +2224,40 @@ fn test_SortedRangeFragIxs() {
     // Boundary checks for point ranges, 3u vs 3d
     assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3u),
                           getRangeFrag(&fenv, fix_3u))
-            == FCR::EQ);
+            == Some(Ordering::Equal));
     assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3u),
                           getRangeFrag(&fenv, fix_3d))
-            == FCR::LT);
+            == Some(Ordering::Less));
     assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3d),
                           getRangeFrag(&fenv, fix_3u))
-            == FCR::GT);
+            == Some(Ordering::Greater));
 
     // Boundary checks for point ranges, 3d vs 4u
     assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3d),
                           getRangeFrag(&fenv, fix_3d))
-            == FCR::EQ);
+            == Some(Ordering::Equal));
     assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3d),
                           getRangeFrag(&fenv, fix_4u))
-            == FCR::LT);
+            == Some(Ordering::Less));
     assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_4u),
                           getRangeFrag(&fenv, fix_3d))
-            == FCR::GT);
+            == Some(Ordering::Greater));
 
     // Partially overlapping
     assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3d_5d),
                           getRangeFrag(&fenv, fix_3u_5u))
-            == FCR::UN);
+            == None);
     assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3u_5u),
                           getRangeFrag(&fenv, fix_3d_5d))
-            == FCR::UN);
+            == None);
 
     // Completely overlapping: one contained within the other
     assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3d_5u),
                           getRangeFrag(&fenv, fix_3u_5d))
-            == FCR::UN);
+            == None);
     assert!(cmpRangeFrags(getRangeFrag(&fenv, fix_3u_5d),
                           getRangeFrag(&fenv, fix_3d_5u))
-            == FCR::UN);
+            == None);
 
     // Create a SortedRangeFragIxs from a bunch of RangeFrag indices
     fn genSFI(fenv: &Vec_RangeFrag,

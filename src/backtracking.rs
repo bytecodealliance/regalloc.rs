@@ -123,20 +123,20 @@ impl PerRealReg {
         // Commit this register to |to_add|, irrevocably.  Don't add it to
         // |vlrixs_assigned| since we will never want to later evict the
         // assignment.
-        self.frags_in_use.add(&to_add.sfrags, fenv);
+        self.frags_in_use.add(&to_add.sortedFrags, fenv);
     }
 
     #[inline(never)]
     fn can_add_VirtualRange_without_eviction(&self, to_add: &VirtualRange,
                                     fenv: &Vec_RangeFrag) -> bool {
-        self.frags_in_use.can_add(&to_add.sfrags, fenv)
+        self.frags_in_use.can_add(&to_add.sortedFrags, fenv)
     }
 
     #[inline(never)]
     fn add_VirtualRange(&mut self, to_add_vlrix: VirtualRangeIx,
                vlr_env: &Vec_VirtualRange, fenv: &Vec_RangeFrag) {
         let vlr = &vlr_env[to_add_vlrix];
-        self.frags_in_use.add(&vlr.sfrags, fenv);
+        self.frags_in_use.add(&vlr.sortedFrags, fenv);
         self.vlrixs_assigned.push(to_add_vlrix);
     }
 
@@ -161,7 +161,7 @@ impl PerRealReg {
         }
         // Remove it from |frags_in_use|
         let vlr = &vlr_env[to_del_vlrix];
-        self.frags_in_use.del(&vlr.sfrags, fenv);
+        self.frags_in_use.del(&vlr.sortedFrags, fenv);
     }
 
     #[inline(never)]
@@ -191,8 +191,8 @@ impl PerRealReg {
                 continue;
             }
             if !self.frags_in_use
-                    .can_add_if_we_first_del(&cand_vlr.sfrags,
-                                             &would_like_to_add.sfrags,
+                    .can_add_if_we_first_del(&cand_vlr.sortedFrags,
+                                             &would_like_to_add.sortedFrags,
                                              frag_env) {
                 continue;
             }
@@ -578,7 +578,7 @@ pub fn alloc_main(func: &mut Func,
         let curr_vlr_vreg = curr_vlr.vreg;
         let curr_vlr_reg = curr_vlr_vreg.toReg();
 
-        for fix in &curr_vlr.sfrags.fragIxs {
+        for fix in &curr_vlr.sortedFrags.fragIxs {
             let frag: &RangeFrag = &frag_env[*fix];
             for iix in frag.first.iix .dotdot( frag.last.iix.plus(1) ) {
                 let insn: &Inst = &func.insns[iix];
@@ -656,7 +656,7 @@ pub fn alloc_main(func: &mut Func,
             let new_vlr_sfixs
                     = SortedRangeFragIxs::unit(new_vlr_fix, &frag_env);
             let new_vlr = VirtualRange { vreg: curr_vlr_vreg, rreg: None,
-                                sfrags: new_vlr_sfixs,
+                                sortedFrags: new_vlr_sfixs,
                                 size: 1, spillCost: None/*infinity*/ };
             let new_vlrix = mkVirtualRangeIx(vlr_env.len() as u32);
             println!("--     new VirtualRange        {}  :=  {}",
@@ -704,7 +704,7 @@ pub fn alloc_main(func: &mut Func,
             // to be mapped to the real reg |i|
             let vreg = vlr_assigned.vreg;
             // .. collect up all its constituent RangeFrags.
-            for fix in &vlr_assigned.sfrags.fragIxs {
+            for fix in &vlr_assigned.sortedFrags.fragIxs {
                 let frag = &frag_env[*fix];
                 fragMapsByStart.push((*fix, vreg, rreg));
                 fragMapsByEnd.push((*fix, vreg, rreg));
@@ -931,8 +931,8 @@ pub fn alloc_main(func: &mut Func,
     let mut spillsAndReloads = Vec::<(InstPoint, Inst)>::new();
     for eli in &editList {
         let vlr = &vlr_env[eli.vlrix];
-        let vlr_sfrags = &vlr.sfrags;
-        debug_assert!(vlr.sfrags.fragIxs.len() == 1);
+        let vlr_sfrags = &vlr.sortedFrags;
+        debug_assert!(vlr.sortedFrags.fragIxs.len() == 1);
         let vlr_frag = frag_env[ vlr_sfrags.fragIxs[0] ];
         let rreg = vlr.rreg.expect("Gen of spill/reload: reg not assigned?!");
         match eli.kind {
