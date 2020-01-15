@@ -59,7 +59,7 @@ pub use crate::data_structures::{mkInstIx, BlockIx, InstIx, MyRange};
 pub trait Function {
   /// Regalloc is parameterized on F: Function and so can use the projected
   /// type F::Inst.
-  type Inst: Clone + std::fmt::Debug;
+  type Inst: Clone;
 
   // -------------
   // CFG traversal

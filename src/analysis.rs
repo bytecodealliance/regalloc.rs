@@ -321,7 +321,6 @@ fn calc_def_and_use<F: Function>(
     let mut uce = Set::empty();
     for iix in f.block_insns(b) {
       let reg_usage = f.get_regs(f.get_insn(iix));
-      println!("insn {:?}: reg_usage {:?}", iix, reg_usage);
       // Add to |uce|, any registers for which the first event
       // in this block is a read.  Dealing with the "first event"
       // constraint is a bit tricky.
