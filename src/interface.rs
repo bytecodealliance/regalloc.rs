@@ -1,11 +1,13 @@
 /* -*- Mode: Rust; tab-width: 8; indent-tabs-mode: nil; rust-indent-offset: 2 -*-
  * vim: set ts=8 sts=2 et sw=2 tw=80:
 */
+//! This is the top level interface for the regalloc library.
+
 #![allow(non_snake_case)]
 #![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
-// This is the top level interface for the regalloc library.
+use crate::backtracking;
 
 // Stuff that is defined by the library
 
@@ -167,7 +169,9 @@ pub struct RegAllocResult<F: Function> {
 ///
 /// TODO: better error type? Are there a few canonical errors we return (out of regs, ...)?
 pub fn allocate_registers<F: Function>(
-  func: &F, rreg_universe: &RealRegUniverse,
+  func: &mut F, rreg_universe: &RealRegUniverse,
 ) -> Result<RegAllocResult<F>, String> {
-  Err("Unimplemented".into())
+  // TODO: take configuration options and choose between backtracking, lsra, or other
+  // implementation options.
+  backtracking::alloc_main(func, rreg_universe)
 }
