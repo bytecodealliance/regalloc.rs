@@ -76,7 +76,8 @@ use std::{fs, io};
 use tests::{make_universe, BinOp, Block, Func, Inst, Label, AM, RI};
 
 use data_structures::{
-  BlockIx, InstIx, RealReg, RealRegUniverse, Reg, SpillSlot, VirtualReg,
+  BlockIx, InstIx, RealReg, RealRegUniverse, Reg, SpillSlot, TypedIxVec,
+  VirtualReg,
 };
 
 //=============================================================================
@@ -160,9 +161,10 @@ impl<'a> IState<'a> {
     // No automatic resizing.  If the rreg doesn't exist, just fail.
     match self.rregs.get(rreg.get_index()) {
       None => panic!("IState::get_real_reg: invalid rreg {:?}", rreg),
-      Some(None) => {
-        panic!("IState::get_real_reg: read of uninit rreg {:?}", rreg)
-      }
+      Some(None) => panic!(
+        "IState::get_real_reg: read of uninit rreg {:?} at nia {:?}",
+        rreg, self.nia
+      ),
       Some(Some(val)) => *val,
     }
   }
@@ -465,23 +467,31 @@ fn main() {
   // Just so we can run it later.  Not needed for actual allocation.
   let original_func = func.clone();
 
-  let alloc_res = match reg_alloc_kind {
+  match reg_alloc_kind {
     RegAllocAlgorithm::Backtracking => {
       info!("Using the backtracking allocator");
-      crate::backtracking::alloc_main(&mut func, &reg_universe)
+      let result =
+        match crate::backtracking::alloc_main(&mut func, &reg_universe) {
+          Err(e) => {
+            error!("{}: allocation failed: {}", args[0], e);
+            return;
+          }
+          Ok(r) => r,
+        };
+      // Update the function itself. This bridges the gap from the generic interface
+      // to our specific test ISA.
+      func.update_from_alloc(result);
     }
     RegAllocAlgorithm::LinearScan => {
       info!("Using the linear scan allocator.");
-      crate::linear_scan::alloc_main(&mut func, &reg_universe)
+      match crate::linear_scan::alloc_main(&mut func, &reg_universe) {
+        Err(e) => {
+          error!("{}: allocation failed: {}", args[0], e);
+          return;
+        }
+        Ok(_) => {}
+      }
     }
-  };
-
-  match alloc_res {
-    Err(s) => {
-      error!("{}: allocation failed: {}", args[0], s);
-      return;
-    }
-    Ok(_) => {}
   }
 
   func.print("After allocation");
@@ -502,11 +512,11 @@ mod test_utils {
   pub fn bt(func_name: &str, num_gpr: usize, num_fpu: usize) {
     let mut func = crate::tests::find_Func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
-    crate::backtracking::alloc_main(&mut func, &reg_universe).unwrap_or_else(
-      |err| {
+    let result = crate::backtracking::alloc_main(&mut func, &reg_universe)
+      .unwrap_or_else(|err| {
         panic!("allocation failed: {}", err);
-      },
-    );
+      });
+    func.update_from_alloc(result);
     func.run("After allocation", &reg_universe, RunStage::AfterRegalloc);
   }
 }

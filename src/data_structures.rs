@@ -272,6 +272,9 @@ where
   pub fn elems(&self) -> &[Ty] {
     &self.vek[..]
   }
+  pub fn elems_mut(&mut self) -> &mut [Ty] {
+    &mut self.vek[..]
+  }
   pub fn range(&self) -> MyRange<TyIx> {
     MyRange::new(TyIx::from(0), self.len() as usize)
   }
@@ -429,6 +432,14 @@ impl RegClass {
       _ => panic!("rc_from_u32"),
     }
   }
+
+  pub fn short_name(self) -> &'static str {
+    match self {
+      RegClass::I32 | RegClass::I64 => "I",
+      RegClass::F32 | RegClass::F64 => "F",
+      RegClass::V128 => "V",
+    }
+  }
 }
 
 // Reg represents both real and virtual registers.  For compactness and speed,
@@ -470,6 +481,9 @@ impl Reg {
   pub fn is_virtual(self) -> bool {
     (self.do_not_access_this_directly & 0x8000_0000) != 0
   }
+  pub fn is_real(self) -> bool {
+    !self.is_virtual()
+  }
   pub fn get_class(self) -> RegClass {
     RegClass::rc_from_u32((self.do_not_access_this_directly >> 28) & 0x7)
   }
@@ -501,9 +515,9 @@ impl fmt::Debug for Reg {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     write!(
       fmt,
-      "{}{:?}{}",
+      "{}{}{}",
       if self.is_virtual() { "v" } else { "R" },
-      self.get_class(),
+      self.get_class().short_name(),
       self.get_index()
     )
   }
@@ -527,7 +541,7 @@ pub fn mkVirtualReg(rc: RegClass, index: u32) -> Reg {
 // dynamically ensure that they are really wrapping the correct flavour of
 // register.
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RealReg {
   reg: Reg,
 }
@@ -644,6 +658,13 @@ impl SpillSlot {
   }
   pub fn get_usize(self) -> usize {
     self.get() as usize
+  }
+  pub fn round_up(self, num_slots: u32) -> SpillSlot {
+    assert!(num_slots > 0);
+    mkSpillSlot((self.get() + num_slots - 1) / num_slots * num_slots)
+  }
+  pub fn inc(self, num_slots: u32) -> SpillSlot {
+    mkSpillSlot(self.get() + num_slots)
   }
 }
 impl fmt::Debug for SpillSlot {

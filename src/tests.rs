@@ -576,6 +576,14 @@ impl Inst {
         uce.insert(*reg);
       }
       Inst::Finish {} => {}
+      // Spill and Reload are seen here during the final pass over insts that computes clobbered
+      // regs.
+      Inst::Spill { src, .. } | Inst::SpillF { src, .. } => {
+        uce.insert(src.to_reg());
+      }
+      Inst::Reload { dst, .. } | Inst::ReloadF { dst, .. } => {
+        def.insert(dst.to_reg());
+      }
       _other => panic!("Inst::get_reg_usage: unhandled: {:?}", self),
     }
     // Failure of either of these is serious and should be investigated.
@@ -668,6 +676,7 @@ pub fn remapControlFlowTarget(insn: &mut Inst, from: &String, to: &String) {
 //=============================================================================
 // Definition of Block and Func, and printing thereof.
 
+#[derive(Debug)]
 pub struct Block {
   pub name: String,
   pub start: InstIx,
@@ -694,6 +703,7 @@ impl Block {
   }
 }
 
+#[derive(Debug)]
 pub struct Func {
   pub name: String,
   pub entry: Label,
@@ -814,6 +824,14 @@ impl Func {
       resolveInst(i, |name| lookup(blocks, name));
     }
     resolveLabel(&mut self.entry, |name| lookup(blocks, name));
+  }
+
+  pub fn update_from_alloc(&mut self, result: interface::RegAllocResult<Func>) {
+    self.insns = TypedIxVec::fromVec(result.insns);
+    for bix in self.blocks.range() {
+      let block = &mut self.blocks[bix];
+      block.start = *result.target_map.get(&bix).unwrap();
+    }
   }
 }
 
@@ -1113,11 +1131,19 @@ impl interface::Function for Func {
   type Inst = Inst;
 
   fn insns(&self) -> &[Inst] {
-    &self.insns.elems()
+    self.insns.elems()
+  }
+
+  fn insns_mut(&mut self) -> &mut [Inst] {
+    self.insns.elems_mut()
   }
 
   fn get_insn(&self, iix: InstIx) -> &Inst {
     &self.insns[iix]
+  }
+
+  fn get_insn_mut(&mut self, iix: InstIx) -> &mut Inst {
+    &mut self.insns[iix]
   }
 
   fn entry_block(&self) -> BlockIx {
@@ -1152,7 +1178,7 @@ impl interface::Function for Func {
   /// just after the instruction's effect). Regs that were "modified"
   /// can use either map; the vreg should be the same in both.
   fn map_regs(
-    &self, insn: &mut Self::Inst, pre_map: &Map<VirtualReg, RealReg>,
+    insn: &mut Self::Inst, pre_map: &Map<VirtualReg, RealReg>,
     post_map: &Map<VirtualReg, RealReg>,
   ) {
     insn.mapRegs_D_U(
@@ -1172,9 +1198,9 @@ impl interface::Function for Func {
   /// 64-bit machine, spill slots may nominally be 64-bit words, but a 128-bit
   /// vector value will require two slots.  The regalloc will always align on
   /// this size.
-  fn get_spillslot_size(&self, regclass: RegClass) -> SpillSlot {
+  fn get_spillslot_size(&self, regclass: RegClass) -> u32 {
     // For our simple test ISA, every value occupies one spill slot.
-    mkSpillSlot(1)
+    1
   }
 
   /// Generate a spill instruction for insertion into the instruction sequence.

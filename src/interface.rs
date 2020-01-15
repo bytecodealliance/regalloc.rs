@@ -38,27 +38,28 @@ pub use crate::data_structures::SpillSlot;
 pub use crate::data_structures::RealRegUniverse;
 
 /// Register uses for a given instruction.
+#[derive(Clone, Debug)]
 pub struct InstRegUses {
   pub used: Set<Reg>,    // registers that are read.
   pub defined: Set<Reg>, // registers that are written.
   pub modified: Set<Reg>, // registers that are modified.
-                          // Note that `modified` is distinct from just `used`+`defined` because
-                          // the vreg must live in the same real reg both before and after the
-                          // instruction.
+                         // Note that `modified` is distinct from just `used`+`defined` because
+                         // the vreg must live in the same real reg both before and after the
+                         // instruction.
 }
 
 // TypedIxVector, so that the interface can speak about vectors of blocks and
 // instructions.
 
 pub use crate::data_structures::TypedIxVec;
-pub use crate::data_structures::{BlockIx, InstIx, MyRange};
+pub use crate::data_structures::{mkInstIx, BlockIx, InstIx, MyRange};
 
 /// A trait defined by the regalloc client to provide access to its machine-instruction / CFG
 /// representation.
 pub trait Function {
   /// Regalloc is parameterized on F: Function and so can use the projected
   /// type F::Inst.
-  type Inst: Clone;
+  type Inst: Clone + std::fmt::Debug;
 
   // -------------
   // CFG traversal
@@ -67,8 +68,19 @@ pub trait Function {
   /// Allow access to the underlying vector of instructions.
   fn insns(&self) -> &[Self::Inst];
 
+  /// Get all instruction indices as an iterable range.
+  fn insn_indices(&self) -> MyRange<InstIx> {
+    MyRange::new(mkInstIx(0), self.insns().len())
+  }
+
+  /// Allow mutable access to the underlying vector of instructions.
+  fn insns_mut(&mut self) -> &mut [Self::Inst];
+
   /// Get an instruction with a type-safe InstIx index.
   fn get_insn(&self, insn: InstIx) -> &Self::Inst;
+
+  /// Get a mutable borrow of an instruction with the given type-safe InstIx index.
+  fn get_insn_mut(&mut self, insn: InstIx) -> &mut Self::Inst;
 
   /// Allow iteration over basic blocks (in instruction order).
   fn blocks(&self) -> MyRange<BlockIx>;
@@ -91,8 +103,12 @@ pub trait Function {
   /// to the instruction's effect) and defs (which semantically occur
   /// just after the instruction's effect). Regs that were "modified"
   /// can use either map; the vreg should be the same in both.
+  ///
+  /// Note that this does not take a `self`, because we want to allow the regalloc to have a
+  /// mutable borrow of an insn (which borrows the whole Function in turn) outstanding while
+  /// calling this.
   fn map_regs(
-    &self, insn: &mut Self::Inst, pre_map: &Map<VirtualReg, RealReg>,
+    insn: &mut Self::Inst, pre_map: &Map<VirtualReg, RealReg>,
     post_map: &Map<VirtualReg, RealReg>,
   );
 
@@ -103,7 +119,7 @@ pub trait Function {
   /// 64-bit machine, spill slots may nominally be 64-bit words, but a 128-bit
   /// vector value will require two slots.  The regalloc will always align on
   /// this size.
-  fn get_spillslot_size(&self, regclass: RegClass) -> SpillSlot;
+  fn get_spillslot_size(&self, regclass: RegClass) -> u32;
 
   /// Generate a spill instruction for insertion into the instruction sequence.
   fn gen_spill(&self, from_reg: RealReg, to_slot: SpillSlot) -> Self::Inst;
