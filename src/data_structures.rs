@@ -161,15 +161,15 @@ impl<'a, T> Iterator for SetIter<'a, T> {
 //   for ent in startEnt .. endPlus1Ent {
 //   }
 
-trait Zero {
+pub trait Zero {
   fn zero() -> Self;
 }
 
-trait PlusOne {
+pub trait PlusOne {
   fn plus_one(&self) -> Self;
 }
 
-trait PlusN: PlusOne {
+pub trait PlusN: PlusOne {
   fn plus_n(&self, n: usize) -> Self;
 }
 

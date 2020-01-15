@@ -3,8 +3,8 @@ name = "minira"
 version = "0.1.0"
 authors = ["Julian Seward <jseward@acm.org>"]
 edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+type = "lib"
+bin = ["minira"]
 
 [dependencies]
 rustc-hash = "1.0.1"

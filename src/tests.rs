@@ -4,8 +4,7 @@
 /// As part of this set of test cases, we define a mini IR and implement the `Function` trait for
 /// it so that we can use the regalloc public interface.
 use crate::interface;
-
-use crate::data_structures::{
+use crate::interface::{
   mkBlockIx, mkInstIx, mkRealReg, mkSpillSlot, mkVirtualReg, BlockIx, InstIx,
   Map, MyRange, RealReg, RealRegUniverse, Reg, RegClass, Set, SpillSlot,
   TypedIxVec, VirtualReg, NUM_REG_CLASSES,
@@ -235,7 +234,7 @@ impl BinOp {
 }
 
 #[derive(Copy, Clone)]
-enum BinOpF {
+pub enum BinOpF {
   FAdd,
   FSub,
   FMul,
