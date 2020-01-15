@@ -31,9 +31,11 @@ pub use crate::data_structures::Reg;
 pub use crate::data_structures::RealReg;
 pub use crate::data_structures::VirtualReg;
 
+pub use crate::data_structures::NUM_REG_CLASSES;
+
 // Spill slots
 
-pub use crate::data_structures::SpillSlot;
+pub use crate::data_structures::{mkSpillSlot, SpillSlot};
 
 // The real reg universe
 
@@ -54,7 +56,9 @@ pub struct InstRegUses {
 // instructions.
 
 pub use crate::data_structures::TypedIxVec;
-pub use crate::data_structures::{mkInstIx, BlockIx, InstIx, MyRange};
+pub use crate::data_structures::{
+  mkBlockIx, mkInstIx, BlockIx, InstIx, MyRange,
+};
 
 /// A trait defined by the regalloc client to provide access to its machine-instruction / CFG
 /// representation.

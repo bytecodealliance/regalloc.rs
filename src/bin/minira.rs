@@ -1,10 +1,3 @@
-#![allow(non_snake_case)]
-#![allow(unused_imports)]
-#![allow(non_camel_case_types)]
-
-use log::{self, error, info, warn};
-use pretty_env_logger;
-
 /* TODOs, 11 Dec 2019
 
 MVP (without these, the implementation is useless in practice):
@@ -51,13 +44,6 @@ Performance:
   have to repeatedly re-scan the groups looking for particular LR kinds?
 */
 
-mod analysis;
-mod backtracking;
-mod data_structures;
-mod interface;
-mod linear_scan;
-mod tests;
-
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use std::cmp::Ordering;
@@ -73,12 +59,16 @@ use std::ops::Range;
 use std::slice::{Iter, IterMut};
 use std::{fs, io};
 
-use tests::{make_universe, BinOp, Block, Func, Inst, Label, AM, RI};
-
-use data_structures::{
+use minira::interface::{
   BlockIx, InstIx, RealReg, RealRegUniverse, Reg, SpillSlot, TypedIxVec,
   VirtualReg,
 };
+use minira::tests;
+use minira::tests::{make_universe, BinOp, Block, Func, Inst, Label, AM, RI};
+use minira::{backtracking, linear_scan};
+
+use log::{self, error, info, warn};
+use pretty_env_logger;
 
 //=============================================================================
 // The interpreter
@@ -374,32 +364,26 @@ impl<'a> IState<'a> {
   }
 }
 
-impl Func {
-  fn run(
-    &self, who: &str, reg_universe: &RealRegUniverse, run_stage: RunStage,
-  ) {
-    println!("");
-    println!(
-      "Running stage '{}': Func: name='{}' entry='{:?}'",
-      who, self.name, self.entry
-    );
+fn run_func(
+  f: &Func, who: &str, reg_universe: &RealRegUniverse, run_stage: RunStage,
+) {
+  println!("");
+  println!(
+    "Running stage '{}': Func: name='{}' entry='{:?}'",
+    who, f.name, f.entry
+  );
 
-    let mut istate = IState::new(
-      &self,
-      reg_universe.regs.len(),
-      /*maxMem=*/ 1000,
-      run_stage,
-    );
-    let mut done = false;
-    while !done {
-      done = istate.step();
-    }
-
-    println!(
-      "Running stage '{}': done.  {} insns, {} spills, {} reloads",
-      who, istate.n_insns, istate.n_spills, istate.n_reloads
-    );
+  let mut istate =
+    IState::new(f, reg_universe.regs.len(), /*maxMem=*/ 1000, run_stage);
+  let mut done = false;
+  while !done {
+    done = istate.step();
   }
+
+  println!(
+    "Running stage '{}': done.  {} insns, {} spills, {} reloads",
+    who, istate.n_insns, istate.n_spills, istate.n_reloads
+  );
 }
 
 //=============================================================================
@@ -470,21 +454,20 @@ fn main() {
   match reg_alloc_kind {
     RegAllocAlgorithm::Backtracking => {
       info!("Using the backtracking allocator");
-      let result =
-        match crate::backtracking::alloc_main(&mut func, &reg_universe) {
-          Err(e) => {
-            error!("{}: allocation failed: {}", args[0], e);
-            return;
-          }
-          Ok(r) => r,
-        };
+      let result = match backtracking::alloc_main(&mut func, &reg_universe) {
+        Err(e) => {
+          error!("{}: allocation failed: {}", args[0], e);
+          return;
+        }
+        Ok(r) => r,
+      };
       // Update the function itself. This bridges the gap from the generic interface
       // to our specific test ISA.
       func.update_from_alloc(result);
     }
     RegAllocAlgorithm::LinearScan => {
       info!("Using the linear scan allocator.");
-      match crate::linear_scan::alloc_main(&mut func, &reg_universe) {
+      match linear_scan::alloc_main(&mut func, &reg_universe) {
         Err(e) => {
           error!("{}: allocation failed: {}", args[0], e);
           return;
@@ -496,12 +479,13 @@ fn main() {
 
   func.print("After allocation");
 
-  original_func.run(
+  run_func(
+    &original_func,
     "Before allocation",
     &reg_universe,
     RunStage::BeforeRegalloc,
   );
-  func.run("After allocation", &reg_universe, RunStage::AfterRegalloc);
+  run_func(&func, "After allocation", &reg_universe, RunStage::AfterRegalloc);
 
   println!("");
 }
@@ -510,14 +494,14 @@ mod test_utils {
   use super::*;
 
   pub fn bt(func_name: &str, num_gpr: usize, num_fpu: usize) {
-    let mut func = crate::tests::find_Func(func_name).unwrap();
+    let mut func = tests::find_Func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
-    let result = crate::backtracking::alloc_main(&mut func, &reg_universe)
+    let result = backtracking::alloc_main(&mut func, &reg_universe)
       .unwrap_or_else(|err| {
         panic!("allocation failed: {}", err);
       });
     func.update_from_alloc(result);
-    func.run("After allocation", &reg_universe, RunStage::AfterRegalloc);
+    run_func(&func, "After allocation", &reg_universe, RunStage::AfterRegalloc);
   }
 }
 

@@ -12,17 +12,16 @@ use crate::data_structures::{
   SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx,
   VirtualReg,
 };
-
-use crate::tests::{i_reload, i_spill, Block, Func, Inst};
+use crate::interface::{Function, RegAllocResult};
 
 // Allocator top level.  |func| is modified so that, when this function
 // returns, it will contain no VirtualReg uses.  Allocation can fail if there
 // are insufficient registers to even generate spill/reload code, or if the
 // function appears to have any undefined VirtualReg/RealReg uses.
 #[inline(never)]
-pub fn alloc_main(
-  func: &mut Func, reg_universe: &RealRegUniverse,
-) -> Result<(), String> {
+pub fn alloc_main<F: Function>(
+  func: &mut F, reg_universe: &RealRegUniverse,
+) -> Result<RegAllocResult<F>, String> {
   let (rlr_env, mut vlr_env, mut frag_env) = run_analysis(func)?;
 
   unimplemented!("linear scan");
