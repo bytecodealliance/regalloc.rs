@@ -158,7 +158,7 @@ pub struct RegAllocResult<F: Function> {
   pub clobbered_registers: Set<RealReg>,
 
   /// How many spill slots were used?
-  pub num_spill_slots: SpillSlot,
+  pub num_spill_slots: u32,
 }
 
 /// Allocate registers for a function's code, given a universe of real registers that we are

@@ -1126,6 +1126,6 @@ pub fn alloc_main<F: Function>(
     insns,
     target_map,
     clobbered_registers,
-    num_spill_slots: nextSpillSlot,
+    num_spill_slots: nextSpillSlot.get(),
   })
 }
