@@ -5,14 +5,14 @@
 
 use crate::analysis::run_analysis;
 use crate::data_structures::{
-  i_reload, i_spill, mkBlockIx, mkInstIx, mkInstPoint, mkRangeFrag,
-  mkRangeFragIx, mkRealReg, mkSpillSlot, mkVirtualRangeIx, rc_from_u32, Block,
-  BlockIx, Func, Inst, InstIx, InstPoint, InstPoint_Def, InstPoint_Reload,
-  InstPoint_Spill, InstPoint_Use, Map, Point, RangeFrag, RangeFragIx,
-  RangeFragKind, RealRange, RealReg, RealRegUniverse, Reg, Set,
-  SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx,
-  VirtualReg,
+  mkBlockIx, mkInstIx, mkInstPoint, mkRangeFrag, mkRangeFragIx, mkRealReg,
+  mkSpillSlot, mkVirtualRangeIx, BlockIx, InstIx, InstPoint, InstPoint_Def,
+  InstPoint_Reload, InstPoint_Spill, InstPoint_Use, Map, Point, RangeFrag,
+  RangeFragIx, RangeFragKind, RealRange, RealReg, RealRegUniverse, Reg,
+  RegClass, Set, SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange,
+  VirtualRangeIx, VirtualReg,
 };
+use crate::interface::{Function, RegAllocResult};
 use std::fmt;
 
 //=============================================================================
@@ -379,15 +379,16 @@ fn show_commit_tab(commit_tab: &Vec::<SortedRangeFragIxs>,
 }
 */
 
-// Allocator top level.  |func| is modified so that, when this function
-// returns, it will contain no VirtualReg uses.  Allocation can fail if there
-// are insufficient registers to even generate spill/reload code, or if the
-// function appears to have any undefined VirtualReg/RealReg uses.
+// Allocator top level.  This function returns a result struct that contains the final sequence of
+// instructions, possibly with fills/spills/moves spliced in and redundant moves elided, and with
+// all virtual registers replaced with real registers. Allocation can fail if there are
+// insufficient registers to even generate spill/reload code, or if the function appears to have
+// any undefined VirtualReg/RealReg uses.
 
 #[inline(never)]
-pub fn alloc_main(
-  func: &mut Func, reg_universe: &RealRegUniverse,
-) -> Result<(), String> {
+pub fn alloc_main<F: Function>(
+  func: &mut F, reg_universe: &RealRegUniverse,
+) -> Result<RegAllocResult<F>, String> {
   // Note that the analysis phase can fail; hence we propagate any error.
   let (rlr_env, mut vlr_env, mut frag_env) = run_analysis(func)?;
 
@@ -430,7 +431,7 @@ pub fn alloc_main(
   );
 
   // This is technically part of the running state, at least for now.
-  let mut spillSlotCtr: u32 = 0;
+  let mut nextSpillSlot: SpillSlot = mkSpillSlot(0);
 
   // Main allocation loop.  Each time round, pull out the longest
   // unallocated VirtualRange, and do one of three things:
@@ -460,7 +461,7 @@ pub fn alloc_main(
           // Urk.  This is very ungood.  Game over.
           let s = format!(
             "no available registers for class {:?}",
-            rc_from_u32(curr_vlr_rc as u32)
+            RegClass::rc_from_u32(curr_vlr_rc as u32)
           );
           return Err(s);
         }
@@ -604,25 +605,27 @@ pub fn alloc_main(
     }
     let mut sri_vec = Vec::<SpillAndOrReloadInfo>::new();
     let curr_vlr_vreg = curr_vlr.vreg;
+    let curr_vlr_class = curr_vlr_vreg.get_class();
     let curr_vlr_reg = curr_vlr_vreg.to_reg();
 
     for fix in &curr_vlr.sortedFrags.fragIxs {
       let frag: &RangeFrag = &frag_env[*fix];
       for iix in frag.first.iix.dotdot(frag.last.iix.plus(1)) {
-        let insn: &Inst = &func.insns[iix];
-        let (regs_d, regs_m, regs_u) = insn.get_reg_usage();
+        let reg_usage = func.get_regs(func.get_insn(iix));
         // If this insn doesn't mention the vreg we're spilling for,
         // move on.
-        if !regs_d.contains(curr_vlr_reg)
-          && !regs_m.contains(curr_vlr_reg)
-          && !regs_u.contains(curr_vlr_reg)
+        if !reg_usage.defined.contains(curr_vlr_reg)
+          && !reg_usage.modified.contains(curr_vlr_reg)
+          && !reg_usage.used.contains(curr_vlr_reg)
         {
           continue;
         }
         // USES: Do we need to create a reload-to-use bridge
         // (VirtualRange) ?
-        if regs_u.contains(curr_vlr_reg) && frag.contains(&InstPoint_Use(iix)) {
-          debug_assert!(!regs_m.contains(curr_vlr_reg));
+        if reg_usage.used.contains(curr_vlr_reg)
+          && frag.contains(&InstPoint_Use(iix))
+        {
+          debug_assert!(!reg_usage.modified.contains(curr_vlr_reg));
           // Stash enough info that we can create a new VirtualRange
           // and a new edit list entry for the reload.
           let sri =
@@ -635,19 +638,21 @@ pub fn alloc_main(
         // two (one for the reload, one for the spill) they could
         // later end up being assigned to different RealRegs, which is
         // obviously nonsensical.
-        if regs_m.contains(curr_vlr_reg)
+        if reg_usage.modified.contains(curr_vlr_reg)
           && frag.contains(&InstPoint_Use(iix))
           && frag.contains(&InstPoint_Def(iix))
         {
-          debug_assert!(!regs_u.contains(curr_vlr_reg));
-          debug_assert!(!regs_d.contains(curr_vlr_reg));
+          debug_assert!(!reg_usage.used.contains(curr_vlr_reg));
+          debug_assert!(!reg_usage.defined.contains(curr_vlr_reg));
           let sri =
             SpillAndOrReloadInfo { bix: frag.bix, iix, kind: BridgeKind::RtoS };
           sri_vec.push(sri);
         }
         // DEFS: Do we need to create a def-to-spill bridge?
-        if regs_d.contains(curr_vlr_reg) && frag.contains(&InstPoint_Def(iix)) {
-          debug_assert!(!regs_m.contains(curr_vlr_reg));
+        if reg_usage.defined.contains(curr_vlr_reg)
+          && frag.contains(&InstPoint_Def(iix))
+        {
+          debug_assert!(!reg_usage.modified.contains(curr_vlr_reg));
           let sri =
             SpillAndOrReloadInfo { bix: frag.bix, iix, kind: BridgeKind::DtoS };
           sri_vec.push(sri);
@@ -658,6 +663,8 @@ pub fn alloc_main(
     // Now that we no longer need to access |frag_env| or |vlr_env| for
     // the remainder of this iteration of the main allocation loop, we can
     // actually generate the required spill/reload artefacts.
+    let num_slots = func.get_spillslot_size(curr_vlr_class);
+    nextSpillSlot = nextSpillSlot.round_up(num_slots);
     for sri in sri_vec {
       // For a spill for a MOD use, the new value will be referenced
       // three times.  For DEF and USE uses, it'll only be ref'd twice.
@@ -698,16 +705,13 @@ pub fn alloc_main(
       vlr_env.push(new_vlr);
       prioQ.add_VirtualRange(new_vlrix);
 
-      let new_eli = EditListItem {
-        slot: mkSpillSlot(spillSlotCtr),
-        vlrix: new_vlrix,
-        kind: sri.kind,
-      };
+      let new_eli =
+        EditListItem { slot: nextSpillSlot, vlrix: new_vlrix, kind: sri.kind };
       println!("--     new ELI        {:?}", &new_eli);
       editList.push(new_eli);
     }
 
-    spillSlotCtr += 1;
+    nextSpillSlot = nextSpillSlot.inc(num_slots);
   }
 
   println!("");
@@ -818,7 +822,7 @@ pub fn alloc_main(
     false
   }
 
-  for insnIx in mkInstIx(0).dotdot(mkInstIx(func.insns.len())) {
+  for insnIx in func.insn_indices() {
     //println!("");
     //println!("QQQQ insn {}: {}",
     //         insnIx, func.insns[insnIx].show());
@@ -901,6 +905,9 @@ pub fn alloc_main(
     //   remove frags ending at I.s
     // apply mapU/mapD to I
 
+    //println!("QQQQ mapping insn {:?}", insnIx);
+    //println!("QQQQ current map {}", showMap(&map));
+
     // Update map for I.r:
     //   add frags starting at I.r
     //   no frags should end at I.r (it's a reload insn)
@@ -909,6 +916,10 @@ pub fn alloc_main(
       if frag.first.pt.isReload() {
         //////// STARTS at I.r
         map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
+        //println!(
+        //  "QQQQ inserted frag from reload: {:?} -> {:?}",
+        //  fragMapsByStart[j].1, fragMapsByStart[j].2
+        //);
       }
     }
 
@@ -921,6 +932,10 @@ pub fn alloc_main(
       if frag.first.pt.isUse() {
         //////// STARTS at I.u
         map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
+        //println!(
+        //  "QQQQ inserted frag from use: {:?} -> {:?}",
+        //  fragMapsByStart[j].1, fragMapsByStart[j].2
+        //);
       }
     }
     let mapU = map.clone();
@@ -929,6 +944,7 @@ pub fn alloc_main(
       if frag.last.pt.isUse() {
         //////// ENDS at I.U
         map.remove(&fragMapsByEnd[j].1);
+        //println!("QQQQ removed frag after use: {:?}", fragMapsByStart[j].1);
       }
     }
 
@@ -941,6 +957,10 @@ pub fn alloc_main(
       if frag.first.pt.isDef() {
         //////// STARTS at I.d
         map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
+        //println!(
+        //  "QQQQ inserted frag from def: {:?} -> {:?}",
+        //  fragMapsByStart[j].1, fragMapsByStart[j].2
+        //);
       }
     }
     let mapD = map.clone();
@@ -949,6 +969,7 @@ pub fn alloc_main(
       if frag.last.pt.isDef() {
         //////// ENDS at I.d
         map.remove(&fragMapsByEnd[j].1);
+        //println!("QQQQ ended frag from def: {:?}", fragMapsByEnd[j].1);
       }
     }
 
@@ -960,6 +981,7 @@ pub fn alloc_main(
       if frag.last.pt.isSpill() {
         //////// ENDS at I.s
         map.remove(&fragMapsByEnd[j].1);
+        //println!("QQQQ ended frag from spill: {:?}", fragMapsByEnd[j].1);
       }
     }
 
@@ -968,15 +990,18 @@ pub fn alloc_main(
 
     // Finally, we have mapU/mapD set correctly for this instruction.
     // Apply it.
-    func.insns[insnIx].mapRegs_D_U(&mapD, &mapU);
+    let mut insn = func.get_insn_mut(insnIx);
+    F::map_regs(&mut insn, &mapU, &mapD);
 
     // Update cursorStarts and cursorEnds for the next iteration
     cursorStarts += numStarts;
     cursorEnds += numEnds;
 
-    if func.blocks.iter().any(|b| b.start.plus(b.len).minus(1) == insnIx) {
-      //println!("Block end");
-      debug_assert!(map.is_empty());
+    for b in func.blocks() {
+      if func.block_insns(b).last() == insnIx {
+        //println!("Block end");
+        debug_assert!(map.is_empty());
+      }
     }
   }
 
@@ -987,8 +1012,9 @@ pub fn alloc_main(
   // are missing.  To generate them, go through the "edit list", which
   // contains info on both how to generate the instructions, and where to
   // insert them.
-  let mut spillsAndReloads = Vec::<(InstPoint, Inst)>::new();
+  let mut spillsAndReloads = Vec::<(InstPoint, F::Inst)>::new();
   for eli in &editList {
+    println!("editlist entry: {:?}", eli);
     let vlr = &vlr_env[eli.vlrix];
     let vlr_sfrags = &vlr.sortedFrags;
     debug_assert!(vlr.sortedFrags.fragIxs.len() == 1);
@@ -999,7 +1025,7 @@ pub fn alloc_main(
         debug_assert!(vlr_frag.first.pt.isReload());
         debug_assert!(vlr_frag.last.pt.isUse());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR = i_reload(rreg, eli.slot);
+        let insnR = func.gen_reload(rreg, eli.slot);
         let whereToR = vlr_frag.first;
         spillsAndReloads.push((whereToR, insnR));
       }
@@ -1007,9 +1033,9 @@ pub fn alloc_main(
         debug_assert!(vlr_frag.first.pt.isReload());
         debug_assert!(vlr_frag.last.pt.isSpill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR = i_reload(rreg, eli.slot);
+        let insnR = func.gen_reload(rreg, eli.slot);
         let whereToR = vlr_frag.first;
-        let insnS = i_spill(eli.slot, rreg);
+        let insnS = func.gen_spill(eli.slot, rreg);
         let whereToS = vlr_frag.last;
         spillsAndReloads.push((whereToR, insnR));
         spillsAndReloads.push((whereToS, insnS));
@@ -1018,7 +1044,7 @@ pub fn alloc_main(
         debug_assert!(vlr_frag.first.pt.isDef());
         debug_assert!(vlr_frag.last.pt.isSpill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnS = i_spill(eli.slot, rreg);
+        let insnS = func.gen_spill(eli.slot, rreg);
         let whereToS = vlr_frag.last;
         spillsAndReloads.push((whereToS, insnS));
       }
@@ -1042,63 +1068,64 @@ pub fn alloc_main(
   let mut curSnR = 0; // cursor in |spillsAndReloads|
   let mut curB = mkBlockIx(0); // cursor in Func::blocks
 
-  let mut newInsts = TypedIxVec::<InstIx, Inst>::new();
-  let mut newBlocks = TypedIxVec::<BlockIx, Block>::new();
+  let mut insns: Vec<F::Inst> = vec![];
+  let mut target_map: TypedIxVec<BlockIx, InstIx> = TypedIxVec::new();
+  let mut clobbered_registers: Set<RealReg> = Set::empty();
 
-  for iix in mkInstIx(0).dotdot(mkInstIx(func.insns.len())) {
+  for iix in func.insn_indices() {
     // Is |iix| the first instruction in a block?  Meaning, are we
     // starting a new block?
-    debug_assert!(curB.get() < func.blocks.len());
-    if func.blocks[curB].start == iix {
-      let oldBlock = &func.blocks[curB];
-      let newBlock = Block {
-        name: oldBlock.name.clone(),
-        start: mkInstIx(newInsts.len() as u32),
-        len: 0,
-        estFreq: oldBlock.estFreq,
-      };
-      newBlocks.push(newBlock);
+    debug_assert!(curB.get() < func.blocks().len() as u32);
+    if func.block_insns(curB).start() == iix {
+      assert!(curB.get() == target_map.len());
+      target_map.push(mkInstIx(insns.len() as u32));
     }
 
     // Copy reloads for this insn
     while curSnR < spillsAndReloads.len()
       && spillsAndReloads[curSnR].0 == InstPoint_Reload(iix)
     {
-      newInsts.push(spillsAndReloads[curSnR].1.clone());
+      insns.push(spillsAndReloads[curSnR].1.clone());
       curSnR += 1;
     }
     // And the insn itself
-    newInsts.push(func.insns[iix].clone());
+    insns.push(func.get_insn(iix).clone());
     // Copy spills for this insn
     while curSnR < spillsAndReloads.len()
       && spillsAndReloads[curSnR].0 == InstPoint_Spill(iix)
     {
-      newInsts.push(spillsAndReloads[curSnR].1.clone());
+      insns.push(spillsAndReloads[curSnR].1.clone());
       curSnR += 1;
     }
 
     // Is |iix| the last instruction in a block?
-    if iix.plus(1) == func.blocks[curB].start.plus(func.blocks[curB].len) {
-      debug_assert!(curB.get() < func.blocks.len());
-      debug_assert!(newBlocks.len() > 0);
-      debug_assert!(curB.get() == newBlocks.len() - 1);
-      newBlocks[curB].len = newInsts.len() as u32 - newBlocks[curB].start.get();
+    if iix == func.block_insns(curB).last() {
+      debug_assert!(curB.get() < func.blocks().len() as u32);
       curB = curB.plus(1);
     }
   }
 
   debug_assert!(curSnR == spillsAndReloads.len());
-  debug_assert!(curB.get() == func.blocks.len());
-  debug_assert!(curB.get() == newBlocks.len());
+  debug_assert!(curB.get() == func.blocks().len() as u32);
 
-  func.insns = newInsts;
-  func.blocks = newBlocks;
+  // Compute clobbered registers with one final, quick pass.
+  //
+  // TODO: derive this information directly from the allocation data
+  // structures used above.
+  for insn in insns.iter() {
+    let reg_usage = func.get_regs(insn);
+    for reg in reg_usage.modified.iter().chain(reg_usage.defined.iter()) {
+      assert!(reg.is_real());
+      clobbered_registers.insert(reg.to_real_reg());
+    }
+  }
 
   // And we're done!
-  //
-  // Curiously, there's no need to fix up Labels after having merged the
-  // spill and original instructions.  That's because Labels refer to
-  // Blocks, not to individual Insts.  Obviously in a real system things are
-  // different :-/
-  Ok(())
+
+  Ok(RegAllocResult {
+    insns,
+    target_map,
+    clobbered_registers,
+    num_spill_slots: nextSpillSlot.get(),
+  })
 }
