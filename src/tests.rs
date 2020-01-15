@@ -830,7 +830,7 @@ impl Func {
     self.insns = TypedIxVec::fromVec(result.insns);
     for bix in self.blocks.range() {
       let block = &mut self.blocks[bix];
-      block.start = *result.target_map.get(&bix).unwrap();
+      block.start = result.target_map[bix];
     }
   }
 }
@@ -1189,7 +1189,7 @@ impl interface::Function for Func {
   /// Allow the regalloc to query whether this is a move.
   fn is_move(&self, insn: &Self::Inst) -> Option<(Reg, Reg)> {
     match insn {
-      &Inst::Copy { dst, src } => Some((src, dst)),
+      &Inst::Copy { dst, src } => Some((dst, src)),
       _ => None,
     }
   }
@@ -1204,7 +1204,7 @@ impl interface::Function for Func {
   }
 
   /// Generate a spill instruction for insertion into the instruction sequence.
-  fn gen_spill(&self, from_reg: RealReg, to_slot: SpillSlot) -> Self::Inst {
+  fn gen_spill(&self, to_slot: SpillSlot, from_reg: RealReg) -> Self::Inst {
     match from_reg.get_class() {
       RegClass::I32 => Inst::Spill { dst: to_slot, src: from_reg },
       RegClass::F32 => Inst::SpillF { dst: to_slot, src: from_reg },
@@ -1213,7 +1213,7 @@ impl interface::Function for Func {
   }
 
   /// Generate a reload instruction for insertion into the instruction sequence.
-  fn gen_reload(&self, from_slot: SpillSlot, to_reg: RealReg) -> Self::Inst {
+  fn gen_reload(&self, to_reg: RealReg, from_slot: SpillSlot) -> Self::Inst {
     match to_reg.get_class() {
       RegClass::I32 => Inst::Reload { src: from_slot, dst: to_reg },
       RegClass::F32 => Inst::ReloadF { src: from_slot, dst: to_reg },
@@ -1222,7 +1222,7 @@ impl interface::Function for Func {
   }
 
   /// Generate a register-to-register move for insertion into the instruction sequence.
-  fn gen_move(&self, from_reg: RealReg, to_reg: RealReg) -> Self::Inst {
+  fn gen_move(&self, to_reg: RealReg, from_reg: RealReg) -> Self::Inst {
     Inst::Copy { src: from_reg.to_reg(), dst: to_reg.to_reg() }
   }
 

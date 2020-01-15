@@ -161,6 +161,10 @@ impl<'a, T> Iterator for SetIter<'a, T> {
 //   for ent in startEnt .. endPlus1Ent {
 //   }
 
+trait Zero {
+  fn zero() -> Self;
+}
+
 trait PlusOne {
   fn plus_one(&self) -> Self;
 }
@@ -240,7 +244,7 @@ pub struct TypedIxVec<TyIx, Ty> {
 impl<TyIx, Ty> TypedIxVec<TyIx, Ty>
 where
   Ty: Clone,
-  TyIx: From<u32> + Copy + Eq + Ord + PlusOne + PlusN,
+  TyIx: Copy + Eq + Ord + Zero + PlusOne + PlusN,
 {
   pub fn new() -> Self {
     Self { vek: Vec::new(), ty_ix: PhantomData::<TyIx> }
@@ -276,7 +280,7 @@ where
     &mut self.vek[..]
   }
   pub fn range(&self) -> MyRange<TyIx> {
-    MyRange::new(TyIx::from(0), self.len() as usize)
+    MyRange::new(TyIx::zero(), self.len() as usize)
   }
 }
 
@@ -361,9 +365,9 @@ macro_rules! generate_boilerplate {
         self.get()
       }
     }
-    impl From<u32> for $TypeIx {
-      fn from(val: u32) -> Self {
-        $TypeIx::$TypeIx(val)
+    impl Zero for $TypeIx {
+      fn zero() -> Self {
+        $mkTypeIx(0)
       }
     }
   };
@@ -435,8 +439,10 @@ impl RegClass {
 
   pub fn short_name(self) -> &'static str {
     match self {
-      RegClass::I32 | RegClass::I64 => "I",
-      RegClass::F32 | RegClass::F64 => "F",
+      RegClass::I32 => "I",
+      RegClass::I64 => "J",
+      RegClass::F32 => "F",
+      RegClass::F64 => "D",
       RegClass::V128 => "V",
     }
   }

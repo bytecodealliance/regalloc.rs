@@ -380,7 +380,7 @@ fn show_commit_tab(commit_tab: &Vec::<SortedRangeFragIxs>,
 */
 
 // Allocator top level.  This function returns a result struct that contains the final sequence of
-// instructions, possibly with fills/spills/moves spliced in and reundant moves elided, and with
+// instructions, possibly with fills/spills/moves spliced in and redundant moves elided, and with
 // all virtual registers replaced with real registers. Allocation can fail if there are
 // insufficient registers to even generate spill/reload code, or if the function appears to have
 // any undefined VirtualReg/RealReg uses.
@@ -1025,7 +1025,7 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.isReload());
         debug_assert!(vlr_frag.last.pt.isUse());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR = func.gen_reload(eli.slot, rreg);
+        let insnR = func.gen_reload(rreg, eli.slot);
         let whereToR = vlr_frag.first;
         spillsAndReloads.push((whereToR, insnR));
       }
@@ -1033,9 +1033,9 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.isReload());
         debug_assert!(vlr_frag.last.pt.isSpill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR = func.gen_reload(eli.slot, rreg);
+        let insnR = func.gen_reload(rreg, eli.slot);
         let whereToR = vlr_frag.first;
-        let insnS = func.gen_spill(rreg, eli.slot);
+        let insnS = func.gen_spill(eli.slot, rreg);
         let whereToS = vlr_frag.last;
         spillsAndReloads.push((whereToR, insnR));
         spillsAndReloads.push((whereToS, insnS));
@@ -1044,7 +1044,7 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.isDef());
         debug_assert!(vlr_frag.last.pt.isSpill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnS = func.gen_spill(rreg, eli.slot);
+        let insnS = func.gen_spill(eli.slot, rreg);
         let whereToS = vlr_frag.last;
         spillsAndReloads.push((whereToS, insnS));
       }
@@ -1069,7 +1069,7 @@ pub fn alloc_main<F: Function>(
   let mut curB = mkBlockIx(0); // cursor in Func::blocks
 
   let mut insns: Vec<F::Inst> = vec![];
-  let mut target_map: Map<BlockIx, InstIx> = Map::default();
+  let mut target_map: TypedIxVec<BlockIx, InstIx> = TypedIxVec::new();
   let mut clobbered_registers: Set<RealReg> = Set::empty();
 
   for iix in func.insn_indices() {
@@ -1077,7 +1077,8 @@ pub fn alloc_main<F: Function>(
     // starting a new block?
     debug_assert!(curB.get() < func.blocks().len() as u32);
     if func.block_insns(curB).start() == iix {
-      target_map.insert(curB, mkInstIx(insns.len() as u32));
+      assert!(curB.get() == target_map.len());
+      target_map.push(mkInstIx(insns.len() as u32));
     }
 
     // Copy reloads for this insn
@@ -1107,13 +1108,12 @@ pub fn alloc_main<F: Function>(
   debug_assert!(curSnR == spillsAndReloads.len());
   debug_assert!(curB.get() == func.blocks().len() as u32);
 
-  // Compute clobbered registers with one final, quick pass. Assert that all registers are real,
-  // not virtual, as an extra sanity check.
+  // Compute clobbered registers with one final, quick pass.
+  //
+  // TODO: derive this information directly from the allocation data
+  // structures used above.
   for insn in insns.iter() {
     let reg_usage = func.get_regs(insn);
-    for reg in reg_usage.used.iter() {
-      assert!(reg.is_real());
-    }
     for reg in reg_usage.modified.iter().chain(reg_usage.defined.iter()) {
       assert!(reg.is_real());
       clobbered_registers.insert(reg.to_real_reg());

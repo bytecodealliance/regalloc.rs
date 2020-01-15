@@ -112,7 +112,7 @@ pub trait Function {
     post_map: &Map<VirtualReg, RealReg>,
   );
 
-  /// Allow the regalloc to query whether this is a move.
+  /// Allow the regalloc to query whether this is a move. Returns (dst, src).
   fn is_move(&self, insn: &Self::Inst) -> Option<(Reg, Reg)>;
 
   /// How many logical spill slots does the given regclass require?  E.g., on a
@@ -122,13 +122,13 @@ pub trait Function {
   fn get_spillslot_size(&self, regclass: RegClass) -> u32;
 
   /// Generate a spill instruction for insertion into the instruction sequence.
-  fn gen_spill(&self, from_reg: RealReg, to_slot: SpillSlot) -> Self::Inst;
+  fn gen_spill(&self, to_slot: SpillSlot, from_reg: RealReg) -> Self::Inst;
 
   /// Generate a reload instruction for insertion into the instruction sequence.
-  fn gen_reload(&self, from_slot: SpillSlot, to_reg: RealReg) -> Self::Inst;
+  fn gen_reload(&self, to_reg: RealReg, from_slot: SpillSlot) -> Self::Inst;
 
   /// Generate a register-to-register move for insertion into the instruction sequence.
-  fn gen_move(&self, from_reg: RealReg, to_reg: RealReg) -> Self::Inst;
+  fn gen_move(&self, to_reg: RealReg, from_reg: RealReg) -> Self::Inst;
 
   /// Try to alter an existing instruction to use a value directly in a
   /// spillslot (accessing memory directly) instead of the given register. May
@@ -151,7 +151,7 @@ pub struct RegAllocResult<F: Function> {
 
   /// Basic-block start indices for the new instruction list, indexed by the original basic block
   /// indices. May be used by the client to, e.g., remap branch targets appropriately.
-  pub target_map: Map<BlockIx, InstIx>,
+  pub target_map: TypedIxVec<BlockIx, InstIx>,
 
   /// Which real registers were overwritten? This will contain all real regs that appear as defs or
   /// modifies in register slots of the output instruction list.
