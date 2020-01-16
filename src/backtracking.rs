@@ -282,7 +282,7 @@ impl fmt::Debug for BridgeKind {
   }
 }
 
-struct EditListItem {
+pub(crate) struct EditListItem {
   // This holds enough information to create a spill or reload instruction,
   // or both, and also specifies where in the instruction stream it/they
   // should be added.  Note that if the edit list as a whole specifies
@@ -308,6 +308,8 @@ impl fmt::Debug for EditListItem {
   }
 }
 
+pub(crate) type EditList = Vec<EditListItem>;
+
 //=============================================================================
 // Printing the allocator's top level state
 
@@ -318,7 +320,7 @@ fn print_RA_state(
   // State components
   prioQ: &VirtualRangePrioQ,
   perRealReg: &Vec<PerRealReg>,
-  editList: &Vec<EditListItem>,
+  edit_list: &Vec<EditListItem>,
   // The context (environment)
   vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
@@ -338,7 +340,7 @@ fn print_RA_state(
       debug!("{}", s);
     }
   }
-  for eli in editList {
+  for eli in edit_list {
     debug!("{:?}", eli);
   }
   debug!(">>>>");
@@ -406,11 +408,11 @@ pub fn alloc_main<F: Function>(
 
   // Whereas this is empty.  We have to populate it "by hand", by
   // effectively cloning the allocatable part (prefix) of the universe.
-  let mut perRealReg = Vec::<PerRealReg>::new();
+  let mut per_real_reg = Vec::<PerRealReg>::new();
   for _ in 0..reg_universe.allocable {
     // Doing this instead of simply .resize avoids needing Clone for
     // PerRealReg
-    perRealReg.push(PerRealReg::new(&frag_env));
+    per_real_reg.push(PerRealReg::new(&frag_env));
   }
   for rlr in rlr_env.iter() {
     let rregIndex = rlr.rreg.get_index();
@@ -420,23 +422,23 @@ pub fn alloc_main<F: Function>(
     if rregIndex >= reg_universe.allocable {
       continue;
     }
-    perRealReg[rregIndex].add_RealRange(&rlr, &frag_env);
+    per_real_reg[rregIndex].add_RealRange(&rlr, &frag_env);
   }
 
-  let mut editList = Vec::<EditListItem>::new();
+  let mut edit_list = Vec::<EditListItem>::new();
   debug!("");
   print_RA_state(
     "Initial",
     &reg_universe,
     &prioQ,
-    &perRealReg,
-    &editList,
+    &per_real_reg,
+    &edit_list,
     &vlr_env,
     &frag_env,
   );
 
   // This is technically part of the running state, at least for now.
-  let mut nextSpillSlot: SpillSlot = mkSpillSlot(0);
+  let mut next_spill_slot: SpillSlot = mkSpillSlot(0);
 
   // Main allocation loop.  Each time round, pull out the longest
   // unallocated VirtualRange, and do one of three things:
@@ -477,7 +479,7 @@ pub fn alloc_main<F: Function>(
     // VirtualRange without evicting any previous assignment.
     let mut rreg_to_use = None;
     for i in first_in_rc..last_in_rc + 1 {
-      if perRealReg[i]
+      if per_real_reg[i]
         .can_add_VirtualRange_without_eviction(curr_vlr, &frag_env)
       {
         rreg_to_use = Some(i);
@@ -488,7 +490,7 @@ pub fn alloc_main<F: Function>(
       // Yay!
       let rreg = reg_universe.regs[rregNo].0;
       debug!("--   direct alloc to  {:?}", rreg);
-      perRealReg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
+      per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
       debug_assert!(curr_vlr.rreg.is_none());
       // Directly modify bits of vlr_env.  This means we have to abandon
       // the immutable borrow for curr_vlr, but that's OK -- we won't
@@ -506,7 +508,7 @@ pub fn alloc_main<F: Function>(
     let mut best_so_far: Option<(usize, VirtualRangeIx, f32)> = None;
     for i in first_in_rc..last_in_rc + 1 {
       let mb_better_cand: Option<(VirtualRangeIx, f32)>;
-      mb_better_cand = perRealReg[i]
+      mb_better_cand = per_real_reg[i]
         .find_best_evict_VirtualRange(&curr_vlr, &vlr_env, &frag_env);
       if let Some((cand_vlrix, cand_cost)) = mb_better_cand {
         // See if this is better than the best so far, and if so take
@@ -540,13 +542,17 @@ pub fn alloc_main<F: Function>(
         vlrix_to_evict, &vlr_env[vlrix_to_evict]
       );
       debug_assert!(vlrix_to_evict != curr_vlrix);
-      perRealReg[rregNo].del_VirtualRange(vlrix_to_evict, &vlr_env, &frag_env);
+      per_real_reg[rregNo].del_VirtualRange(
+        vlrix_to_evict,
+        &vlr_env,
+        &frag_env,
+      );
       prioQ.add_VirtualRange(vlrix_to_evict);
       debug_assert!(vlr_env[vlrix_to_evict].rreg.is_some());
       // .. and reassign.
       let rreg = reg_universe.regs[rregNo].0;
       debug!("--   then alloc to    {:?}", rreg);
-      perRealReg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
+      per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
       debug_assert!(curr_vlr.rreg.is_none());
       // Directly modify bits of vlr_env.  This means we have to abandon
       // the immutable borrow for curr_vlr, but that's OK -- we won't
@@ -669,7 +675,7 @@ pub fn alloc_main<F: Function>(
     // the remainder of this iteration of the main allocation loop, we can
     // actually generate the required spill/reload artefacts.
     let num_slots = func.get_spillslot_size(curr_vlr_class);
-    nextSpillSlot = nextSpillSlot.round_up(num_slots);
+    next_spill_slot = next_spill_slot.round_up(num_slots);
     for sri in sri_vec {
       // For a spill for a MOD use, the new value will be referenced
       // three times.  For DEF and USE uses, it'll only be ref'd twice.
@@ -710,13 +716,16 @@ pub fn alloc_main<F: Function>(
       vlr_env.push(new_vlr);
       prioQ.add_VirtualRange(new_vlrix);
 
-      let new_eli =
-        EditListItem { slot: nextSpillSlot, vlrix: new_vlrix, kind: sri.kind };
+      let new_eli = EditListItem {
+        slot: next_spill_slot,
+        vlrix: new_vlrix,
+        kind: sri.kind,
+      };
       debug!("--     new ELI        {:?}", &new_eli);
-      editList.push(new_eli);
+      edit_list.push(new_eli);
     }
 
-    nextSpillSlot = nextSpillSlot.inc(num_slots);
+    next_spill_slot = next_spill_slot.inc(num_slots);
   }
 
   debug!("");
@@ -724,13 +733,11 @@ pub fn alloc_main<F: Function>(
     "Final",
     &reg_universe,
     &prioQ,
-    &perRealReg,
-    &editList,
+    &per_real_reg,
+    &edit_list,
     &vlr_env,
     &frag_env,
   );
-
-  // -------- Edit the instruction stream --------
 
   // Gather up a vector of (RangeFrag, VirtualReg, RealReg) resulting from
   // the previous phase.  This fundamentally is the result of the allocation
@@ -742,43 +749,71 @@ pub fn alloc_main<F: Function>(
   // (just the InstIx numbers, ignoring the Point), and one sorted by
   // fragment end points.
 
-  let mut fragMapsByStart = Vec::<(RangeFragIx, VirtualReg, RealReg)>::new();
-  let mut fragMapsByEnd = Vec::<(RangeFragIx, VirtualReg, RealReg)>::new();
+  let mut frag_maps_by_start = RangeAllocations::new();
+  let mut frag_maps_by_end = RangeAllocations::new();
   // For each real register under our control ..
   for i in 0..reg_universe.allocable {
     let rreg = reg_universe.regs[i].0;
     // .. look at all the VirtualRanges assigned to it.  And for each such
     // VirtualRange ..
-    for vlrix_assigned in &perRealReg[i].vlrixs_assigned {
+    for vlrix_assigned in &per_real_reg[i].vlrixs_assigned {
       let vlr_assigned = &vlr_env[*vlrix_assigned];
       // All the RangeFrags in |vlr_assigned| require |vlr_assigned.reg|
       // to be mapped to the real reg |i|
       let vreg = vlr_assigned.vreg;
       // .. collect up all its constituent RangeFrags.
       for fix in &vlr_assigned.sortedFrags.fragIxs {
-        fragMapsByStart.push((*fix, vreg, rreg));
-        fragMapsByEnd.push((*fix, vreg, rreg));
+        frag_maps_by_start.push((*fix, vreg, rreg));
+        frag_maps_by_end.push((*fix, vreg, rreg));
       }
     }
   }
 
-  fragMapsByStart.sort_unstable_by(|(fixNo1, _, _), (fixNo2, _, _)| {
-    frag_env[*fixNo1]
-      .first
-      .iix
-      .partial_cmp(&frag_env[*fixNo2].first.iix)
-      .unwrap()
-  });
+  edit_inst_stream(
+    func,
+    edit_list,
+    frag_maps_by_start,
+    frag_maps_by_end,
+    &frag_env,
+    &vlr_env,
+    next_spill_slot.get(),
+  )
+}
 
-  fragMapsByEnd.sort_unstable_by(|(fixNo1, _, _), (fixNo2, _, _)| {
-    frag_env[*fixNo1].last.iix.partial_cmp(&frag_env[*fixNo2].last.iix).unwrap()
-  });
+pub(crate) type RangeAllocations = Vec<(RangeFragIx, VirtualReg, RealReg)>;
+
+pub(crate) fn edit_inst_stream<F: Function>(
+  func: &mut F, edit_list: EditList, mut frag_maps_by_start: RangeAllocations,
+  mut frag_maps_by_end: RangeAllocations,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+  vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>, num_spill_slots: u32,
+) -> Result<RegAllocResult<F>, String> {
+  // -------- Edit the instruction stream --------
+  frag_maps_by_start.sort_unstable_by(
+    |(frag_ix, _, _), (other_frag_ix, _, _)| {
+      frag_env[*frag_ix]
+        .first
+        .iix
+        .partial_cmp(&frag_env[*other_frag_ix].first.iix)
+        .unwrap()
+    },
+  );
+
+  frag_maps_by_end.sort_unstable_by(
+    |(frag_ix, _, _), (other_frag_ix, _, _)| {
+      frag_env[*frag_ix]
+        .last
+        .iix
+        .partial_cmp(&frag_env[*other_frag_ix].last.iix)
+        .unwrap()
+    },
+  );
 
   //debug!("Firsts: {}", fragMapsByStart.show());
   //debug!("Lasts:  {}", fragMapsByEnd.show());
 
-  let mut cursorStarts = 0;
-  let mut cursorEnds = 0;
+  let mut cursor_starts = 0;
+  let mut cursor_ends = 0;
 
   let mut map = Map::<VirtualReg, RealReg>::default();
 
@@ -830,28 +865,28 @@ pub fn alloc_main<F: Function>(
     //         insnIx, func.insns[insnIx].show());
     //debug!("QQQQ init map {}", showMap(&map));
     // advance [cursorStarts, +numStarts) to the group for insnIx
-    while cursorStarts < fragMapsByStart.len()
-      && frag_env[fragMapsByStart[cursorStarts].0].first.iix < insnIx
+    while cursor_starts < frag_maps_by_start.len()
+      && frag_env[frag_maps_by_start[cursor_starts].0].first.iix < insnIx
     {
-      cursorStarts += 1;
+      cursor_starts += 1;
     }
     let mut numStarts = 0;
-    while cursorStarts + numStarts < fragMapsByStart.len()
-      && frag_env[fragMapsByStart[cursorStarts + numStarts].0].first.iix
+    while cursor_starts + numStarts < frag_maps_by_start.len()
+      && frag_env[frag_maps_by_start[cursor_starts + numStarts].0].first.iix
         == insnIx
     {
       numStarts += 1;
     }
 
     // advance [cursorEnds, +numEnds) to the group for insnIx
-    while cursorEnds < fragMapsByEnd.len()
-      && frag_env[fragMapsByEnd[cursorEnds].0].last.iix < insnIx
+    while cursor_ends < frag_maps_by_end.len()
+      && frag_env[frag_maps_by_end[cursor_ends].0].last.iix < insnIx
     {
-      cursorEnds += 1;
+      cursor_ends += 1;
     }
     let mut numEnds = 0;
-    while cursorEnds + numEnds < fragMapsByEnd.len()
-      && frag_env[fragMapsByEnd[cursorEnds + numEnds].0].last.iix == insnIx
+    while cursor_ends + numEnds < frag_maps_by_end.len()
+      && frag_env[frag_maps_by_end[cursor_ends + numEnds].0].last.iix == insnIx
     {
       numEnds += 1;
     }
@@ -877,14 +912,14 @@ pub fn alloc_main<F: Function>(
 
     // Sanity check all frags.  In particular, reload and spill frags are
     // heavily constrained.  No functional effect.
-    for j in cursorStarts..cursorStarts + numStarts {
-      let frag = &frag_env[fragMapsByStart[j].0];
+    for j in cursor_starts..cursor_starts + numStarts {
+      let frag = &frag_env[frag_maps_by_start[j].0];
       // "It really starts here, as claimed."
       debug_assert!(frag.first.iix == insnIx);
       debug_assert!(is_sane(&frag));
     }
-    for j in cursorEnds..cursorEnds + numEnds {
-      let frag = &frag_env[fragMapsByEnd[j].0];
+    for j in cursor_ends..cursor_ends + numEnds {
+      let frag = &frag_env[frag_maps_by_end[j].0];
       // "It really ends here, as claimed."
       debug_assert!(frag.last.iix == insnIx);
       debug_assert!(is_sane(frag));
@@ -913,11 +948,11 @@ pub fn alloc_main<F: Function>(
     // Update map for I.r:
     //   add frags starting at I.r
     //   no frags should end at I.r (it's a reload insn)
-    for j in cursorStarts..cursorStarts + numStarts {
-      let frag = &frag_env[fragMapsByStart[j].0];
+    for j in cursor_starts..cursor_starts + numStarts {
+      let frag = &frag_env[frag_maps_by_start[j].0];
       if frag.first.pt.isReload() {
         //////// STARTS at I.r
-        map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
+        map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
         //debug!(
         //  "QQQQ inserted frag from reload: {:?} -> {:?}",
         //  fragMapsByStart[j].1, fragMapsByStart[j].2
@@ -929,11 +964,11 @@ pub fn alloc_main<F: Function>(
     //   add frags starting at I.u
     //   mapU := map
     //   remove frags ending at I.u
-    for j in cursorStarts..cursorStarts + numStarts {
-      let frag = &frag_env[fragMapsByStart[j].0];
+    for j in cursor_starts..cursor_starts + numStarts {
+      let frag = &frag_env[frag_maps_by_start[j].0];
       if frag.first.pt.isUse() {
         //////// STARTS at I.u
-        map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
+        map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
         //debug!(
         //  "QQQQ inserted frag from use: {:?} -> {:?}",
         //  fragMapsByStart[j].1, fragMapsByStart[j].2
@@ -941,11 +976,11 @@ pub fn alloc_main<F: Function>(
       }
     }
     let mapU = map.clone();
-    for j in cursorEnds..cursorEnds + numEnds {
-      let frag = &frag_env[fragMapsByEnd[j].0];
+    for j in cursor_ends..cursor_ends + numEnds {
+      let frag = &frag_env[frag_maps_by_end[j].0];
       if frag.last.pt.isUse() {
         //////// ENDS at I.U
-        map.remove(&fragMapsByEnd[j].1);
+        map.remove(&frag_maps_by_end[j].1);
         //debug!("QQQQ removed frag after use: {:?}", fragMapsByStart[j].1);
       }
     }
@@ -954,11 +989,11 @@ pub fn alloc_main<F: Function>(
     //   add frags starting at I.d
     //   mapD := map
     //   remove frags ending at I.d
-    for j in cursorStarts..cursorStarts + numStarts {
-      let frag = &frag_env[fragMapsByStart[j].0];
+    for j in cursor_starts..cursor_starts + numStarts {
+      let frag = &frag_env[frag_maps_by_start[j].0];
       if frag.first.pt.isDef() {
         //////// STARTS at I.d
-        map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
+        map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
         //debug!(
         //  "QQQQ inserted frag from def: {:?} -> {:?}",
         //  fragMapsByStart[j].1, fragMapsByStart[j].2
@@ -966,11 +1001,11 @@ pub fn alloc_main<F: Function>(
       }
     }
     let mapD = map.clone();
-    for j in cursorEnds..cursorEnds + numEnds {
-      let frag = &frag_env[fragMapsByEnd[j].0];
+    for j in cursor_ends..cursor_ends + numEnds {
+      let frag = &frag_env[frag_maps_by_end[j].0];
       if frag.last.pt.isDef() {
         //////// ENDS at I.d
-        map.remove(&fragMapsByEnd[j].1);
+        map.remove(&frag_maps_by_end[j].1);
         //debug!("QQQQ ended frag from def: {:?}", fragMapsByEnd[j].1);
       }
     }
@@ -978,11 +1013,11 @@ pub fn alloc_main<F: Function>(
     // Update map for I.s:
     //   no frags should start at I.s (it's a spill insn)
     //   remove frags ending at I.s
-    for j in cursorEnds..cursorEnds + numEnds {
-      let frag = &frag_env[fragMapsByEnd[j].0];
+    for j in cursor_ends..cursor_ends + numEnds {
+      let frag = &frag_env[frag_maps_by_end[j].0];
       if frag.last.pt.isSpill() {
         //////// ENDS at I.s
-        map.remove(&fragMapsByEnd[j].1);
+        map.remove(&frag_maps_by_end[j].1);
         //debug!("QQQQ ended frag from spill: {:?}", fragMapsByEnd[j].1);
       }
     }
@@ -996,8 +1031,8 @@ pub fn alloc_main<F: Function>(
     F::map_regs(&mut insn, &mapU, &mapD);
 
     // Update cursorStarts and cursorEnds for the next iteration
-    cursorStarts += numStarts;
-    cursorEnds += numEnds;
+    cursor_starts += numStarts;
+    cursor_ends += numEnds;
 
     for b in func.blocks() {
       if func.block_insns(b).last() == insnIx {
@@ -1014,8 +1049,8 @@ pub fn alloc_main<F: Function>(
   // are missing.  To generate them, go through the "edit list", which
   // contains info on both how to generate the instructions, and where to
   // insert them.
-  let mut spillsAndReloads = Vec::<(InstPoint, F::Inst)>::new();
-  for eli in &editList {
+  let mut spills_and_reloads = Vec::<(InstPoint, F::Inst)>::new();
+  for eli in &edit_list {
     debug!("editlist entry: {:?}", eli);
     let vlr = &vlr_env[eli.vlrix];
     let vlr_sfrags = &vlr.sortedFrags;
@@ -1029,7 +1064,7 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
         let insnR = func.gen_reload(rreg, eli.slot);
         let whereToR = vlr_frag.first;
-        spillsAndReloads.push((whereToR, insnR));
+        spills_and_reloads.push((whereToR, insnR));
       }
       BridgeKind::RtoS => {
         debug_assert!(vlr_frag.first.pt.isReload());
@@ -1039,8 +1074,8 @@ pub fn alloc_main<F: Function>(
         let whereToR = vlr_frag.first;
         let insnS = func.gen_spill(eli.slot, rreg);
         let whereToS = vlr_frag.last;
-        spillsAndReloads.push((whereToR, insnR));
-        spillsAndReloads.push((whereToS, insnS));
+        spills_and_reloads.push((whereToR, insnR));
+        spills_and_reloads.push((whereToS, insnS));
       }
       BridgeKind::DtoS => {
         debug_assert!(vlr_frag.first.pt.isDef());
@@ -1048,7 +1083,7 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
         let insnS = func.gen_spill(eli.slot, rreg);
         let whereToS = vlr_frag.last;
-        spillsAndReloads.push((whereToS, insnS));
+        spills_and_reloads.push((whereToS, insnS));
       }
     }
   }
@@ -1064,7 +1099,7 @@ pub fn alloc_main<F: Function>(
   // We also need to examine and update Func::blocks.  This is assumed to
   // be arranged in ascending order of the Block::start fields.
 
-  spillsAndReloads
+  spills_and_reloads
     .sort_unstable_by(|(ip1, _), (ip2, _)| ip1.partial_cmp(ip2).unwrap());
 
   let mut curSnR = 0; // cursor in |spillsAndReloads|
@@ -1084,19 +1119,19 @@ pub fn alloc_main<F: Function>(
     }
 
     // Copy reloads for this insn
-    while curSnR < spillsAndReloads.len()
-      && spillsAndReloads[curSnR].0 == InstPoint_Reload(iix)
+    while curSnR < spills_and_reloads.len()
+      && spills_and_reloads[curSnR].0 == InstPoint_Reload(iix)
     {
-      insns.push(spillsAndReloads[curSnR].1.clone());
+      insns.push(spills_and_reloads[curSnR].1.clone());
       curSnR += 1;
     }
     // And the insn itself
     insns.push(func.get_insn(iix).clone());
     // Copy spills for this insn
-    while curSnR < spillsAndReloads.len()
-      && spillsAndReloads[curSnR].0 == InstPoint_Spill(iix)
+    while curSnR < spills_and_reloads.len()
+      && spills_and_reloads[curSnR].0 == InstPoint_Spill(iix)
     {
-      insns.push(spillsAndReloads[curSnR].1.clone());
+      insns.push(spills_and_reloads[curSnR].1.clone());
       curSnR += 1;
     }
 
@@ -1107,7 +1142,7 @@ pub fn alloc_main<F: Function>(
     }
   }
 
-  debug_assert!(curSnR == spillsAndReloads.len());
+  debug_assert!(curSnR == spills_and_reloads.len());
   debug_assert!(curB.get() == func.blocks().len() as u32);
 
   // Compute clobbered registers with one final, quick pass.
@@ -1124,10 +1159,5 @@ pub fn alloc_main<F: Function>(
 
   // And we're done!
 
-  Ok(RegAllocResult {
-    insns,
-    target_map,
-    clobbered_registers,
-    num_spill_slots: nextSpillSlot.get(),
-  })
+  Ok(RegAllocResult { insns, target_map, clobbered_registers, num_spill_slots })
 }
