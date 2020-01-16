@@ -18,8 +18,8 @@ use crate::data_structures::{
   VirtualRangeIx, VirtualReg,
 };
 use crate::interface::{Function, RegAllocResult};
-use std::fmt;
 use log::debug;
+use std::fmt;
 
 //=============================================================================
 // The as-yet-unallocated VirtualReg LR prio queue
@@ -331,10 +331,7 @@ fn print_RA_state(
       universe.regs[ix].1,
       &perRealReg[ix].show1_with_envs(&frag_env)
     );
-    debug!(
-      "      {}",
-      &perRealReg[ix].show2_with_envs(&frag_env)
-    );
+    debug!("      {}", &perRealReg[ix].show2_with_envs(&frag_env));
     debug!("");
   }
   if !prioQ.is_empty() {
@@ -387,11 +384,12 @@ fn show_commit_tab(commit_tab: &Vec::<SortedRangeFragIxs>,
 }
 */
 
-// Allocator top level.  This function returns a result struct that contains the final sequence of
-// instructions, possibly with fills/spills/moves spliced in and redundant moves elided, and with
-// all virtual registers replaced with real registers. Allocation can fail if there are
-// insufficient registers to even generate spill/reload code, or if the function appears to have
-// any undefined VirtualReg/RealReg uses.
+// Allocator top level.  This function returns a result struct that contains
+// the final sequence of instructions, possibly with fills/spills/moves
+// spliced in and redundant moves elided, and with all virtual registers
+// replaced with real registers. Allocation can fail if there are insufficient
+// registers to even generate spill/reload code, or if the function appears to
+// have any undefined VirtualReg/RealReg uses.
 
 #[inline(never)]
 pub fn alloc_main<F: Function>(

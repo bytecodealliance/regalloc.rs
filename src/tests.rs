@@ -9,8 +9,8 @@
 /// Test cases.  The list of them is right at the bottom, function |find_Func|.
 /// Add new ones there.
 ///
-/// As part of this set of test cases, we define a mini IR and implement the `Function` trait for
-/// it so that we can use the regalloc public interface.
+/// As part of this set of test cases, we define a mini IR and implement the
+/// `Function` trait for it so that we can use the regalloc public interface.
 use crate::interface;
 use crate::interface::{
   mkBlockIx, mkInstIx, mkRealReg, mkSpillSlot, mkVirtualReg, BlockIx, InstIx,
@@ -583,8 +583,8 @@ impl Inst {
         uce.insert(*reg);
       }
       Inst::Finish {} => {}
-      // Spill and Reload are seen here during the final pass over insts that computes clobbered
-      // regs.
+      // Spill and Reload are seen here during the final pass over insts that
+      // computes clobbered regs.
       Inst::Spill { src, .. } | Inst::SpillF { src, .. } => {
         uce.insert(src.to_reg());
       }
@@ -717,10 +717,10 @@ pub struct Func {
   pub nVirtualRegs: u32,
   pub insns: TypedIxVec<InstIx, Inst>, // indexed by InstIx
   pub blocks: TypedIxVec<BlockIx, Block>, // indexed by BlockIx
-                                       // Note that |blocks| must be in order of increasing |Block::start|
-                                       // fields.  Code that wants to traverse the blocks in some other order
-                                       // must represent the ordering some other way; rearranging Func::blocks is
-                                       // not allowed.
+  // Note that |blocks| must be in order of increasing |Block::start|
+  // fields.  Code that wants to traverse the blocks in some other order
+  // must represent the ordering some other way; rearranging Func::blocks is
+  // not allowed.
 }
 impl Clone for Func {
   // This is only needed for debug printing.
@@ -1228,7 +1228,8 @@ impl interface::Function for Func {
     }
   }
 
-  /// Generate a register-to-register move for insertion into the instruction sequence.
+  /// Generate a register-to-register move for insertion into the instruction
+  /// sequence.
   fn gen_move(&self, to_reg: RealReg, from_reg: RealReg) -> Self::Inst {
     Inst::Copy { src: from_reg.to_reg(), dst: to_reg.to_reg() }
   }
@@ -1352,7 +1353,8 @@ fn test__fill_then_sum() -> Func {
   let vNENT = func.newVirtualReg(RegClass::I32);
   let vI = func.newVirtualReg(RegClass::I32);
   let vSUM = func.newVirtualReg(RegClass::I32);
-  let rTMP = mkRealReg(RegClass::I32, /*enc=*/ 0x42, /*index=*/ 2); // "2" is arbitrary.
+  // "index=2" is arbitrary.
+  let rTMP = mkRealReg(RegClass::I32, /*enc=*/ 0x42, /*index=*/ 2);
   let vTMP2 = func.newVirtualReg(RegClass::I32);
 
   // Loop pre-header for filling array with numbers.
@@ -1862,7 +1864,8 @@ fn test__needs_splitting() -> Func {
   bif.finish(stmts)
 }
 
-// This is the same as needs_splitting, but with the live ranges split "manually"
+// This is the same as needs_splitting, but with the live ranges split
+// "manually"
 fn test__needs_splitting2() -> Func {
   let mut bif = Blockifier::new("needs_splitting2");
   let v10 = bif.newVirtualReg(RegClass::I32);
@@ -2295,7 +2298,8 @@ fn test__fill_then_sum_2a() -> Func {
   let vNENT = func.newVirtualReg(RegClass::I32);
   let vI = func.newVirtualReg(RegClass::I32);
   let vSUM = func.newVirtualReg(RegClass::I32);
-  let rTMP = mkRealReg(RegClass::I32, /*enc=*/ 0x42, /*index=*/ 2); // "2" is arbitrary.
+  // "index=2" is arbitrary.
+  let rTMP = mkRealReg(RegClass::I32, /*enc=*/ 0x42, /*index=*/ 2);
   let vTMP2 = func.newVirtualReg(RegClass::I32);
 
   // Loop pre-header for filling array with numbers.

@@ -400,9 +400,10 @@ impl<TyIx, Ty: fmt::Debug> fmt::Debug for TypedIxVec<TyIx, Ty> {
 }
 
 //=============================================================================
-// Definitions of register classes, registers and stack slots, and printing thereof. Note that this
-// register class definition is meant to be architecture-independent: it simply captures common
-// integer/float/vector types that machines are likely to use. TODO: investigate whether we need a
+// Definitions of register classes, registers and stack slots, and printing
+// thereof. Note that this register class definition is meant to be
+// architecture-independent: it simply captures common integer/float/vector
+// types that machines are likely to use. TODO: investigate whether we need a
 // more flexible register-class definition mechanism.
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]

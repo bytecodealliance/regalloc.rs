@@ -48,9 +48,9 @@ pub struct InstRegUses {
   pub used: Set<Reg>,    // registers that are read.
   pub defined: Set<Reg>, // registers that are written.
   pub modified: Set<Reg>, // registers that are modified.
-                         // Note that `modified` is distinct from just `used`+`defined` because
-                         // the vreg must live in the same real reg both before and after the
-                         // instruction.
+  // Note that `modified` is distinct from just `used`+`defined` because
+  // the vreg must live in the same real reg both before and after the
+  // instruction.
 }
 
 // TypedIxVector, so that the interface can speak about vectors of blocks and
@@ -61,8 +61,8 @@ pub use crate::data_structures::{
   mkBlockIx, mkInstIx, BlockIx, InstIx, MyRange,
 };
 
-/// A trait defined by the regalloc client to provide access to its machine-instruction / CFG
-/// representation.
+/// A trait defined by the regalloc client to provide access to its
+/// machine-instruction / CFG representation.
 pub trait Function {
   /// Regalloc is parameterized on F: Function and so can use the projected
   /// type F::Inst.
@@ -86,7 +86,8 @@ pub trait Function {
   /// Get an instruction with a type-safe InstIx index.
   fn get_insn(&self, insn: InstIx) -> &Self::Inst;
 
-  /// Get a mutable borrow of an instruction with the given type-safe InstIx index.
+  /// Get a mutable borrow of an instruction with the given type-safe InstIx
+  /// index.
   fn get_insn_mut(&mut self, insn: InstIx) -> &mut Self::Inst;
 
   /// Allow iteration over basic blocks (in instruction order).
@@ -111,9 +112,9 @@ pub trait Function {
   /// just after the instruction's effect). Regs that were "modified"
   /// can use either map; the vreg should be the same in both.
   ///
-  /// Note that this does not take a `self`, because we want to allow the regalloc to have a
-  /// mutable borrow of an insn (which borrows the whole Function in turn) outstanding while
-  /// calling this.
+  /// Note that this does not take a `self`, because we want to allow the
+  /// regalloc to have a mutable borrow of an insn (which borrows the whole
+  /// Function in turn) outstanding while calling this.
   fn map_regs(
     insn: &mut Self::Inst, pre_map: &Map<VirtualReg, RealReg>,
     post_map: &Map<VirtualReg, RealReg>,
@@ -134,7 +135,8 @@ pub trait Function {
   /// Generate a reload instruction for insertion into the instruction sequence.
   fn gen_reload(&self, to_reg: RealReg, from_slot: SpillSlot) -> Self::Inst;
 
-  /// Generate a register-to-register move for insertion into the instruction sequence.
+  /// Generate a register-to-register move for insertion into the instruction
+  /// sequence.
   fn gen_move(&self, to_reg: RealReg, from_reg: RealReg) -> Self::Inst;
 
   /// Try to alter an existing instruction to use a value directly in a
@@ -152,31 +154,36 @@ pub trait Function {
 
 /// The result of register allocation.  Note that allocation can fail!
 pub struct RegAllocResult<F: Function> {
-  /// A new sequence of instructions with all register slots filled with real registers, and
-  /// spills/fills/moves possibly inserted (and unneeded moves elided).
+  /// A new sequence of instructions with all register slots filled with real
+  /// registers, and spills/fills/moves possibly inserted (and unneeded moves
+  /// elided).
   pub insns: Vec<F::Inst>,
 
-  /// Basic-block start indices for the new instruction list, indexed by the original basic block
-  /// indices. May be used by the client to, e.g., remap branch targets appropriately.
+  /// Basic-block start indices for the new instruction list, indexed by the
+  /// original basic block indices. May be used by the client to, e.g., remap
+  /// branch targets appropriately.
   pub target_map: TypedIxVec<BlockIx, InstIx>,
 
-  /// Which real registers were overwritten? This will contain all real regs that appear as defs or
-  /// modifies in register slots of the output instruction list.
+  /// Which real registers were overwritten? This will contain all real regs
+  /// that appear as defs or modifies in register slots of the output
+  /// instruction list.
   pub clobbered_registers: Set<RealReg>,
 
   /// How many spill slots were used?
   pub num_spill_slots: u32,
 }
 
-/// Allocate registers for a function's code, given a universe of real registers that we are
-/// allowed to use. Allocate may succeed, returning a `RegAllocResult` with the new instruction
-/// sequence, or it may fail, returning an error string.
+/// Allocate registers for a function's code, given a universe of real
+/// registers that we are allowed to use. Allocate may succeed, returning a
+/// `RegAllocResult` with the new instruction sequence, or it may fail,
+/// returning an error string.
 ///
-/// TODO: better error type? Are there a few canonical errors we return (out of regs, ...)?
+/// TODO: better error type? Are there a few canonical errors we return (out
+/// of regs, ...)?
 pub fn allocate_registers<F: Function>(
   func: &mut F, rreg_universe: &RealRegUniverse,
 ) -> Result<RegAllocResult<F>, String> {
-  // TODO: take configuration options and choose between backtracking, lsra, or other
-  // implementation options.
+  // TODO: take configuration options and choose between backtracking, lsra,
+  // or other implementation options.
   backtracking::alloc_main(func, rreg_universe)
 }

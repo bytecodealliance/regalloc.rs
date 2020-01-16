@@ -6,6 +6,7 @@
 #![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
+use log::debug;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use std::cmp::Ordering;
@@ -20,7 +21,6 @@ use std::ops::IndexMut;
 use std::ops::Range;
 use std::slice::{Iter, IterMut};
 use std::{fs, io};
-use log::debug;
 
 use crate::data_structures::{
   mkBlockIx, mkInstIx, mkRangeFrag, mkRangeFragIx, mkRealRangeIx,
@@ -110,7 +110,7 @@ impl CFGInfo {
     // complications that might later arise if the same loop is enumerated
     // more than once.
     let mut back_edges = Set::<(BlockIx, BlockIx)>::empty(); // (m->n)
-                                                             // Iterate over all edges
+    // Iterate over all edges
     for bixM in mkBlockIx(0).dotdot(mkBlockIx(nBlocks)) {
       for bixN in succ_map[bixM].iter() {
         if dom_map[bixM].contains(*bixN) {
