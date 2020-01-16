@@ -1,11 +1,12 @@
 /* -*- Mode: Rust; tab-width: 8; indent-tabs-mode: nil; rust-indent-offset: 2 -*-
  * vim: set ts=8 sts=2 et sw=2 tw=80:
 */
-//! This is the top level interface for the regalloc library.
 
 #![allow(non_snake_case)]
 #![allow(unused_imports)]
 #![allow(non_camel_case_types)]
+
+//! This is the top level interface for the regalloc library.
 
 use crate::backtracking;
 

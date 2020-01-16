@@ -1,3 +1,11 @@
+/* -*- Mode: Rust; tab-width: 8; indent-tabs-mode: nil; rust-indent-offset: 2 -*-
+ * vim: set ts=8 sts=2 et sw=2 tw=80:
+*/
+
+#![allow(non_snake_case)]
+#![allow(unused_imports)]
+#![allow(non_camel_case_types)]
+
 /* TODOs, 11 Dec 2019
 
 MVP (without these, the implementation is useless in practice):
