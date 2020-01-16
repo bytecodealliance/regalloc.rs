@@ -14,6 +14,7 @@ use crate::data_structures::{
 };
 use crate::interface::{Function, RegAllocResult};
 use std::fmt;
+use log::debug;
 
 //=============================================================================
 // The as-yet-unallocated VirtualReg LR prio queue
@@ -82,18 +83,15 @@ impl VirtualRangePrioQ {
   #[inline(never)]
   fn show_with_envs(
     &self, vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
-  ) -> String {
-    let mut res = "".to_string();
+  ) -> Vec<String> {
+    let mut resV = vec![];
     let mut first = true;
     for vlrix in self.unallocated.iter() {
-      if !first {
-        res += &"\n".to_string();
-      }
-      first = false;
-      res += &"TODO  ".to_string();
+      let mut res = "TODO  ".to_string();
       res += &format!("{:?}", &vlr_env[*vlrix]);
+      resV.push(res);
     }
-    res
+    resV
   }
 }
 
@@ -321,23 +319,28 @@ fn print_RA_state(
   vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
 ) {
-  println!("<<<<====---- RA state at '{}' ----====", who);
+  debug!("<<<<====---- RA state at '{}' ----====", who);
   for ix in 0..perRealReg.len() {
-    println!(
-      "{:<4}   {}\n      {}",
+    debug!(
+      "{:<4}   {}",
       universe.regs[ix].1,
-      &perRealReg[ix].show1_with_envs(&frag_env),
+      &perRealReg[ix].show1_with_envs(&frag_env)
+    );
+    debug!(
+      "      {}",
       &perRealReg[ix].show2_with_envs(&frag_env)
     );
-    println!("");
+    debug!("");
   }
   if !prioQ.is_empty() {
-    println!("{}", prioQ.show_with_envs(&vlr_env));
+    for s in prioQ.show_with_envs(&vlr_env) {
+      debug!("{}", s);
+    }
   }
   for eli in editList {
-    println!("{:?}", eli);
+    debug!("{:?}", eli);
   }
-  println!(">>>>");
+  debug!(">>>>");
 }
 
 //=============================================================================
@@ -419,7 +422,7 @@ pub fn alloc_main<F: Function>(
   }
 
   let mut editList = Vec::<EditListItem>::new();
-  println!("");
+  debug!("");
   print_RA_state(
     "Initial",
     &reg_universe,
@@ -445,12 +448,12 @@ pub fn alloc_main<F: Function>(
   //
   // * split it.  This causes it to disappear but be replaced by two
   //   VirtualRanges which together constitute the original.
-  println!("");
-  println!("-- MAIN ALLOCATION LOOP:");
+  debug!("");
+  debug!("-- MAIN ALLOCATION LOOP:");
   while let Some(curr_vlrix) = prioQ.get_longest_VirtualRange(&vlr_env) {
     let curr_vlr = &vlr_env[curr_vlrix];
 
-    println!("-- considering        {:?}:  {:?}", curr_vlrix, curr_vlr);
+    debug!("-- considering        {:?}:  {:?}", curr_vlrix, curr_vlr);
 
     debug_assert!(curr_vlr.vreg.to_reg().is_virtual());
     let curr_vlr_rc = curr_vlr.vreg.get_class().rc_to_usize();
@@ -482,7 +485,7 @@ pub fn alloc_main<F: Function>(
     if let Some(rregNo) = rreg_to_use {
       // Yay!
       let rreg = reg_universe.regs[rregNo].0;
-      println!("--   direct alloc to  {:?}", rreg);
+      debug!("--   direct alloc to  {:?}", rreg);
       perRealReg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
       debug_assert!(curr_vlr.rreg.is_none());
       // Directly modify bits of vlr_env.  This means we have to abandon
@@ -530,7 +533,7 @@ pub fn alloc_main<F: Function>(
     }
     if let Some((rregNo, vlrix_to_evict, _)) = best_so_far {
       // Evict ..
-      println!(
+      debug!(
         "--   evict            {:?}:  {:?}",
         vlrix_to_evict, &vlr_env[vlrix_to_evict]
       );
@@ -540,7 +543,7 @@ pub fn alloc_main<F: Function>(
       debug_assert!(vlr_env[vlrix_to_evict].rreg.is_some());
       // .. and reassign.
       let rreg = reg_universe.regs[rregNo].0;
-      println!("--   then alloc to    {:?}", rreg);
+      debug!("--   then alloc to    {:?}", rreg);
       perRealReg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
       debug_assert!(curr_vlr.rreg.is_none());
       // Directly modify bits of vlr_env.  This means we have to abandon
@@ -553,7 +556,7 @@ pub fn alloc_main<F: Function>(
 
     // Still no luck.  We can't find a register to put it in, so we'll
     // have to spill it, since splitting it isn't yet implemented.
-    println!("--   spill");
+    debug!("--   spill");
 
     // If the live range already pertains to a spill or restore, then
     // it's Game Over.  The constraints (availability of RealRegs vs
@@ -685,7 +688,7 @@ pub fn alloc_main<F: Function>(
       };
       let new_vlr_fix = mkRangeFragIx(frag_env.len() as u32);
       frag_env.push(new_vlr_frag);
-      println!(
+      debug!(
         "--     new RangeFrag       {:?}  :=  {:?}",
         &new_vlr_fix, &new_vlr_frag
       );
@@ -698,7 +701,7 @@ pub fn alloc_main<F: Function>(
         spillCost: None, /*infinity*/
       };
       let new_vlrix = mkVirtualRangeIx(vlr_env.len() as u32);
-      println!(
+      debug!(
         "--     new VirtualRange        {:?}  :=  {:?}",
         new_vlrix, &new_vlr
       );
@@ -707,14 +710,14 @@ pub fn alloc_main<F: Function>(
 
       let new_eli =
         EditListItem { slot: nextSpillSlot, vlrix: new_vlrix, kind: sri.kind };
-      println!("--     new ELI        {:?}", &new_eli);
+      debug!("--     new ELI        {:?}", &new_eli);
       editList.push(new_eli);
     }
 
     nextSpillSlot = nextSpillSlot.inc(num_slots);
   }
 
-  println!("");
+  debug!("");
   print_RA_state(
     "Final",
     &reg_universe,
@@ -770,8 +773,8 @@ pub fn alloc_main<F: Function>(
     frag_env[*fixNo1].last.iix.partial_cmp(&frag_env[*fixNo2].last.iix).unwrap()
   });
 
-  //println!("Firsts: {}", fragMapsByStart.show());
-  //println!("Lasts:  {}", fragMapsByEnd.show());
+  //debug!("Firsts: {}", fragMapsByStart.show());
+  //debug!("Lasts:  {}", fragMapsByEnd.show());
 
   let mut cursorStarts = 0;
   let mut numStarts = 0;
@@ -823,10 +826,10 @@ pub fn alloc_main<F: Function>(
   }
 
   for insnIx in func.insn_indices() {
-    //println!("");
-    //println!("QQQQ insn {}: {}",
+    //debug!("");
+    //debug!("QQQQ insn {}: {}",
     //         insnIx, func.insns[insnIx].show());
-    //println!("QQQQ init map {}", showMap(&map));
+    //debug!("QQQQ init map {}", showMap(&map));
     // advance [cursorStarts, +numStarts) to the group for insnIx
     while cursorStarts < fragMapsByStart.len()
       && frag_env[fragMapsByStart[cursorStarts].0].first.iix < insnIx
@@ -859,15 +862,15 @@ pub fn alloc_main<F: Function>(
     // order.  And fragMapsByEnd[cursorEnd, +numEnd) are the RangeFragIxs
     // for fragments that end at this instruction.
 
-    //println!("insn no {}:", insnIx);
+    //debug!("insn no {}:", insnIx);
     //for j in cursorStarts .. cursorStarts + numStarts {
-    //    println!("   s: {} {}",
+    //    debug!("   s: {} {}",
     //             (fragMapsByStart[j].1, fragMapsByStart[j].2).show(),
     //             frag_env[ fragMapsByStart[j].0 ]
     //             .show());
     //}
     //for j in cursorEnds .. cursorEnds + numEnds {
-    //    println!("   e: {} {}",
+    //    debug!("   e: {} {}",
     //             (fragMapsByEnd[j].1, fragMapsByEnd[j].2).show(),
     //             frag_env[ fragMapsByEnd[j].0 ]
     //             .show());
@@ -905,8 +908,8 @@ pub fn alloc_main<F: Function>(
     //   remove frags ending at I.s
     // apply mapU/mapD to I
 
-    //println!("QQQQ mapping insn {:?}", insnIx);
-    //println!("QQQQ current map {}", showMap(&map));
+    //debug!("QQQQ mapping insn {:?}", insnIx);
+    //debug!("QQQQ current map {}", showMap(&map));
 
     // Update map for I.r:
     //   add frags starting at I.r
@@ -916,7 +919,7 @@ pub fn alloc_main<F: Function>(
       if frag.first.pt.isReload() {
         //////// STARTS at I.r
         map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
-        //println!(
+        //debug!(
         //  "QQQQ inserted frag from reload: {:?} -> {:?}",
         //  fragMapsByStart[j].1, fragMapsByStart[j].2
         //);
@@ -932,7 +935,7 @@ pub fn alloc_main<F: Function>(
       if frag.first.pt.isUse() {
         //////// STARTS at I.u
         map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
-        //println!(
+        //debug!(
         //  "QQQQ inserted frag from use: {:?} -> {:?}",
         //  fragMapsByStart[j].1, fragMapsByStart[j].2
         //);
@@ -944,7 +947,7 @@ pub fn alloc_main<F: Function>(
       if frag.last.pt.isUse() {
         //////// ENDS at I.U
         map.remove(&fragMapsByEnd[j].1);
-        //println!("QQQQ removed frag after use: {:?}", fragMapsByStart[j].1);
+        //debug!("QQQQ removed frag after use: {:?}", fragMapsByStart[j].1);
       }
     }
 
@@ -957,7 +960,7 @@ pub fn alloc_main<F: Function>(
       if frag.first.pt.isDef() {
         //////// STARTS at I.d
         map.insert(fragMapsByStart[j].1, fragMapsByStart[j].2);
-        //println!(
+        //debug!(
         //  "QQQQ inserted frag from def: {:?} -> {:?}",
         //  fragMapsByStart[j].1, fragMapsByStart[j].2
         //);
@@ -969,7 +972,7 @@ pub fn alloc_main<F: Function>(
       if frag.last.pt.isDef() {
         //////// ENDS at I.d
         map.remove(&fragMapsByEnd[j].1);
-        //println!("QQQQ ended frag from def: {:?}", fragMapsByEnd[j].1);
+        //debug!("QQQQ ended frag from def: {:?}", fragMapsByEnd[j].1);
       }
     }
 
@@ -981,12 +984,12 @@ pub fn alloc_main<F: Function>(
       if frag.last.pt.isSpill() {
         //////// ENDS at I.s
         map.remove(&fragMapsByEnd[j].1);
-        //println!("QQQQ ended frag from spill: {:?}", fragMapsByEnd[j].1);
+        //debug!("QQQQ ended frag from spill: {:?}", fragMapsByEnd[j].1);
       }
     }
 
-    //println!("QQQQ mapU {}", showMap(&mapU));
-    //println!("QQQQ mapD {}", showMap(&mapD));
+    //debug!("QQQQ mapU {}", showMap(&mapU));
+    //debug!("QQQQ mapD {}", showMap(&mapD));
 
     // Finally, we have mapU/mapD set correctly for this instruction.
     // Apply it.
@@ -999,7 +1002,7 @@ pub fn alloc_main<F: Function>(
 
     for b in func.blocks() {
       if func.block_insns(b).last() == insnIx {
-        //println!("Block end");
+        //debug!("Block end");
         debug_assert!(map.is_empty());
       }
     }
@@ -1014,7 +1017,7 @@ pub fn alloc_main<F: Function>(
   // insert them.
   let mut spillsAndReloads = Vec::<(InstPoint, F::Inst)>::new();
   for eli in &editList {
-    println!("editlist entry: {:?}", eli);
+    debug!("editlist entry: {:?}", eli);
     let vlr = &vlr_env[eli.vlrix];
     let vlr_sfrags = &vlr.sortedFrags;
     debug_assert!(vlr.sortedFrags.fragIxs.len() == 1);
@@ -1052,7 +1055,7 @@ pub fn alloc_main<F: Function>(
   }
 
   //for pair in &spillsAndReloads {
-  //    println!("spill/reload: {}", pair.show());
+  //    debug!("spill/reload: {}", pair.show());
   //}
 
   // Construct the final code by interleaving the mapped code with the

@@ -12,6 +12,7 @@ use std::ops::IndexMut;
 use std::ops::Range;
 use std::slice::{Iter, IterMut};
 use std::{fs, io};
+use log::debug;
 
 use crate::data_structures::{
   mkBlockIx, mkInstIx, mkRangeFrag, mkRangeFragIx, mkRealRangeIx,
@@ -894,26 +895,26 @@ pub fn run_analysis<F: Function>(
   debug_assert!(use_sets_per_block.len() == func.blocks().len() as u32);
 
   let mut n = 0;
-  println!("");
+  debug!("");
   for (def, uce) in def_sets_per_block.iter().zip(use_sets_per_block.iter()) {
-    println!("{:<3?}   def {:<16?}  use {:?}", mkBlockIx(n), def, uce);
+    debug!("{:<3?}   def {:<16?}  use {:?}", mkBlockIx(n), def, uce);
     n += 1;
   }
 
   let cfg_info = CFGInfo::create(func);
 
   n = 0;
-  println!("");
+  debug!("");
   for (preds, succs) in cfg_info.pred_map.iter().zip(cfg_info.succ_map.iter()) {
-    println!("{:<3?}   preds {:<16?}  succs {:?}", mkBlockIx(n), preds, succs);
+    debug!("{:<3?}   preds {:<16?}  succs {:?}", mkBlockIx(n), preds, succs);
     n += 1;
   }
 
   n = 0;
-  println!("");
+  debug!("");
   for (depth, dom_by) in cfg_info.depth_map.iter().zip(cfg_info.dom_map.iter())
   {
-    println!("{:<3?}   depth {}   dom_by {:<16?}", mkBlockIx(n), depth, dom_by);
+    debug!("{:<3?}   depth {}   dom_by {:<16?}", mkBlockIx(n), depth, dom_by);
     n += 1;
   }
 
@@ -942,11 +943,11 @@ pub fn run_analysis<F: Function>(
   debug_assert!(liveout_sets_per_block.len() == func.blocks().len() as u32);
 
   n = 0;
-  println!("");
+  debug!("");
   for (livein, liveout) in
     livein_sets_per_block.iter().zip(liveout_sets_per_block.iter())
   {
-    println!(
+    debug!(
       "{:<3?}   livein {:<16?}  liveout {:<16?}",
       mkBlockIx(n),
       livein,
@@ -962,33 +963,33 @@ pub fn run_analysis<F: Function>(
   let (fragIxs_per_reg, mut frag_env) =
     get_RangeFrags(func, &livein_sets_per_block, &liveout_sets_per_block);
 
-  println!("");
+  debug!("");
   n = 0;
   for frag in frag_env.iter() {
-    println!("{:<3?}   {:?}", mkRangeFragIx(n), frag);
+    debug!("{:<3?}   {:?}", mkRangeFragIx(n), frag);
     n += 1;
   }
 
-  println!("");
+  debug!("");
   for (reg, fragIxs) in fragIxs_per_reg.iter() {
-    println!("frags for {:?}   {:?}", reg, fragIxs);
+    debug!("frags for {:?}   {:?}", reg, fragIxs);
   }
 
   let (rlr_env, mut vlr_env) =
     merge_RangeFrags(&fragIxs_per_reg, &frag_env, &cfg_info);
   set_VirtualRange_metrics(&mut vlr_env, &frag_env, &estFreqs);
 
-  println!("");
+  debug!("");
   n = 0;
   for rlr in rlr_env.iter() {
-    println!("{:<4?}   {:?}", mkRealRangeIx(n), rlr);
+    debug!("{:<4?}   {:?}", mkRealRangeIx(n), rlr);
     n += 1;
   }
 
-  println!("");
+  debug!("");
   n = 0;
   for vlr in vlr_env.iter() {
-    println!("{:<4?}   {:?}", mkVirtualRangeIx(n), vlr);
+    debug!("{:<4?}   {:?}", mkVirtualRangeIx(n), vlr);
     n += 1;
   }
 

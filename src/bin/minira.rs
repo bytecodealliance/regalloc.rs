@@ -446,7 +446,7 @@ fn main() {
 
   let reg_universe = make_universe(nRegsI32, nRegsF32);
 
-  func.print("Initial");
+  func.print("before allocation");
 
   // Just so we can run it later.  Not needed for actual allocation.
   let original_func = func.clone();
@@ -461,8 +461,8 @@ fn main() {
         }
         Ok(r) => r,
       };
-      // Update the function itself. This bridges the gap from the generic interface
-      // to our specific test ISA.
+      // Update the function itself. This bridges the gap from the generic
+      // interface to our specific test ISA.
       func.update_from_alloc(result);
     }
     RegAllocAlgorithm::LinearScan => {
@@ -477,7 +477,7 @@ fn main() {
     }
   }
 
-  func.print("After allocation");
+  func.print("after allocation");
 
   run_func(
     &original_func,
