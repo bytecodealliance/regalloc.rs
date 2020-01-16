@@ -229,15 +229,15 @@ impl<'a> IState<'a> {
     self.slots[ix] = Some(mkU32(val));
   }
 
-  //fn setSpillSlotF32(&mut self, slot: SpillSlot, val: f32) {
-  //  // Auto-resize the vector if necessary
-  //  let ix = slot.get_usize();
-  //  if ix >= self.slots.len() {
-  //    self.slots.resize(ix + 1, None);
-  //  }
-  //  debug_assert!(ix < self.slots.len());
-  //  self.slots[ix] = Some(mkF32(val));
-  //}
+  fn setSpillSlotF32(&mut self, slot: SpillSlot, val: f32) {
+    // Auto-resize the vector if necessary
+    let ix = slot.get_usize();
+    if ix >= self.slots.len() {
+      self.slots.resize(ix + 1, None);
+    }
+    debug_assert!(ix < self.slots.len());
+    self.slots[ix] = Some(mkF32(val));
+  }
 
   fn get_reg(&self, reg: Reg) -> Value {
     if reg.is_virtual() {
@@ -364,9 +364,19 @@ impl<'a> IState<'a> {
         self.setSpillSlotU32(*dst, src_v);
         self.n_spills += 1;
       }
+      Inst::SpillF { dst, src } => {
+        let src_v = self.get_real_reg(*src).toF32();
+        self.setSpillSlotF32(*dst, src_v);
+        self.n_spills += 1;
+      }
       Inst::Reload { dst, src } => {
         let src_v = self.getSpillSlot(*src).toU32();
         self.set_reg_u32(dst.to_reg(), src_v);
+        self.n_reloads += 1;
+      }
+      Inst::ReloadF { dst, src } => {
+        let src_v = self.getSpillSlot(*src).toF32();
+        self.set_reg_f32(dst.to_reg(), src_v);
         self.n_reloads += 1;
       }
       Inst::Goto { target } => {
@@ -381,10 +391,6 @@ impl<'a> IState<'a> {
       Inst::PrintI { reg } => print!("{:?}", self.get_reg(*reg).toU32()),
       Inst::PrintF { reg } => print!("{:?}", self.get_reg(*reg).toF32()),
       Inst::Finish {} => done = true,
-      _ => {
-        println!("Interp: unhandled: {:?}", insn);
-        panic!("IState::step: unhandled insn");
-      }
     }
     done
   }
@@ -652,4 +658,13 @@ fn bt__fp1() {
 #[test]
 fn lsra__fp1() {
   test_utils::lsra("fp1", 8, 8);
+}
+
+#[test]
+fn bt__fp2() {
+  test_utils::bt("fp2", 8, 8);
+}
+#[test]
+fn lsra__fp2() {
+  test_utils::lsra("fp2", 8, 8);
 }

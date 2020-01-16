@@ -1013,9 +1013,9 @@ fn s_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
   s_vanilla(i_cmp_gt(dst, srcL, srcR))
 }
 
-//fn s_addm(dst: Reg, srcR: RI) -> Stmt {
-//  s_vanilla(i_addm(dst, srcR))
-//}
+fn s_addm(dst: Reg, srcR: RI) -> Stmt {
+  s_vanilla(i_addm(dst, srcR))
+}
 //fn s_subm(dst: Reg, srcR: RI) -> Stmt {
 //  s_vanilla(i_subm(dst, srcR))
 //}
@@ -1029,9 +1029,9 @@ fn s_fadd(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
 //fn s_fmul(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
 //  s_vanilla(i_fmul(dst, srcL, srcR))
 //}
-//fn s_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
-//  s_vanilla(i_fdiv(dst, srcL, srcR))
-//}
+fn s_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
+  s_vanilla(i_fdiv(dst, srcL, srcR))
+}
 
 //=============================================================================
 // The "blockifier".  This is just to make it easier to write test cases, by
@@ -2668,7 +2668,8 @@ fn test__fp1() -> Func {
   let f0 = bif.newVirtualReg(RegClass::F32);
   let f1 = bif.newVirtualReg(RegClass::F32);
   let f2 = bif.newVirtualReg(RegClass::F32);
-  // Fill up mem[0..9] with some numbers
+  // Do some extremely lame FP things.  This tests insns (storef, loadf) that
+  // use more than one register class.
 
   let stmts = vec![
     s_immf(f0, 0.123),
@@ -2679,70 +2680,103 @@ fn test__fp1() -> Func {
     s_loadf(f2, AM_RI(zz, 0)),
     s_print_f(f2),
     s_print_s("\n"),
-    /*
-    s_imm(vSUM, 0),
-    s_imm(vI, 0),
+  ];
+
+  bif.finish(stmts)
+}
+
+fn test__fp2() -> Func {
+  let mut bif = Blockifier::new("fp2");
+  let nItems = bif.newVirtualReg(RegClass::I32);
+  let nItemsM2 = bif.newVirtualReg(RegClass::I32);
+  let zero = bif.newVirtualReg(RegClass::I32);
+  let i = bif.newVirtualReg(RegClass::I32);
+  let j = bif.newVirtualReg(RegClass::I32);
+  let k = bif.newVirtualReg(RegClass::I32);
+  let bi = bif.newVirtualReg(RegClass::I32);
+  let bj = bif.newVirtualReg(RegClass::I32);
+  let f0 = bif.newVirtualReg(RegClass::F32);
+  let f1 = bif.newVirtualReg(RegClass::F32);
+  let f2 = bif.newVirtualReg(RegClass::F32);
+
+  // This test has a double-nested loop with a bit of FP register action in
+  // the innermost loop.
+
+  let stmts = vec![
+    s_imm(nItems, 10),
+    s_sub(nItemsM2, nItems, RI_I(2)),
+    // Park initial numbers in mem[0..9]
+    s_imm(zero, 0),
+    s_immf(f0, 3.0),
+    s_storef(AM_RI(zero, 0), f0),
+    s_immf(f0, 1.0),
+    s_storef(AM_RI(zero, 1), f0),
+    s_immf(f0, 4.0),
+    s_storef(AM_RI(zero, 2), f0),
+    s_immf(f0, 1.0),
+    s_storef(AM_RI(zero, 3), f0),
+    s_immf(f0, 5.0),
+    s_storef(AM_RI(zero, 4), f0),
+    s_immf(f0, 9.0),
+    s_storef(AM_RI(zero, 5), f0),
+    s_immf(f0, 2.0),
+    s_storef(AM_RI(zero, 6), f0),
+    s_immf(f0, 6.0),
+    s_storef(AM_RI(zero, 7), f0),
+    s_immf(f0, 5.0),
+    s_storef(AM_RI(zero, 8), f0),
+    s_immf(f0, 4.0),
+    s_storef(AM_RI(zero, 9), f0),
+    // Do the following 10 times:
+    //   "smooth" the array by doing a moving average on it
+    //     = replace each mem[i] for i in 2 ..= nItemsM2 with
+    //       (mem[i-2] + mem[i-1] + mem[i] + mem[i+1] + mem[i+2]) / 5.0
+    //   print it out
+    s_imm(j, 0),
     s_repeat_until(
       vec![
-        s_imm(vJ, 0),
+        // smooth
+        s_imm(i, 2),
         s_repeat_until(
           vec![
-            s_mul(vTMP, vI, RI_R(vJ)),
-            s_add(vSUM, vSUM, RI_R(vTMP)),
-            s_add(vJ, vJ, RI_I(1)),
-            s_cmp_gt(vTMP, vJ, RI_I(10)),
+            s_sub(k, i, RI_I(2)),
+            s_loadf(f0, AM_RI(k, 0)),
+            s_loadf(f1, AM_RI(k, 1)),
+            s_loadf(f2, AM_RI(k, 2)),
+            s_fadd(f0, f0, f1),
+            s_fadd(f0, f0, f2),
+            s_loadf(f1, AM_RI(k, 3)),
+            s_loadf(f2, AM_RI(k, 4)),
+            s_fadd(f0, f0, f1),
+            s_fadd(f0, f0, f2),
+            s_immf(f1, 5.0),
+            s_fdiv(f0, f0, f1),
+            s_storef(AM_RI(k, 2), f0),
+            s_addm(i, RI_I(1)),
+            s_cmp_ge(bi, i, RI_R(nItemsM2)),
           ],
-          vTMP,
+          bi,
         ),
-        s_add(vSUM, vSUM, RI_R(vI)),
-        s_add(vI, vI, RI_I(1)),
-        s_cmp_gt(vTMP, vI, RI_I(10)),
-      ],
-      vTMP,
-    ),
-    s_print_s("Result is "),
-    s_print_i(vSUM),
-    s_print_s("\n"),
-     */
-  ];
-  /*
-  let stmts = vec![
-      s_imm(v0, 0),
-      s_imm(v1, 0),
-      s_imm(v2, 0),
-      s_add(v0, v1, RI_R(v2)),
-      s_add(v2, v1, RI_R(v0)),
-      s_ite(v0, vec![
-                s_add(v2, v2, RI_I(0)),
-                s_ite(v2, vec![
-                          s_add(v2, v2, RI_I(1))
-                      ], vec![
-                          s_add(v2, v2, RI_I(2))
-                      ],
-                ),
-            ], vec![
-                s_add(v1, v1, RI_I(3))
-            ]
-      ),
-      s_add(v0, v0, RI_I(4)),
-      s_repeat_until(
+        // print the array
+        s_imm(i, 0),
+        s_repeat_until(
           vec![
-                s_add(v1, v1, RI_I(5)),
-                s_add(v1, v1, RI_I(6)),
-                s_add(v1, v1, RI_I(7))
+            s_loadf(f0, AM_RI(i, 0)),
+            s_print_f(f0),
+            s_print_s(" "),
+            s_addm(i, RI_I(1)),
+            s_cmp_ge(bi, i, RI_R(nItems)),
           ],
-          v0
-      ),
-      s_add(v0, v0, RI_I(10)),
-      s_add(v0, v0, RI_I(11)),
-      s_while_do(
-          v2,
-          vec![
-              s_add(v2, v2, RI_I(12))
-          ]
-      )
+          bi,
+        ),
+        s_print_s("\n"),
+        s_addm(j, RI_I(1)),
+        s_cmp_ge(bj, j, RI_R(nItems)),
+      ],
+      bj,
+    ),
   ];
-   */
+
   bif.finish(stmts)
 }
 
@@ -2762,7 +2796,8 @@ pub fn find_Func(name: &str) -> Result<Func, Vec<String>> {
     test__qsort(),            // big qsort test, 3-operand only
     test__fill_then_sum_2a(), // 2-operand version of fill_then_sum
     test__ssort_2a(),         // 2-operand version of shellsort
-    test__fp1(),              // a bit of FP
+    test__fp1(),              // very feeble floating point
+    test__fp2(),              // floating point with loops and arrays
   ];
 
   let mut all_names = Vec::new();
