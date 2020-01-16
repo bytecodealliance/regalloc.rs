@@ -170,8 +170,6 @@ fn update_state<'a>(
   trace!("starting update_state...");
   let start_point = state.intervals[cur_id].start_point(&fragments);
 
-  //let mut regs = state.regs;
-
   let mut next_active = Vec::new();
   let mut next_inactive = Vec::new();
 
@@ -179,10 +177,6 @@ fn update_state<'a>(
     let active_int = &mut state.intervals[active_int_id];
     if active_int.end_point(fragments) < start_point {
       debug!("update_state: active {:?} becomes handled", active_int_id);
-      // Free the register, if it was allocated one.
-      //if let Some(reg) = active_int.allocated_register() {
-      //regs[reg.get_class() as usize].free(&reg);
-      //}
       state.handled.push(active_int_id);
     } else if active_int.covers(&start_point, fragments) {
       debug!("update_state: active {:?} stays active", active_int_id);
@@ -197,10 +191,6 @@ fn update_state<'a>(
     let inactive_int = &mut state.intervals[inactive_int_id];
     if inactive_int.end_point(fragments) < start_point {
       debug!("update_state: inactive {:?} becomes handled", inactive_int_id);
-      // Free the register, if it was allocated one.
-      //if let Some(reg) = inactive_int.allocated_register() {
-      //regs[reg.get_class() as usize].free(&reg);
-      //}
       state.handled.push(inactive_int_id);
     } else if inactive_int.covers(&start_point, fragments) {
       debug!("update_state: inactive {:?} becomes active", inactive_int_id);
@@ -213,7 +203,6 @@ fn update_state<'a>(
 
   state.active = next_active;
   state.inactive = next_inactive;
-  //state.regs = regs;
 
   trace!("done with update_state!");
   state
@@ -234,7 +223,9 @@ fn try_allocate_reg(
 
   for &id in &state.active {
     if let Some(reg) = state.intervals[id].allocated_register() {
-      free_until_pos[reg].1 = InstPoint::min_value();
+      if reg.get_class() == reg_class {
+        free_until_pos[reg].1 = InstPoint::min_value();
+      }
     }
   }
 
@@ -242,6 +233,9 @@ fn try_allocate_reg(
     let cur_int = &state.intervals[id];
     for &id in &state.inactive {
       if let Some(reg) = state.intervals[id].allocated_register() {
+        if reg.get_class() != reg_class {
+          continue;
+        }
         if let Some(intersect_at) =
           state.intervals[id].intersects_with(cur_int, fragments)
         {
@@ -271,11 +265,7 @@ fn try_allocate_reg(
         best_reg = Some(reg);
       }
     }
-    if let Some(best_reg) = best_reg {
-      Some((best_reg, best_pos))
-    } else {
-      None
-    }
+    best_reg.and_then(|reg| Some((reg, best_pos)))
   };
 
   let (best_reg, best_pos) = if let Some(solution) = solution {
@@ -285,18 +275,19 @@ fn try_allocate_reg(
     return false;
   };
 
+  if state.intervals[id].end_point(fragments) >= best_pos {
+    // The current interval is partially covered, try to split it.
+    if !split_at(state, id, SplitPosition::At(best_pos)) {
+      return false;
+    }
+  }
+
   // At least a partial match: allocate.
   if let Some(fixed_reg) = state.intervals[id].fixed_reg() {
     debug!("{:?} <- {:?} (fixed)", id, fixed_reg);
   } else {
     debug!("{:?} <- {:?} (virtual)", id, best_reg);
     state.intervals[id].set_reg(best_reg);
-  }
-  //state.regs[reg_class as usize].take(&best_reg);
-
-  if state.intervals[id].end_point(fragments) >= best_pos {
-    // The current interval is partially covered, split it.
-    split_at(state, id, SplitPosition::At(best_pos));
   }
 
   true
@@ -310,7 +301,9 @@ enum SplitPosition {
   At(InstPoint),
 }
 
-fn split_at(_state: &mut State, _id: LiveId, _split_pos: SplitPosition) {
+fn split_at(
+  _state: &mut State, _id: LiveId, _split_pos: SplitPosition,
+) -> bool {
   unimplemented!("split_at")
 }
 
