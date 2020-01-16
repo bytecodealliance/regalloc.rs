@@ -540,114 +540,116 @@ mod test_utils {
   }
 }
 
+// At some point we'll want to repeat all these tests with the number of
+// registers iterating down to 3, so as to stress the spilling machinery as
+// much as we can.
+
 #[test]
-fn bt_badness() {
+fn bt__badness() {
   test_utils::bt("badness", 1, 0);
 }
-
 #[test]
-fn bt_straight_line() {
-  test_utils::bt("straight_line", 1, 0);
-}
-
-#[test]
-fn bt_fill_then_sum() {
-  test_utils::bt("fill_then_sum", 8, 8);
-}
-
-#[test]
-fn bt_ssort() {
-  test_utils::bt("ssort", 8, 8);
-}
-
-#[test]
-fn bt_3_loops() {
-  test_utils::bt("3_loops", 8, 8);
-}
-
-#[test]
-fn bt_stmts() {
-  test_utils::bt("stmts", 8, 8);
-}
-
-#[test]
-fn bt_needs_splitting() {
-  test_utils::bt("needs_splitting", 8, 8);
-}
-
-#[test]
-fn bt_needs_splitting2() {
-  test_utils::bt("needs_splitting2", 8, 8);
-}
-
-#[test]
-fn bt_qsort() {
-  test_utils::bt("qsort", 8, 8);
-}
-
-#[test]
-fn bt_fill_then_sum_2a() {
-  test_utils::bt("fill_then_sum_2a", 8, 8);
-}
-
-#[test]
-fn bt_ssort_2a() {
-  test_utils::bt("ssort_2a", 8, 8);
-}
-
-#[test]
-fn lsra_badness() {
+fn lsra__badness() {
   test_utils::lsra("badness", 1, 0);
 }
 
 #[test]
-fn lsra_straight_line() {
+fn bt__straight_line() {
+  test_utils::bt("straight_line", 1, 0);
+}
+#[test]
+fn lsra__straight_line() {
   test_utils::lsra("straight_line", 2, 0);
 }
 
 #[test]
-fn lsra_fill_then_sum() {
+fn bt__fill_then_sum() {
+  test_utils::bt("fill_then_sum", 8, 8);
+}
+#[test]
+fn lsra__fill_then_sum() {
   test_utils::lsra("fill_then_sum", 32, 32);
   //test_utils::lsra("fill_then_sum", 8, 8);
 }
 
 #[test]
-fn lsra_ssort() {
+fn bt__ssort() {
+  test_utils::bt("ssort", 8, 8);
+}
+#[test]
+fn lsra__ssort() {
   test_utils::lsra("ssort", 10, 10);
   //test_utils::lsra("ssort", 8, 8);
 }
 
 #[test]
-fn lsra_3_loops() {
+fn bt__3_loops() {
+  test_utils::bt("3_loops", 8, 8);
+}
+#[test]
+fn lsra__3_loops() {
   test_utils::lsra("3_loops", 8, 8);
 }
 
 #[test]
-fn lsra_stmts() {
+fn bt__stmts() {
+  test_utils::bt("stmts", 8, 8);
+}
+#[test]
+fn lsra__stmts() {
   test_utils::lsra("stmts", 8, 8);
 }
 
 #[test]
-fn lsra_needs_splitting() {
+fn bt__needs_splitting() {
+  test_utils::bt("needs_splitting", 8, 8);
+}
+#[test]
+fn lsra__needs_splitting() {
   test_utils::lsra("needs_splitting", 8, 8);
 }
 
 #[test]
-fn lsra_needs_splitting2() {
+fn bt__needs_splitting2() {
+  test_utils::bt("needs_splitting2", 8, 8);
+}
+#[test]
+fn lsra__needs_splitting2() {
   test_utils::lsra("needs_splitting2", 8, 8);
 }
 
 #[test]
-fn lsra_qsort() {
+fn bt__qsort() {
+  test_utils::bt("qsort", 8, 8);
+}
+#[test]
+fn lsra__qsort() {
   test_utils::lsra("qsort", 8, 8);
 }
 
 #[test]
-fn lsra_2a_fill_then_sum() {
+fn bt__fill_then_sum_2a() {
+  test_utils::bt("fill_then_sum_2a", 8, 8);
+}
+#[test]
+fn lsra__2a_fill_then_sum_2a() {
   test_utils::lsra("fill_then_sum_2a", 8, 8);
 }
 
 #[test]
-fn lsra_2a_ssort() {
+fn bt__ssort_2a() {
+  test_utils::bt("ssort_2a", 8, 8);
+}
+#[test]
+fn lsra__2a_ssort() {
   test_utils::lsra("ssort_2a", 8, 8);
+}
+
+#[test]
+fn bt__fp1() {
+  test_utils::bt("fp1", 8, 8);
+}
+#[test]
+fn lsra__fp1() {
+  test_utils::lsra("fp1", 8, 8);
 }
