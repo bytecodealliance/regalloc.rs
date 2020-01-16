@@ -25,9 +25,9 @@ use crate::interface::{Function, RegAllocResult};
 // function appears to have any undefined VirtualReg/RealReg uses.
 #[inline(never)]
 pub fn alloc_main<F: Function>(
-  func: &mut F, reg_universe: &RealRegUniverse,
+  func: &mut F, /*tmp*/ _reg_universe: &RealRegUniverse,
 ) -> Result<RegAllocResult<F>, String> {
-  let (rlr_env, mut vlr_env, mut frag_env) = run_analysis(func)?;
+  let _ /* TMP: (rlr_env, mut vlr_env, mut frag_env)*/ = run_analysis(func)?;
 
   unimplemented!("linear scan");
 }

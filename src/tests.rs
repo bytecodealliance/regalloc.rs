@@ -717,10 +717,10 @@ pub struct Func {
   pub nVirtualRegs: u32,
   pub insns: TypedIxVec<InstIx, Inst>, // indexed by InstIx
   pub blocks: TypedIxVec<BlockIx, Block>, // indexed by BlockIx
-  // Note that |blocks| must be in order of increasing |Block::start|
-  // fields.  Code that wants to traverse the blocks in some other order
-  // must represent the ordering some other way; rearranging Func::blocks is
-  // not allowed.
+                                       // Note that |blocks| must be in order of increasing |Block::start|
+                                       // fields.  Code that wants to traverse the blocks in some other order
+                                       // must represent the ordering some other way; rearranging Func::blocks is
+                                       // not allowed.
 }
 impl Clone for Func {
   // This is only needed for debug printing.
@@ -871,7 +871,6 @@ where
 
 enum Stmt {
   Vanilla { insn: Inst },
-  IfThen { cond: Reg, stmts_t: Vec<Stmt> },
   IfThenElse { cond: Reg, stmts_t: Vec<Stmt>, stmts_e: Vec<Stmt> },
   RepeatUntil { stmts: Vec<Stmt>, cond: Reg },
   WhileDo { cond: Reg, stmts: Vec<Stmt> },
@@ -963,13 +962,12 @@ fn s_subm(dst: Reg, srcR: RI) -> Stmt {
 struct Blockifier {
   name: String,
   blocks: Vec<TypedIxVec<InstIx, Inst>>,
-  currBNo: usize, // index into |blocks|
   nVirtualRegs: u32,
 }
 
 impl Blockifier {
   fn new<'a>(name: &'a str) -> Self {
-    Self { name: name.to_string(), blocks: vec![], currBNo: 0, nVirtualRegs: 0 }
+    Self { name: name.to_string(), blocks: vec![], nVirtualRegs: 0 }
   }
 
   // Get a new VirtualReg name
@@ -1031,7 +1029,6 @@ impl Blockifier {
           ));
           currBNo = cont;
         }
-        _ => panic!("blockify: unhandled case"),
       }
     }
     (entryBNo, currBNo)
@@ -1205,7 +1202,7 @@ impl interface::Function for Func {
   /// 64-bit machine, spill slots may nominally be 64-bit words, but a 128-bit
   /// vector value will require two slots.  The regalloc will always align on
   /// this size.
-  fn get_spillslot_size(&self, regclass: RegClass) -> u32 {
+  fn get_spillslot_size(&self, _regclass: RegClass) -> u32 {
     // For our simple test ISA, every value occupies one spill slot.
     1
   }
@@ -1243,7 +1240,7 @@ impl interface::Function for Func {
   /// as well. In other words, it is just using the spillslot as if it were a
   /// real register, for reads and/or writes.
   fn maybe_direct_reload(
-    &self, insn: &Self::Inst, reg: VirtualReg, slot: SpillSlot,
+    &self, _insn: &Self::Inst, _reg: VirtualReg, _slot: SpillSlot,
   ) -> Option<Self::Inst> {
     // test ISA does not have register-memory ALU instruction forms.
     None
@@ -1651,7 +1648,6 @@ fn test__3_loops() -> Func {
   let v10 = func.newVirtualReg(RegClass::I32);
   let v11 = func.newVirtualReg(RegClass::I32);
   let vI = func.newVirtualReg(RegClass::I32);
-  let vJ = func.newVirtualReg(RegClass::I32);
   let vSUM = func.newVirtualReg(RegClass::I32);
   let vTMP = func.newVirtualReg(RegClass::I32);
 

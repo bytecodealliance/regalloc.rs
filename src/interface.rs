@@ -48,9 +48,9 @@ pub struct InstRegUses {
   pub used: Set<Reg>,    // registers that are read.
   pub defined: Set<Reg>, // registers that are written.
   pub modified: Set<Reg>, // registers that are modified.
-  // Note that `modified` is distinct from just `used`+`defined` because
-  // the vreg must live in the same real reg both before and after the
-  // instruction.
+                         // Note that `modified` is distinct from just `used`+`defined` because
+                         // the vreg must live in the same real reg both before and after the
+                         // instruction.
 }
 
 // TypedIxVector, so that the interface can speak about vectors of blocks and

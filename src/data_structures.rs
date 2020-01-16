@@ -339,9 +339,6 @@ macro_rules! generate_boilerplate {
           $TypeIx::$TypeIx(n) => n,
         }
       }
-      fn get_usize(self) -> usize {
-        self.get() as usize
-      }
       pub fn plus(self, delta: u32) -> $TypeIx {
         $TypeIx::$TypeIx(self.get() + delta)
       }
@@ -756,7 +753,7 @@ impl RealRegUniverse {
     // will list some registers (stack pointer, etc) which are not
     // available for allocation.
     if ok {
-      ok = regs_allocable >= 0 && regs_allocable <= regs_len;
+      ok = regs_allocable <= regs_len;
     }
     // All registers must have an index value which points back at the
     // |regs| slot they are in.  Also they really must be real regs.
@@ -1164,20 +1161,6 @@ impl SortedRangeFragIxs {
 // algorithm.
 
 impl SortedRangeFragIxs {
-  // Structural equality, at least.  Not equality in the sense of
-  // deferencing the contained RangeFragIxes.
-  fn equals(&self, other: &SortedRangeFragIxs) -> bool {
-    if self.fragIxs.len() != other.fragIxs.len() {
-      return false;
-    }
-    for (mf1, mf2) in self.fragIxs.iter().zip(&other.fragIxs) {
-      if mf1 != mf2 {
-        return false;
-      }
-    }
-    true
-  }
-
   pub fn add(
     &mut self, to_add: &Self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) {
@@ -1278,9 +1261,7 @@ impl SortedRangeFragIxs {
         Some(Ordering::Greater) => {
           iy += 1;
         }
-        Some(Ordering::Equal) | None => {
-          panic!("SortedRangeFragIxs::del: partial overlap")
-        }
+        None => panic!("SortedRangeFragIxs::del: partial overlap"),
       }
     }
     debug_assert!(ix == sfixs_x.fragIxs.len() || iy == sfixs_y.fragIxs.len());
@@ -1414,6 +1395,22 @@ fn test_SortedRangeFragIxs() {
     &fenv[fix]
   }
 
+  // Structural equality, at least.  Not equality in the sense of
+  // deferencing the contained RangeFragIxes.
+  fn equal_SortedRangeFragIxs(
+    fixs1: &SortedRangeFragIxs, fixs2: &SortedRangeFragIxs,
+  ) -> bool {
+    if fixs1.fragIxs.len() != fixs2.fragIxs.len() {
+      return false;
+    }
+    for (mf1, mf2) in fixs1.fragIxs.iter().zip(&fixs2.fragIxs) {
+      if mf1 != mf2 {
+        return false;
+      }
+    }
+    true
+  }
+
   let iix3 = mkInstIx(3);
   let iix4 = mkInstIx(4);
   let iix5 = mkInstIx(5);
@@ -1538,23 +1535,23 @@ fn test_SortedRangeFragIxs() {
 
   tmp = smf_empty.clone();
   tmp.add(&smf_empty, &fenv);
-  assert!(tmp.equals(&smf_empty));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_empty));
 
   tmp = smf_3_12.clone();
   tmp.add(&smf_empty, &fenv);
-  assert!(tmp.equals(&smf_3_12));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_3_12));
 
   tmp = smf_empty.clone();
   tmp.add(&smf_3_12, &fenv);
-  assert!(tmp.equals(&smf_3_12));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_3_12));
 
   tmp = smf_6_7_10.clone();
   tmp.add(&smf_3_12, &fenv);
-  assert!(tmp.equals(&smf_3_6_7_10_12));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_3_6_7_10_12));
 
   tmp = smf_3_12.clone();
   tmp.add(&smf_6_7_10, &fenv);
-  assert!(tmp.equals(&smf_3_6_7_10_12));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_3_6_7_10_12));
 
   // Tests for can_add()
   assert!(true == smf_empty.can_add(&smf_empty, &fenv));
@@ -1574,35 +1571,35 @@ fn test_SortedRangeFragIxs() {
 
   tmp = smf_empty.clone();
   tmp.del(&smf_empty, &fenv);
-  assert!(tmp.equals(&smf_empty));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_empty));
 
   tmp = smf_3_12.clone();
   tmp.del(&smf_empty, &fenv);
-  assert!(tmp.equals(&smf_3_12));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_3_12));
 
   tmp = smf_empty.clone();
   tmp.del(&smf_3_12, &fenv);
-  assert!(tmp.equals(&smf_empty));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_empty));
 
   tmp = smf_6_7_10.clone();
   tmp.del(&smf_3_12, &fenv);
-  assert!(tmp.equals(&smf_6_7_10));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_6_7_10));
 
   tmp = smf_3_12.clone();
   tmp.del(&smf_6_7_10, &fenv);
-  assert!(tmp.equals(&smf_3_12));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_3_12));
 
   tmp = smf_6_7_10.clone();
   tmp.del(&smf_6_7, &fenv);
-  assert!(tmp.equals(&smf_10));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_10));
 
   tmp = smf_6_7_10.clone();
   tmp.del(&smf_10, &fenv);
-  assert!(tmp.equals(&smf_6_7));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_6_7));
 
   tmp = smf_6_7_10.clone();
   tmp.del(&smf_7, &fenv);
-  assert!(tmp.equals(&smf_6_10));
+  assert!(equal_SortedRangeFragIxs(&tmp, &smf_6_10));
 
   // Tests for can_add_if_we_first_del()
   let smf_10_12 = genSFI(&fenv, &vec![fix_10u, fix_12u]);

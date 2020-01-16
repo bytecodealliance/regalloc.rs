@@ -90,7 +90,6 @@ impl VirtualRangePrioQ {
     &self, vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
   ) -> Vec<String> {
     let mut resV = vec![];
-    let mut first = true;
     for vlrix in self.unallocated.iter() {
       let mut res = "TODO  ".to_string();
       res += &format!("{:?}", &vlr_env[*vlrix]);
@@ -240,7 +239,7 @@ impl PerRealReg {
   }
   #[inline(never)]
   fn show2_with_envs(
-    &self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+    &self, _fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> String {
     "assigned: ".to_string() + &format!("{:?}", &self.vlrixs_assigned)
   }
@@ -408,7 +407,7 @@ pub fn alloc_main<F: Function>(
   // Whereas this is empty.  We have to populate it "by hand", by
   // effectively cloning the allocatable part (prefix) of the universe.
   let mut perRealReg = Vec::<PerRealReg>::new();
-  for rreg in 0..reg_universe.allocable {
+  for _ in 0..reg_universe.allocable {
     // Doing this instead of simply .resize avoids needing Clone for
     // PerRealReg
     perRealReg.push(PerRealReg::new(&frag_env));
@@ -757,7 +756,6 @@ pub fn alloc_main<F: Function>(
       let vreg = vlr_assigned.vreg;
       // .. collect up all its constituent RangeFrags.
       for fix in &vlr_assigned.sortedFrags.fragIxs {
-        let frag = &frag_env[*fix];
         fragMapsByStart.push((*fix, vreg, rreg));
         fragMapsByEnd.push((*fix, vreg, rreg));
       }
@@ -780,17 +778,15 @@ pub fn alloc_main<F: Function>(
   //debug!("Lasts:  {}", fragMapsByEnd.show());
 
   let mut cursorStarts = 0;
-  let mut numStarts = 0;
   let mut cursorEnds = 0;
-  let mut numEnds = 0;
 
   let mut map = Map::<VirtualReg, RealReg>::default();
 
-  fn showMap(m: &Map<VirtualReg, RealReg>) -> String {
-    let mut vec: Vec<(&VirtualReg, &RealReg)> = m.iter().collect();
-    vec.sort_by(|p1, p2| p1.0.partial_cmp(p2.0).unwrap());
-    format!("{:?}", vec)
-  }
+  //fn showMap(m: &Map<VirtualReg, RealReg>) -> String {
+  //  let mut vec: Vec<(&VirtualReg, &RealReg)> = m.iter().collect();
+  //  vec.sort_by(|p1, p2| p1.0.partial_cmp(p2.0).unwrap());
+  //  format!("{:?}", vec)
+  //}
 
   fn is_sane(frag: &RangeFrag) -> bool {
     // "Normal" frag (unrelated to spilling).  No normal frag may start or
@@ -839,7 +835,7 @@ pub fn alloc_main<F: Function>(
     {
       cursorStarts += 1;
     }
-    numStarts = 0;
+    let mut numStarts = 0;
     while cursorStarts + numStarts < fragMapsByStart.len()
       && frag_env[fragMapsByStart[cursorStarts + numStarts].0].first.iix
         == insnIx
@@ -853,7 +849,7 @@ pub fn alloc_main<F: Function>(
     {
       cursorEnds += 1;
     }
-    numEnds = 0;
+    let mut numEnds = 0;
     while cursorEnds + numEnds < fragMapsByEnd.len()
       && frag_env[fragMapsByEnd[cursorEnds + numEnds].0].last.iix == insnIx
     {

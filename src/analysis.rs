@@ -56,7 +56,7 @@ struct CFGInfo {
   // Pre- and post-order sequences.  Iterating forwards through these
   // vectors enumerates the blocks in preorder and postorder respectively.
   pre_ord: Vec<BlockIx>,
-  post_ord: Vec<BlockIx>,
+  _post_ord: Vec<BlockIx>,
 }
 
 impl CFGInfo {
@@ -110,7 +110,7 @@ impl CFGInfo {
     // complications that might later arise if the same loop is enumerated
     // more than once.
     let mut back_edges = Set::<(BlockIx, BlockIx)>::empty(); // (m->n)
-    // Iterate over all edges
+                                                             // Iterate over all edges
     for bixM in mkBlockIx(0).dotdot(mkBlockIx(nBlocks)) {
       for bixN in succ_map[bixM].iter() {
         if dom_map[bixM].contains(*bixN) {
@@ -130,8 +130,6 @@ impl CFGInfo {
     for (bixM, bixN) in back_edges.iter() {
       let mut Loop: Set<BlockIx>;
       let mut Stack: Vec<BlockIx>;
-      let mut bixP: BlockIx;
-      let mut bixQ: BlockIx;
       Stack = Vec::<BlockIx>::new();
       Loop = Set::<BlockIx>::two(*bixM, *bixN);
       if bixM != bixN {
@@ -258,7 +256,14 @@ impl CFGInfo {
 
     //println!("QQQQ pre_ord  {}", pre_ord.show());
     //println!("QQQQ post_ord {}", post_ord.show());
-    CFGInfo { pred_map, succ_map, dom_map, depth_map, pre_ord, post_ord }
+    CFGInfo {
+      pred_map,
+      succ_map,
+      dom_map,
+      depth_map,
+      pre_ord,
+      _post_ord: post_ord,
+    }
   }
 }
 
@@ -279,9 +284,6 @@ fn calc_dominators(
       Set::from_vec((0..nBlocks).map(|bixNo| mkBlockIx(bixNo)).collect());
     let mut D: Set<BlockIx>;
     let mut T: Set<BlockIx>;
-    let mut n: BlockIx;
-    let mut p: BlockIx;
-    let mut change = true;
     dom_map.resize(nBlocks, Set::<BlockIx>::empty());
     dom_map[r] = Set::unit(r);
     for ixnoN in 0..nBlocks {
@@ -291,7 +293,7 @@ fn calc_dominators(
       }
     }
     loop {
-      change = false;
+      let mut change = false;
       for bixN in mkBlockIx(0).dotdot(mkBlockIx(nBlocks)) {
         if bixN == r {
           continue;
@@ -934,7 +936,7 @@ pub fn run_analysis<F: Function>(
     if depth > 3 {
       depth = 3;
     }
-    for i in 0..depth {
+    for _ in 0..depth {
       estFreq *= 10;
     }
     assert!(bix == mkBlockIx(estFreqs.len()));
@@ -968,7 +970,7 @@ pub fn run_analysis<F: Function>(
     return Err("entry block has live-in values".to_string());
   }
 
-  let (fragIxs_per_reg, mut frag_env) =
+  let (fragIxs_per_reg, frag_env) =
     get_RangeFrags(func, &livein_sets_per_block, &liveout_sets_per_block);
 
   debug!("");
