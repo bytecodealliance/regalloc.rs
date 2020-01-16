@@ -268,7 +268,7 @@ impl fmt::Display for BinOpF {
   }
 }
 impl BinOpF {
-  fn calc(self, argL: f32, argR: f32) -> f32 {
+  pub fn calc(self, argL: f32, argR: f32) -> f32 {
     match self {
       BinOpF::FAdd => argL + argR,
       BinOpF::FSub => argL - argR,
@@ -306,6 +306,10 @@ pub fn i_imm(dst: Reg, imm: u32) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
   Inst::Imm { dst, imm }
 }
+pub fn i_immf(dst: Reg, imm: f32) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::F32);
+  Inst::ImmF { dst, imm }
+}
 pub fn i_copy(dst: Reg, src: Reg) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
   debug_assert!(src.get_class() == RegClass::I32);
@@ -317,9 +321,17 @@ pub fn i_load(dst: Reg, addr: AM) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
   Inst::Load { dst, addr }
 }
+pub fn i_loadf(dst: Reg, addr: AM) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::F32);
+  Inst::LoadF { dst, addr }
+}
 pub fn i_store(addr: AM, src: Reg) -> Inst {
   debug_assert!(src.get_class() == RegClass::I32);
   Inst::Store { addr, src }
+}
+pub fn i_storef(addr: AM, src: Reg) -> Inst {
+  debug_assert!(src.get_class() == RegClass::F32);
+  Inst::StoreF { addr, src }
 }
 pub fn i_spill(dst: SpillSlot, src: RealReg) -> Inst {
   debug_assert!(src.get_class() == RegClass::I32);
@@ -346,6 +358,10 @@ pub fn i_print_s<'a>(str: &'a str) -> Inst {
 pub fn i_print_i(reg: Reg) -> Inst {
   debug_assert!(reg.get_class() == RegClass::I32);
   Inst::PrintI { reg }
+}
+pub fn i_print_f(reg: Reg) -> Inst {
+  debug_assert!(reg.get_class() == RegClass::F32);
+  Inst::PrintF { reg }
 }
 pub fn i_finish() -> Inst {
   Inst::Finish {}
@@ -553,6 +569,9 @@ impl Inst {
       Inst::Imm { dst, imm: _ } => {
         def.insert(*dst);
       }
+      Inst::ImmF { dst, imm: _ } => {
+        def.insert(*dst);
+      }
       Inst::Copy { dst, src } => {
         def.insert(*dst);
         uce.insert(*src);
@@ -566,11 +585,24 @@ impl Inst {
         m0d.insert(*dst);
         srcR.addRegReadsTo(&mut uce);
       }
+      Inst::BinOpF { op: _, dst, srcL, srcR } => {
+        def.insert(*dst);
+        uce.insert(*srcL);
+        uce.insert(*srcR);
+      }
       Inst::Store { addr, src } => {
         addr.addRegReadsTo(&mut uce);
         uce.insert(*src);
       }
+      Inst::StoreF { addr, src } => {
+        addr.addRegReadsTo(&mut uce);
+        uce.insert(*src);
+      }
       Inst::Load { dst, addr } => {
+        def.insert(*dst);
+        addr.addRegReadsTo(&mut uce);
+      }
+      Inst::LoadF { dst, addr } => {
         def.insert(*dst);
         addr.addRegReadsTo(&mut uce);
       }
@@ -582,6 +614,9 @@ impl Inst {
       Inst::PrintI { reg } => {
         uce.insert(*reg);
       }
+      Inst::PrintF { reg } => {
+        uce.insert(*reg);
+      }
       Inst::Finish {} => {}
       // Spill and Reload are seen here during the final pass over insts that
       // computes clobbered regs.
@@ -591,7 +626,6 @@ impl Inst {
       Inst::Reload { dst, .. } | Inst::ReloadF { dst, .. } => {
         def.insert(dst.to_reg());
       }
-      _other => panic!("Inst::get_reg_usage: unhandled: {:?}", self),
     }
     // Failure of either of these is serious and should be investigated.
     debug_assert!(!def.intersects(&m0d));
@@ -613,6 +647,9 @@ impl Inst {
       Inst::Imm { dst, imm: _ } => {
         dst.apply_D_or_U(mapD);
       }
+      Inst::ImmF { dst, imm: _ } => {
+        dst.apply_D_or_U(mapD);
+      }
       Inst::Copy { dst, src } => {
         dst.apply_D_or_U(mapD);
         src.apply_D_or_U(mapU);
@@ -626,11 +663,24 @@ impl Inst {
         dst.apply_M(mapD, mapU);
         srcR.apply_D_or_U(mapU);
       }
+      Inst::BinOpF { op: _, dst, srcL, srcR } => {
+        dst.apply_D_or_U(mapD);
+        srcL.apply_D_or_U(mapU);
+        srcR.apply_D_or_U(mapU);
+      }
       Inst::Store { addr, src } => {
         addr.apply_D_or_U(mapU);
         src.apply_D_or_U(mapU);
       }
+      Inst::StoreF { addr, src } => {
+        addr.apply_D_or_U(mapU);
+        src.apply_D_or_U(mapU);
+      }
       Inst::Load { dst, addr } => {
+        dst.apply_D_or_U(mapD);
+        addr.apply_D_or_U(mapU);
+      }
+      Inst::LoadF { dst, addr } => {
         dst.apply_D_or_U(mapD);
         addr.apply_D_or_U(mapU);
       }
@@ -640,6 +690,9 @@ impl Inst {
       }
       Inst::PrintS { .. } => {}
       Inst::PrintI { reg } => {
+        reg.apply_D_or_U(mapU);
+      }
+      Inst::PrintF { reg } => {
         reg.apply_D_or_U(mapU);
       }
       Inst::Finish {} => {}
@@ -716,11 +769,12 @@ pub struct Func {
   pub entry: Label,
   pub nVirtualRegs: u32,
   pub insns: TypedIxVec<InstIx, Inst>, // indexed by InstIx
+
+  // Note that |blocks| must be in order of increasing |Block::start|
+  // fields.  Code that wants to traverse the blocks in some other order
+  // must represent the ordering some other way; rearranging Func::blocks is
+  // not allowed.
   pub blocks: TypedIxVec<BlockIx, Block>, // indexed by BlockIx
-                                       // Note that |blocks| must be in order of increasing |Block::start|
-                                       // fields.  Code that wants to traverse the blocks in some other order
-                                       // must represent the ordering some other way; rearranging Func::blocks is
-                                       // not allowed.
 }
 impl Clone for Func {
   // This is only needed for debug printing.
@@ -897,20 +951,32 @@ fn s_vanilla(insn: Inst) -> Stmt {
 fn s_imm(dst: Reg, imm: u32) -> Stmt {
   s_vanilla(i_imm(dst, imm))
 }
+fn s_immf(dst: Reg, imm: f32) -> Stmt {
+  s_vanilla(i_immf(dst, imm))
+}
 fn s_copy(dst: Reg, src: Reg) -> Stmt {
   s_vanilla(i_copy(dst, src))
 }
 fn s_load(dst: Reg, addr: AM) -> Stmt {
   s_vanilla(i_load(dst, addr))
 }
+fn s_loadf(dst: Reg, addr: AM) -> Stmt {
+  s_vanilla(i_loadf(dst, addr))
+}
 fn s_store(addr: AM, src: Reg) -> Stmt {
   s_vanilla(i_store(addr, src))
+}
+fn s_storef(addr: AM, src: Reg) -> Stmt {
+  s_vanilla(i_storef(addr, src))
 }
 fn s_print_s<'a>(str: &'a str) -> Stmt {
   s_vanilla(i_print_s(str))
 }
 fn s_print_i(reg: Reg) -> Stmt {
   s_vanilla(i_print_i(reg))
+}
+fn s_print_f(reg: Reg) -> Stmt {
+  s_vanilla(i_print_f(reg))
 }
 
 fn s_add(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
@@ -947,12 +1013,25 @@ fn s_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
   s_vanilla(i_cmp_gt(dst, srcL, srcR))
 }
 
-fn s_addm(dst: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_addm(dst, srcR))
+//fn s_addm(dst: Reg, srcR: RI) -> Stmt {
+//  s_vanilla(i_addm(dst, srcR))
+//}
+//fn s_subm(dst: Reg, srcR: RI) -> Stmt {
+//  s_vanilla(i_subm(dst, srcR))
+//}
+
+fn s_fadd(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
+  s_vanilla(i_fadd(dst, srcL, srcR))
 }
-fn s_subm(dst: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_subm(dst, srcR))
-}
+//fn s_fsub(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
+//  s_vanilla(i_fsub(dst, srcL, srcR))
+//}
+//fn s_fmul(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
+//  s_vanilla(i_fmul(dst, srcL, srcR))
+//}
+//fn s_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
+//  s_vanilla(i_fdiv(dst, srcL, srcR))
+//}
 
 //=============================================================================
 // The "blockifier".  This is just to make it easier to write test cases, by
@@ -2583,6 +2662,90 @@ fn test__ssort_2a() -> Func {
   func
 }
 
+fn test__fp1() -> Func {
+  let mut bif = Blockifier::new("fp1");
+  let zz = bif.newVirtualReg(RegClass::I32);
+  let f0 = bif.newVirtualReg(RegClass::F32);
+  let f1 = bif.newVirtualReg(RegClass::F32);
+  let f2 = bif.newVirtualReg(RegClass::F32);
+  // Fill up mem[0..9] with some numbers
+
+  let stmts = vec![
+    s_immf(f0, 0.123),
+    s_immf(f1, 0.456),
+    s_fadd(f0, f0, f1),
+    s_imm(zz, 0),
+    s_storef(AM_RI(zz, 0), f0),
+    s_loadf(f2, AM_RI(zz, 0)),
+    s_print_f(f2),
+    s_print_s("\n"),
+    /*
+    s_imm(vSUM, 0),
+    s_imm(vI, 0),
+    s_repeat_until(
+      vec![
+        s_imm(vJ, 0),
+        s_repeat_until(
+          vec![
+            s_mul(vTMP, vI, RI_R(vJ)),
+            s_add(vSUM, vSUM, RI_R(vTMP)),
+            s_add(vJ, vJ, RI_I(1)),
+            s_cmp_gt(vTMP, vJ, RI_I(10)),
+          ],
+          vTMP,
+        ),
+        s_add(vSUM, vSUM, RI_R(vI)),
+        s_add(vI, vI, RI_I(1)),
+        s_cmp_gt(vTMP, vI, RI_I(10)),
+      ],
+      vTMP,
+    ),
+    s_print_s("Result is "),
+    s_print_i(vSUM),
+    s_print_s("\n"),
+     */
+  ];
+  /*
+  let stmts = vec![
+      s_imm(v0, 0),
+      s_imm(v1, 0),
+      s_imm(v2, 0),
+      s_add(v0, v1, RI_R(v2)),
+      s_add(v2, v1, RI_R(v0)),
+      s_ite(v0, vec![
+                s_add(v2, v2, RI_I(0)),
+                s_ite(v2, vec![
+                          s_add(v2, v2, RI_I(1))
+                      ], vec![
+                          s_add(v2, v2, RI_I(2))
+                      ],
+                ),
+            ], vec![
+                s_add(v1, v1, RI_I(3))
+            ]
+      ),
+      s_add(v0, v0, RI_I(4)),
+      s_repeat_until(
+          vec![
+                s_add(v1, v1, RI_I(5)),
+                s_add(v1, v1, RI_I(6)),
+                s_add(v1, v1, RI_I(7))
+          ],
+          v0
+      ),
+      s_add(v0, v0, RI_I(10)),
+      s_add(v0, v0, RI_I(11)),
+      s_while_do(
+          v2,
+          vec![
+              s_add(v2, v2, RI_I(12))
+          ]
+      )
+  ];
+   */
+  bif.finish(stmts)
+}
+
 // This is the list of available tests.  This function returns either the
 // requested Func, or if not found, a list of the available ones.
 pub fn find_Func(name: &str) -> Result<Func, Vec<String>> {
@@ -2599,6 +2762,7 @@ pub fn find_Func(name: &str) -> Result<Func, Vec<String>> {
     test__qsort(),            // big qsort test, 3-operand only
     test__fill_then_sum_2a(), // 2-operand version of fill_then_sum
     test__ssort_2a(),         // 2-operand version of shellsort
+    test__fp1(),              // a bit of FP
   ];
 
   let mut all_names = Vec::new();

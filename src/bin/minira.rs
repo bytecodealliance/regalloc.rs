@@ -229,15 +229,15 @@ impl<'a> IState<'a> {
     self.slots[ix] = Some(mkU32(val));
   }
 
-  fn setSpillSlotF32(&mut self, slot: SpillSlot, val: f32) {
-    // Auto-resize the vector if necessary
-    let ix = slot.get_usize();
-    if ix >= self.slots.len() {
-      self.slots.resize(ix + 1, None);
-    }
-    debug_assert!(ix < self.slots.len());
-    self.slots[ix] = Some(mkF32(val));
-  }
+  //fn setSpillSlotF32(&mut self, slot: SpillSlot, val: f32) {
+  //  // Auto-resize the vector if necessary
+  //  let ix = slot.get_usize();
+  //  if ix >= self.slots.len() {
+  //    self.slots.resize(ix + 1, None);
+  //  }
+  //  debug_assert!(ix < self.slots.len());
+  //  self.slots[ix] = Some(mkF32(val));
+  //}
 
   fn get_reg(&self, reg: Reg) -> Value {
     if reg.is_virtual() {
@@ -317,6 +317,7 @@ impl<'a> IState<'a> {
     let insn = &self.func.insns[iix];
     match insn {
       Inst::Imm { dst, imm } => self.set_reg_u32(*dst, *imm),
+      Inst::ImmF { dst, imm } => self.set_reg_f32(*dst, *imm),
       Inst::Copy { dst, src } => {
         self.set_reg_u32(*dst, self.get_reg(*src).toU32())
       }
@@ -332,15 +333,31 @@ impl<'a> IState<'a> {
         dst_v = op.calc(dst_v, srcR_v);
         self.set_reg_u32(*dst, dst_v);
       }
+      Inst::BinOpF { op, dst, srcL, srcR } => {
+        let srcL_v = self.get_reg(*srcL).toF32();
+        let srcR_v = self.get_reg(*srcR).toF32();
+        let dst_v = op.calc(srcL_v, srcR_v);
+        self.set_reg_f32(*dst, dst_v);
+      }
       Inst::Load { dst, addr } => {
         let addr_v = self.getAM(addr);
         let dst_v = self.getMem(addr_v).toU32();
         self.set_reg_u32(*dst, dst_v);
       }
+      Inst::LoadF { dst, addr } => {
+        let addr_v = self.getAM(addr);
+        let dst_v = self.getMem(addr_v).toF32();
+        self.set_reg_f32(*dst, dst_v);
+      }
       Inst::Store { addr, src } => {
         let addr_v = self.getAM(addr);
         let src_v = self.get_reg(*src).toU32();
         self.setMemU32(addr_v, src_v);
+      }
+      Inst::StoreF { addr, src } => {
+        let addr_v = self.getAM(addr);
+        let src_v = self.get_reg(*src).toF32();
+        self.setMemF32(addr_v, src_v);
       }
       Inst::Spill { dst, src } => {
         let src_v = self.get_real_reg(*src).toU32();
@@ -362,6 +379,7 @@ impl<'a> IState<'a> {
       }
       Inst::PrintS { str } => print!("{}", str),
       Inst::PrintI { reg } => print!("{:?}", self.get_reg(*reg).toU32()),
+      Inst::PrintF { reg } => print!("{:?}", self.get_reg(*reg).toF32()),
       Inst::Finish {} => done = true,
       _ => {
         println!("Interp: unhandled: {:?}", insn);
@@ -498,6 +516,7 @@ fn main() {
   println!("");
 }
 
+#[cfg(test)]
 mod test_utils {
   use super::*;
 

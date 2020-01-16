@@ -1418,7 +1418,6 @@ fn test_SortedRangeFragIxs() {
   let iix7 = mkInstIx(7);
   let iix10 = mkInstIx(10);
   let iix12 = mkInstIx(12);
-  let iix15 = mkInstIx(15);
 
   let fp_3u = InstPoint_Use(iix3);
   let fp_3d = InstPoint_Def(iix3);
@@ -1436,7 +1435,6 @@ fn test_SortedRangeFragIxs() {
 
   let fp_10u = InstPoint_Use(iix10);
   let fp_12u = InstPoint_Use(iix12);
-  let fp_15u = InstPoint_Use(iix15);
 
   let mut fenv = TypedIxVec::<RangeFragIx, RangeFrag>::new();
 
@@ -1451,7 +1449,6 @@ fn test_SortedRangeFragIxs() {
   let fix_7u_7d = gen_fix(&mut fenv, fp_7u, fp_7d);
   let fix_10u = gen_fix(&mut fenv, fp_10u, fp_10u);
   let fix_12u = gen_fix(&mut fenv, fp_12u, fp_12u);
-  let fix_15u = gen_fix(&mut fenv, fp_15u, fp_15u);
 
   // Boundary checks for point ranges, 3u vs 3d
   assert!(
