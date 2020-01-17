@@ -71,8 +71,10 @@ use minira::interface::{
   BlockIx, InstIx, RealReg, RealRegUniverse, Reg, SpillSlot, TypedIxVec,
   VirtualReg,
 };
-use minira::tests;
-use minira::tests::{make_universe, BinOp, Block, Func, Inst, Label, AM, RI};
+
+pub mod tests;
+
+use tests::{make_universe, BinOp, Block, Func, Inst, Label, AM, RI};
 use minira::{backtracking, linear_scan};
 
 use log::{self, error, info, warn};

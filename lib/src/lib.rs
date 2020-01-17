@@ -16,6 +16,5 @@ pub mod analysis;
 pub mod backtracking;
 pub mod data_structures;
 pub mod linear_scan;
-pub mod tests;
 
 pub mod interface;
