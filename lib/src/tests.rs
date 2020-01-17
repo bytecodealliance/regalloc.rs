@@ -33,7 +33,7 @@ impl fmt::Debug for Label {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     match self {
       Label::Unresolved { name } => write!(fmt, "??:{}", &name),
-      Label::Resolved { name, bix } => write!(fmt, "{:?}:{:?}", bix, name),
+      Label::Resolved { name, bix } => write!(fmt, "{:?}:{}", bix, name),
     }
   }
 }
@@ -125,8 +125,8 @@ pub fn AM_RR(base: Reg, offset: Reg) -> AM {
 impl fmt::Debug for AM {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     match self {
-      AM::RI { base, offset } => write!(fmt, "[{:?} {:?}]", base, offset),
-      AM::RR { base, offset } => write!(fmt, "[{:?} {:?}]", base, offset),
+      AM::RI { base, offset } => write!(fmt, "[{:?}, {:?}]", base, offset),
+      AM::RR { base, offset } => write!(fmt, "[{:?}, {:?}]", base, offset),
     }
   }
 }
@@ -519,14 +519,14 @@ impl fmt::Debug for Inst {
         cond, targetT, targetF
       ),
       Inst::PrintS { str } => {
-        let mut res = "prints '".to_string();
+        let mut res = "prints  '".to_string();
         for c in str.chars() {
           res += &(if c == '\n' { "\\n".to_string() } else { c.to_string() });
         }
         write!(fmt, "{}'", res)
       }
-      Inst::PrintI { reg } => write!(fmt, "printi {:?}", reg),
-      Inst::PrintF { reg } => write!(fmt, "printf {:?}", reg),
+      Inst::PrintI { reg } => write!(fmt, "printi  {:?}", reg),
+      Inst::PrintF { reg } => write!(fmt, "printf  {:?}", reg),
       Inst::Finish {} => write!(fmt, "finish"),
     }
   }

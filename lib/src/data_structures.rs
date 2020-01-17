@@ -534,9 +534,9 @@ impl fmt::Debug for Reg {
     write!(
       fmt,
       "{}{}{}",
-      if self.is_virtual() { "v" } else { "R" },
+      if self.is_virtual() { "v" } else { "r" },
+      self.get_index(),
       self.get_class().short_name(),
-      self.get_index()
     )
   }
 }
