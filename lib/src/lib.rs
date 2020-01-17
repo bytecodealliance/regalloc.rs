@@ -10,6 +10,7 @@
 mod analysis;
 mod backtracking;
 mod data_structures;
+mod inst_stream;
 pub mod interface;
 mod linear_scan;
 

@@ -790,19 +790,19 @@ fn merge_RangeFrags(
       if !valid {
         continue;
       }
-      let sortedFrags = SortedRangeFragIxs::new(&fragIxs.to_vec(), &frag_env);
+      let sorted_frags = SortedRangeFragIxs::new(&fragIxs.to_vec(), &frag_env);
       let size = 0;
       let spillCost = Some(0.0);
       if reg.is_virtual() {
         resV.push(VirtualRange {
           vreg: reg.to_virtual_reg(),
           rreg: None,
-          sortedFrags,
+          sorted_frags,
           size,
           spillCost,
         });
       } else {
-        resR.push(RealRange { rreg: reg.to_real_reg(), sortedFrags });
+        resR.push(RealRange { rreg: reg.to_real_reg(), sorted_frags });
       }
     }
 
@@ -839,7 +839,7 @@ fn set_VirtualRange_metrics(
     let mut tot_size: u32 = 0;
     let mut tot_cost: f32 = 0.0;
 
-    for fix in &vlr.sortedFrags.fragIxs {
+    for fix in &vlr.sorted_frags.fragIxs {
       let frag = &fenv[*fix];
 
       // Add on the size of this fragment, but make sure we can't

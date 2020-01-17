@@ -10,12 +10,12 @@ use std::fmt;
 use log::{debug, trace};
 
 use crate::analysis::run_analysis;
-use crate::backtracking::{edit_inst_stream, EditList, RangeAllocations};
 use crate::data_structures::{
   cmpRangeFrags, mkVirtualRangeIx, InstPoint, RangeFrag, RangeFragIx,
   RealRange, RealRangeIx, RealReg, RealRegUniverse, RegClass,
   SortedRangeFragIxs, TypedIxVec, VirtualRange, VirtualRangeIx,
 };
+use crate::inst_stream::{edit_inst_stream, EditList, RangeAllocations};
 use crate::interface::{Function, RegAllocResult};
 
 // Local renamings.
@@ -40,8 +40,8 @@ enum LiveIntervalKind<'a> {
 impl<'a> LiveIntervalKind<'a> {
   fn fragments(&self) -> &SortedRangeFragIxs {
     match &self {
-      LiveIntervalKind::Fixed(r) => &r.sortedFrags,
-      LiveIntervalKind::Virtual(r) => &r.sortedFrags,
+      LiveIntervalKind::Fixed(r) => &r.sorted_frags,
+      LiveIntervalKind::Virtual(r) => &r.sorted_frags,
     }
   }
   fn allocated_register(&self) -> Option<RealReg> {
@@ -487,18 +487,8 @@ pub fn run<F: Function>(
   // Prepare edit stream.
   // TODO clean up this; this is basically a shim of Julian's backtracking's
   // tail.
-  let mut frag_maps_by_start = RangeAllocations::new();
-  let mut frag_maps_by_end = RangeAllocations::new();
-
-  type PerRealReg = Vec<VirtualRangeIx>;
-
-  // Whereas this is empty.  We have to populate it "by hand", by
-  // effectively cloning the allocatable part (prefix) of the universe.
-  let mut per_real_reg = Vec::<PerRealReg>::new();
-  for _rreg in 0..reg_universe.allocable {
-    // Doing this instead of simply .resize avoids needing Clone for PerRealReg
-    per_real_reg.push(PerRealReg::new());
-  }
+  let mut frag_map = RangeAllocations::new();
+  let mut per_real_reg = vec![Vec::new(); reg_universe.allocable];
 
   for (i, vlr) in vlrs.iter().enumerate() {
     let rregNo = vlr.rreg.unwrap().get_index();
@@ -506,20 +496,12 @@ pub fn run<F: Function>(
     per_real_reg[rregNo].push(curr_vlrix);
   }
 
-  // For each real register under our control ..
   for i in 0..reg_universe.allocable {
     let rreg = reg_universe.regs[i].0;
-    // .. look at all the VirtualRanges assigned to it.  And for each such
-    // VirtualRange ..
     for vlrix_assigned in &per_real_reg[i] {
-      let vlr_assigned = &vlrs[*vlrix_assigned];
-      // All the RangeFrags in |vlr_assigned| require |vlr_assigned.reg|
-      // to be mapped to the real reg |i|
-      let vreg = vlr_assigned.vreg;
-      // .. collect up all its constituent RangeFrags.
-      for fix in &vlr_assigned.sortedFrags.fragIxs {
-        frag_maps_by_start.push((*fix, vreg, rreg));
-        frag_maps_by_end.push((*fix, vreg, rreg));
+      let VirtualRange { vreg, sorted_frags, .. } = &vlrs[*vlrix_assigned];
+      for frag_index in &sorted_frags.fragIxs {
+        frag_map.push((*frag_index, *vreg, rreg));
       }
     }
   }
@@ -531,8 +513,7 @@ pub fn run<F: Function>(
   edit_inst_stream(
     func,
     edit_list,
-    frag_maps_by_start,
-    frag_maps_by_end,
+    frag_map,
     &fragments,
     &vlrs,
     num_spill_slots,

@@ -1347,27 +1347,27 @@ impl SortedRangeFragIxs {
 //
 // I find it helpful to think of a live range, both RealRange and
 // VirtualRange, as a "renaming equivalence class".  That is, if you rename
-// |reg| at some point inside |sortedFrags|, then you must rename *all*
-// occurrences of |reg| inside |sortedFrags|, since otherwise the program will
+// |reg| at some point inside |sorted_frags|, then you must rename *all*
+// occurrences of |reg| inside |sorted_frags|, since otherwise the program will
 // no longer work.
 //
 // Invariants for RealRange/VirtualRange RangeFrag sets (their |sfrags| fields):
 //
-// * Either |sortedFrags| contains just one RangeFrag, in which case it *must*
+// * Either |sorted_frags| contains just one RangeFrag, in which case it *must*
 //   be RangeFragKind::Local.
 //
-// * Or |sortedFrags| contains more than one RangeFrag, in which case: at
+// * Or |sorted_frags| contains more than one RangeFrag, in which case: at
 //   least one must be RangeFragKind::LiveOut, at least one must be
 //   RangeFragKind::LiveIn, and there may be zero or more RangeFragKind::Thrus.
 
 #[derive(Clone)]
 pub struct RealRange {
   pub rreg: RealReg,
-  pub sortedFrags: SortedRangeFragIxs,
+  pub sorted_frags: SortedRangeFragIxs,
 }
 impl fmt::Debug for RealRange {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(fmt, "{:?} {:?}", self.rreg, self.sortedFrags)
+    write!(fmt, "{:?} {:?}", self.rreg, self.sorted_frags)
   }
 }
 
@@ -1379,7 +1379,7 @@ impl fmt::Debug for RealRange {
 pub struct VirtualRange {
   pub vreg: VirtualReg,
   pub rreg: Option<RealReg>,
-  pub sortedFrags: SortedRangeFragIxs,
+  pub sorted_frags: SortedRangeFragIxs,
   pub size: u16,
   pub spillCost: Option<f32>,
 }
@@ -1394,7 +1394,7 @@ impl fmt::Debug for VirtualRange {
     if self.rreg.is_some() {
       write!(fmt, " -> {:?}", self.rreg.unwrap())?;
     }
-    write!(fmt, " s={}, c={} {:?}", self.size, cost_str, self.sortedFrags)
+    write!(fmt, " s={}, c={} {:?}", self.size, cost_str, self.sorted_frags)
   }
 }
 
