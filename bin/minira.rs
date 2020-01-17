@@ -3,7 +3,6 @@
 */
 
 #![allow(non_snake_case)]
-#![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
 /* TODOs, 11 Dec 2019
@@ -52,35 +51,15 @@ Performance:
   have to repeatedly re-scan the groups looking for particular LR kinds?
 */
 
-use rustc_hash::FxHashMap;
-use rustc_hash::FxHashSet;
-use std::cmp::Ordering;
-use std::collections::VecDeque;
-use std::convert::TryInto;
 use std::env;
-use std::fmt;
-use std::hash::Hash;
-use std::io::BufRead;
-use std::ops::Index;
-use std::ops::IndexMut;
-use std::ops::Range;
-use std::slice::{Iter, IterMut};
-use std::{fs, io};
 
-use minira::interface::{
-  BlockIx, InstIx, RealReg, RealRegUniverse, Reg, SpillSlot, TypedIxVec,
-  VirtualReg,
-};
-
-pub mod test_framework;
 pub mod test_cases;
+pub mod test_framework;
 
 use minira::{backtracking, linear_scan};
-use test_framework::{
-  make_universe, run_func, BinOp, Block, Func, Inst, Label, RunStage, AM, RI,
-};
+use test_framework::{make_universe, run_func, RunStage};
 
-use log::{self, error, info, warn};
+use log::{self, error, info};
 use pretty_env_logger;
 
 //=============================================================================

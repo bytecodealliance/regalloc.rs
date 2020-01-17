@@ -3,24 +3,22 @@
 */
 
 #![allow(non_snake_case)]
-#![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
 /// As part of this set of test cases, we define a mini IR and implement the
 /// `Function` trait for it so that we can use the regalloc public interface.
-
-use minira::interface;
 use minira::interface::{
-  mkBlockIx, mkInstIx, mkRealReg, mkSpillSlot, mkVirtualReg, BlockIx, InstIx,
-  Map, MyRange, RealReg, RealRegUniverse, Reg, RegClass, Set, SpillSlot,
-  TypedIxVec, VirtualReg, NUM_REG_CLASSES,
+  mkBlockIx, mkInstIx, mkRealReg, mkVirtualReg, BlockIx, InstIx, Map, MyRange,
+  RealReg, RealRegUniverse, Reg, RegClass, Set, SpillSlot, TypedIxVec,
+  VirtualReg, NUM_REG_CLASSES,
 };
 
 use std::fmt;
 
 //=============================================================================
-// Definition of instructions, and printing thereof.  Destinations are on the
-// left.
+// Definition of: Label, RI (reg-or-immediate operands), AM (address modes),
+// and Inst (instructions).  Also the get-regs and map-regs operations for
+// them.  Destinations are on the left.
 
 #[derive(Clone)]
 pub enum Label {
@@ -1225,7 +1223,9 @@ impl Func {
     resolveLabel(&mut self.entry, |name| lookup(blocks, name));
   }
 
-  pub fn update_from_alloc(&mut self, result: interface::RegAllocResult<Func>) {
+  pub fn update_from_alloc(
+    &mut self, result: minira::interface::RegAllocResult<Func>,
+  ) {
     self.insns = TypedIxVec::fromVec(result.insns);
     for bix in self.blocks.range() {
       let block = &mut self.blocks[bix];
@@ -1550,7 +1550,7 @@ impl Blockifier {
 // --------------------------------------------------
 // Implementation of `Function` trait for test cases.
 
-impl interface::Function for Func {
+impl minira::interface::Function for Func {
   type Inst = Inst;
 
   fn insns(&self) -> &[Inst] {
@@ -1589,9 +1589,9 @@ impl interface::Function for Func {
   }
 
   /// Provide the defined, used, and modified registers for an instruction.
-  fn get_regs(&self, insn: &Self::Inst) -> interface::InstRegUses {
+  fn get_regs(&self, insn: &Self::Inst) -> minira::interface::InstRegUses {
     let (d, m, u) = insn.get_reg_usage();
-    interface::InstRegUses { used: u, defined: d, modified: m }
+    minira::interface::InstRegUses { used: u, defined: d, modified: m }
   }
 
   /// Map each register slot through a virt -> phys mapping indexed

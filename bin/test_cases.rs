@@ -3,31 +3,21 @@
 */
 
 #![allow(non_snake_case)]
-#![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
 /// Test cases.  The list of them is right at the bottom, function |find_Func|.
 /// Add new ones there.
+use minira::interface::{mkRealReg, InstIx, RegClass, TypedIxVec};
 
-use minira::interface;
-use minira::interface::{
-  mkBlockIx, mkInstIx, mkRealReg, mkSpillSlot, mkVirtualReg, BlockIx, InstIx,
-  Map, MyRange, RealReg, RealRegUniverse, Reg, RegClass, Set, SpillSlot,
-  TypedIxVec, VirtualReg, NUM_REG_CLASSES,
-};
-
-use crate::test_framework;
 use crate::test_framework::{
   i_add, i_addm, i_cmp_gt, i_cmp_le, i_cmp_lt, i_copy, i_finish, i_goto,
   i_goto_ctf, i_imm, i_load, i_print_i, i_print_s, i_store, i_sub, i_subm,
-  make_universe, s_add, s_addm, s_and, s_cmp_eq, s_cmp_ge, s_cmp_gt, s_cmp_le,
-  s_cmp_lt, s_copy, s_fadd, s_fdiv, s_if_then, s_if_then_else, s_imm, s_immf,
-  s_load, s_loadf, s_mod, s_mul, s_print_f, s_print_i, s_print_s,
-  s_repeat_until, s_shr, s_store, s_storef, s_sub, s_while_do, BinOp, Block,
-  Blockifier, Func, Inst, Label, AM, AM_R, AM_RI, AM_RR, RI, RI_I, RI_R,
+  s_add, s_addm, s_and, s_cmp_eq, s_cmp_ge, s_cmp_gt, s_cmp_le, s_cmp_lt,
+  s_copy, s_fadd, s_fdiv, s_if_then, s_if_then_else, s_imm, s_immf, s_load,
+  s_loadf, s_mod, s_mul, s_print_f, s_print_i, s_print_s, s_repeat_until,
+  s_shr, s_store, s_storef, s_sub, s_while_do, Blockifier, Func, Inst, AM_R,
+  AM_RI, AM_RR, RI_I, RI_R,
 };
-
-use std::fmt;
 
 // Whatever the current badness is
 fn test__badness() -> Func {
