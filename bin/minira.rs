@@ -56,7 +56,7 @@ use std::env;
 pub mod test_cases;
 pub mod test_framework;
 
-use minira::{backtracking, linear_scan};
+use minira::{allocate_registers, RegAllocAlgorithm};
 use test_framework::{make_universe, run_func, RunStage};
 
 use log::{self, error, info};
@@ -64,11 +64,6 @@ use pretty_env_logger;
 
 //=============================================================================
 // Top level
-
-enum RegAllocAlgorithm {
-  Backtracking,
-  LinearScan,
-}
 
 fn usage(argv0: &String) {
   println!(
@@ -112,8 +107,14 @@ fn main() {
     };
 
   let reg_alloc_kind = match args[1].as_str() {
-    "bt" => RegAllocAlgorithm::Backtracking,
-    "lsra" => RegAllocAlgorithm::LinearScan,
+    "bt" => {
+      info!("Using the backtracking allocator");
+      RegAllocAlgorithm::Backtracking
+    }
+    "lsra" => {
+      info!("Using the linear scan allocator.");
+      RegAllocAlgorithm::LinearScan
+    }
     _ => {
       usage(&args[0]);
       return;
@@ -127,24 +128,14 @@ fn main() {
   // Just so we can run it later.  Not needed for actual allocation.
   let original_func = func.clone();
 
-  let result = match reg_alloc_kind {
-    RegAllocAlgorithm::Backtracking => {
-      info!("Using the backtracking allocator");
-      backtracking::alloc_main(&mut func, &reg_universe)
-    }
-    RegAllocAlgorithm::LinearScan => {
-      info!("Using the linear scan allocator.");
-      linear_scan::run(&mut func, &reg_universe)
-    }
-  };
-
-  let result = match result {
-    Err(e) => {
-      error!("{}: allocation failed: {}", args[0], e);
-      return;
-    }
-    Ok(r) => r,
-  };
+  let result =
+    match allocate_registers(&mut func, reg_alloc_kind, &reg_universe) {
+      Err(e) => {
+        error!("{}: allocation failed: {}", args[0], e);
+        return;
+      }
+      Ok(r) => r,
+    };
 
   // Update the function itself. This bridges the gap from the generic
   // interface to our specific test ISA.
@@ -170,10 +161,14 @@ mod test_utils {
   pub fn bt(func_name: &str, num_gpr: usize, num_fpu: usize) {
     let mut func = test_cases::find_Func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
-    let result = backtracking::alloc_main(&mut func, &reg_universe)
-      .unwrap_or_else(|err| {
-        panic!("allocation failed: {}", err);
-      });
+    let result = allocate_registers(
+      &mut func,
+      RegAllocAlgorithm::Backtracking,
+      &reg_universe,
+    )
+    .unwrap_or_else(|err| {
+      panic!("allocation failed: {}", err);
+    });
     func.update_from_alloc(result);
     run_func(&func, "After allocation", &reg_universe, RunStage::AfterRegalloc);
   }
@@ -181,10 +176,14 @@ mod test_utils {
   pub fn lsra(func_name: &str, num_gpr: usize, num_fpu: usize) {
     let mut func = test_cases::find_Func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
-    let result =
-      linear_scan::run(&mut func, &reg_universe).unwrap_or_else(|err| {
-        panic!("allocation failed: {}", err);
-      });
+    let result = allocate_registers(
+      &mut func,
+      RegAllocAlgorithm::LinearScan,
+      &reg_universe,
+    )
+    .unwrap_or_else(|err| {
+      panic!("allocation failed: {}", err);
+    });
     func.update_from_alloc(result);
     run_func(&func, "After allocation", &reg_universe, RunStage::AfterRegalloc);
   }

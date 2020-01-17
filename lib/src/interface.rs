@@ -9,6 +9,7 @@
 //! This is the top level interface for the regalloc library.
 
 use crate::backtracking;
+use crate::linear_scan;
 
 // Stuff that is defined by the library
 
@@ -173,17 +174,27 @@ pub struct RegAllocResult<F: Function> {
   pub num_spill_slots: u32,
 }
 
+/// A choice of register allocation algorithm to run.
+pub enum RegAllocAlgorithm {
+  Backtracking,
+  LinearScan,
+}
+
 /// Allocate registers for a function's code, given a universe of real
-/// registers that we are allowed to use. Allocate may succeed, returning a
-/// `RegAllocResult` with the new instruction sequence, or it may fail,
-/// returning an error string.
+/// registers that we are allowed to use.
+///
+/// Allocate may succeed, returning a `RegAllocResult` with the new instruction
+/// sequence, or it may fail, returning an error string.
 ///
 /// TODO: better error type? Are there a few canonical errors we return (out
 /// of regs, ...)?
 pub fn allocate_registers<F: Function>(
-  func: &mut F, rreg_universe: &RealRegUniverse,
+  func: &mut F, algorithm: RegAllocAlgorithm, rreg_universe: &RealRegUniverse,
 ) -> Result<RegAllocResult<F>, String> {
-  // TODO: take configuration options and choose between backtracking, lsra,
-  // or other implementation options.
-  backtracking::alloc_main(func, rreg_universe)
+  match algorithm {
+    RegAllocAlgorithm::Backtracking => {
+      backtracking::alloc_main(func, rreg_universe)
+    }
+    RegAllocAlgorithm::LinearScan => linear_scan::run(func, rreg_universe),
+  }
 }
