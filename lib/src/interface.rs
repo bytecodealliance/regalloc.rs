@@ -3,7 +3,6 @@
 */
 
 #![allow(non_snake_case)]
-#![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
 //! This is the top level interface for the regalloc library.

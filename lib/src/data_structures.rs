@@ -3,7 +3,6 @@
 */
 
 #![allow(non_snake_case)]
-#![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
 //! Data structures for the whole crate.
@@ -12,28 +11,33 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
-use std::convert::TryInto;
-use std::env;
 use std::fmt;
 use std::hash::Hash;
-use std::io::BufRead;
 use std::marker::PhantomData;
 use std::ops::Index;
 use std::ops::IndexMut;
-use std::ops::Range;
 use std::slice::{Iter, IterMut};
-use std::{fs, io};
 
 use crate::interface::Function;
 
 //=============================================================================
+// Queues
+
+pub type Queue<T> = VecDeque<T>;
+
+//=============================================================================
 // Maps
 
+// NOTE: plain HashMap is nondeterministic, even in a single-threaded
+// scenario, which can make debugging code that uses it really confusing.  So
+// we use FxHashMap instead, as it *is* deterministic, and, allegedly, faster
+// too.
 pub type Map<K, V> = FxHashMap<K, V>;
 
 //=============================================================================
 // Sets of things
 
+// Same comment as above for FxHashMap.
 pub struct Set<T> {
   set: FxHashSet<T>,
 }

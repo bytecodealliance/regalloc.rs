@@ -5,7 +5,6 @@
 //! Implementation of the linear scan allocator algorithm.
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use log::{debug, trace};
@@ -13,12 +12,9 @@ use log::{debug, trace};
 use crate::analysis::run_analysis;
 use crate::backtracking::{edit_inst_stream, EditList, RangeAllocations};
 use crate::data_structures::{
-  cmpRangeFrags, mkBlockIx, mkInstIx, mkInstPoint, mkRangeFrag, mkRangeFragIx,
-  mkRealReg, mkSpillSlot, mkVirtualRangeIx, BlockIx, InstIx, InstPoint,
-  InstPoint_Def, InstPoint_Reload, InstPoint_Spill, InstPoint_Use, Map, Point,
-  RangeFrag, RangeFragIx, RangeFragKind, RealRange, RealRangeIx, RealReg,
-  RealRegUniverse, Reg, RegClass, Set, SortedRangeFragIxs, SpillSlot,
-  TypedIxVec, VirtualRange, VirtualRangeIx, VirtualReg, NUM_REG_CLASSES,
+  cmpRangeFrags, mkVirtualRangeIx, InstPoint, RangeFrag, RangeFragIx,
+  RealRange, RealRangeIx, RealReg, RealRegUniverse, RegClass,
+  SortedRangeFragIxs, TypedIxVec, VirtualRange, VirtualRangeIx,
 };
 use crate::interface::{Function, RegAllocResult};
 

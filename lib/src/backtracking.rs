@@ -3,19 +3,18 @@
 */
 
 #![allow(non_snake_case)]
-#![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
 //! Core implementation of the backtracking allocator.
 
 use crate::analysis::run_analysis;
 use crate::data_structures::{
-  mkBlockIx, mkInstIx, mkInstPoint, mkRangeFrag, mkRangeFragIx, mkRealReg,
-  mkSpillSlot, mkVirtualRangeIx, BlockIx, InstIx, InstPoint, InstPoint_Def,
+  mkBlockIx, mkInstIx, mkInstPoint, mkRangeFragIx, mkSpillSlot,
+  mkVirtualRangeIx, BlockIx, InstIx, InstPoint, InstPoint_Def,
   InstPoint_Reload, InstPoint_Spill, InstPoint_Use, Map, Point, RangeFrag,
-  RangeFragIx, RangeFragKind, RealRange, RealReg, RealRegUniverse, Reg,
-  RegClass, Set, SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange,
-  VirtualRangeIx, VirtualReg,
+  RangeFragIx, RangeFragKind, RealRange, RealReg, RealRegUniverse, RegClass,
+  Set, SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx,
+  VirtualReg,
 };
 use crate::interface::{Function, RegAllocResult};
 use log::debug;
