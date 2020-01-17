@@ -329,13 +329,21 @@ pub fn i_storef(addr: AM, src: Reg) -> Inst {
   debug_assert!(src.get_class() == RegClass::F32);
   Inst::StoreF { addr, src }
 }
-pub fn i_spill(dst: SpillSlot, src: RealReg) -> Inst {
+fn i_spill(dst: SpillSlot, src: RealReg) -> Inst {
   debug_assert!(src.get_class() == RegClass::I32);
   Inst::Spill { dst, src }
 }
-pub fn i_reload(dst: RealReg, src: SpillSlot) -> Inst {
+fn i_spillf(dst: SpillSlot, src: RealReg) -> Inst {
+  debug_assert!(src.get_class() == RegClass::F32);
+  Inst::SpillF { dst, src }
+}
+fn i_reload(dst: RealReg, src: SpillSlot) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
   Inst::Reload { dst, src }
+}
+fn i_reloadf(dst: RealReg, src: SpillSlot) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::F32);
+  Inst::ReloadF { dst, src }
 }
 pub fn i_goto<'a>(target: &'a str) -> Inst {
   Inst::Goto { target: mkUnresolved(target.to_string()) }
@@ -1093,11 +1101,6 @@ impl Clone for Block {
     }
   }
 }
-impl Block {
-  pub fn containsInstIx(&self, iix: InstIx) -> bool {
-    iix.get() >= self.start.get() && iix.get() < self.start.get() + self.len
-  }
-}
 
 #[derive(Debug)]
 pub struct Func {
@@ -1363,12 +1366,12 @@ pub fn s_addm(dst: Reg, srcR: RI) -> Stmt {
 pub fn s_fadd(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
   s_vanilla(i_fadd(dst, srcL, srcR))
 }
-//fn s_fsub(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
-//  s_vanilla(i_fsub(dst, srcL, srcR))
-//}
-//fn s_fmul(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
-//  s_vanilla(i_fmul(dst, srcL, srcR))
-//}
+pub fn s_fsub(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
+  s_vanilla(i_fsub(dst, srcL, srcR))
+}
+pub fn s_fmul(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
+  s_vanilla(i_fmul(dst, srcL, srcR))
+}
 pub fn s_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
   s_vanilla(i_fdiv(dst, srcL, srcR))
 }
@@ -1629,8 +1632,8 @@ impl minira::interface::Function for Func {
   /// Generate a spill instruction for insertion into the instruction sequence.
   fn gen_spill(&self, to_slot: SpillSlot, from_reg: RealReg) -> Self::Inst {
     match from_reg.get_class() {
-      RegClass::I32 => Inst::Spill { dst: to_slot, src: from_reg },
-      RegClass::F32 => Inst::SpillF { dst: to_slot, src: from_reg },
+      RegClass::I32 => i_spill(to_slot, from_reg),
+      RegClass::F32 => i_spillf(to_slot, from_reg),
       _ => panic!("Unused register class in test ISA was used"),
     }
   }
@@ -1638,8 +1641,8 @@ impl minira::interface::Function for Func {
   /// Generate a reload instruction for insertion into the instruction sequence.
   fn gen_reload(&self, to_reg: RealReg, from_slot: SpillSlot) -> Self::Inst {
     match to_reg.get_class() {
-      RegClass::I32 => Inst::Reload { src: from_slot, dst: to_reg },
-      RegClass::F32 => Inst::ReloadF { src: from_slot, dst: to_reg },
+      RegClass::I32 => i_reload(to_reg, from_slot),
+      RegClass::F32 => i_reloadf(to_reg, from_slot),
       _ => panic!("Unused register class in test ISA was used"),
     }
   }

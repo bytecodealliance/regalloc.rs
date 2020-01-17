@@ -13,10 +13,10 @@ use crate::test_framework::{
   i_add, i_addm, i_cmp_gt, i_cmp_le, i_cmp_lt, i_copy, i_finish, i_goto,
   i_goto_ctf, i_imm, i_load, i_print_i, i_print_s, i_store, i_sub, i_subm,
   s_add, s_addm, s_and, s_cmp_eq, s_cmp_ge, s_cmp_gt, s_cmp_le, s_cmp_lt,
-  s_copy, s_fadd, s_fdiv, s_if_then, s_if_then_else, s_imm, s_immf, s_load,
-  s_loadf, s_mod, s_mul, s_print_f, s_print_i, s_print_s, s_repeat_until,
-  s_shr, s_store, s_storef, s_sub, s_while_do, Blockifier, Func, Inst, AM_R,
-  AM_RI, AM_RR, RI_I, RI_R,
+  s_copy, s_fadd, s_fdiv, s_fmul, s_fsub, s_if_then, s_if_then_else, s_imm,
+  s_immf, s_load, s_loadf, s_mod, s_mul, s_print_f, s_print_i, s_print_s,
+  s_repeat_until, s_shr, s_store, s_storef, s_sub, s_while_do, Blockifier,
+  Func, Inst, AM_R, AM_RI, AM_RR, RI_I, RI_R,
 };
 
 // Whatever the current badness is
@@ -1317,6 +1317,9 @@ fn test__fp1() -> Func {
     s_immf(f0, 0.123),
     s_immf(f1, 0.456),
     s_fadd(f0, f0, f1),
+    s_fmul(f0, f0, f1),
+    s_fsub(f0, f0, f1),
+    s_fdiv(f0, f0, f1),
     s_imm(zz, 0),
     s_storef(AM_RI(zz, 0), f0),
     s_loadf(f2, AM_RI(zz, 0)),

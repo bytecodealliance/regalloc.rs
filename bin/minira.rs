@@ -53,8 +53,8 @@ Performance:
 
 use std::env;
 
-pub mod test_cases;
-pub mod test_framework;
+mod test_cases;
+mod test_framework;
 
 use minira::{allocate_registers, RegAllocAlgorithm};
 use test_framework::{make_universe, run_func, RunStage};

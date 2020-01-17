@@ -334,23 +334,29 @@ macro_rules! generate_boilerplate {
       $TypeIx::$TypeIx(n)
     }
     impl $TypeIx {
+      #[allow(dead_code)]
       pub fn max_value() -> Self {
         Self::$TypeIx(u32::max_value())
       }
+      #[allow(dead_code)]
       pub fn min_value() -> Self {
         Self::$TypeIx(u32::min_value())
       }
+      #[allow(dead_code)]
       pub fn get(self) -> u32 {
         match self {
           $TypeIx::$TypeIx(n) => n,
         }
       }
+      #[allow(dead_code)]
       pub fn plus(self, delta: u32) -> $TypeIx {
         $TypeIx::$TypeIx(self.get() + delta)
       }
+      #[allow(dead_code)]
       pub fn minus(self, delta: u32) -> $TypeIx {
         $TypeIx::$TypeIx(self.get() - delta)
       }
+      #[allow(dead_code)]
       pub fn dotdot(&self, lastPlus1: $TypeIx) -> MyRange<$TypeIx> {
         let len = (lastPlus1.get() - self.get()) as usize;
         MyRange::new(*self, len)
@@ -1175,10 +1181,6 @@ impl SortedRangeFragIxs {
     res.fragIxs.push(fix);
     res.check(fenv);
     res
-  }
-
-  pub fn len(&self) -> usize {
-    self.fragIxs.len()
   }
 }
 
