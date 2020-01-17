@@ -73,7 +73,7 @@ use minira::interface::{
 };
 
 pub mod test_framework;
-pub mod tests;
+pub mod test_cases;
 
 use minira::{backtracking, linear_scan};
 use test_framework::{
@@ -111,7 +111,7 @@ fn main() {
     return;
   }
 
-  let mut func = match crate::tests::find_Func(&args[2]) {
+  let mut func = match crate::test_cases::find_Func(&args[2]) {
     Ok(func) => func,
     Err(available_func_names) => {
       error!("can't find Func with name '{}'", args[2]);
@@ -189,7 +189,7 @@ mod test_utils {
   use super::*;
 
   pub fn bt(func_name: &str, num_gpr: usize, num_fpu: usize) {
-    let mut func = tests::find_Func(func_name).unwrap();
+    let mut func = test_cases::find_Func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
     let result = backtracking::alloc_main(&mut func, &reg_universe)
       .unwrap_or_else(|err| {
@@ -200,7 +200,7 @@ mod test_utils {
   }
 
   pub fn lsra(func_name: &str, num_gpr: usize, num_fpu: usize) {
-    let mut func = tests::find_Func(func_name).unwrap();
+    let mut func = test_cases::find_Func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
     let result =
       linear_scan::run(&mut func, &reg_universe).unwrap_or_else(|err| {
