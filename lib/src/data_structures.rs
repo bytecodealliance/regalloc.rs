@@ -741,7 +741,7 @@ impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug>
   }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum SpillSlot {
   SpillSlot(u32),
 }
@@ -1134,6 +1134,9 @@ impl InstPoint {
   }
   pub fn new_spill(iix: InstIx) -> Self {
     InstPoint { iix, pt: Point::Spill }
+  }
+  pub fn at_use(&self) -> Self {
+    InstPoint { iix: self.iix, pt: Point::Use }
   }
 }
 impl PartialOrd for InstPoint {

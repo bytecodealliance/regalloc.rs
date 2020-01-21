@@ -208,6 +208,7 @@ mod test_utils {
       &reg_universe,
       RunStage::BeforeRegalloc,
     );
+    func.print("BEFORE");
     let result = allocate_registers(
       &mut func,
       RegAllocAlgorithm::LinearScan,
@@ -217,6 +218,7 @@ mod test_utils {
       panic!("allocation failed: {}", err);
     });
     func.update_from_alloc(result);
+    func.print("AFTER");
     let observed_ret_value = run_func(
       &func,
       "After allocation",
@@ -259,8 +261,7 @@ fn bt__fill_then_sum() {
 }
 #[test]
 fn lsra__fill_then_sum() {
-  test_utils::lsra("fill_then_sum", 32, 32);
-  //test_utils::lsra("fill_then_sum", 8, 8);
+  test_utils::lsra("fill_then_sum", 8, 8);
 }
 
 #[test]
@@ -269,8 +270,7 @@ fn bt__ssort() {
 }
 #[test]
 fn lsra__ssort() {
-  test_utils::lsra("ssort", 10, 10);
-  //test_utils::lsra("ssort", 8, 8);
+  test_utils::lsra("ssort", 8, 8);
 }
 
 #[test]
@@ -352,4 +352,14 @@ fn bt__fp2() {
 #[test]
 fn lsra__fp2() {
   test_utils::lsra("fp2", 8, 8);
+}
+
+#[test]
+fn lsra_simple_spill() {
+  test_utils::lsra("simple_spill", 1, 0);
+}
+
+#[test]
+fn lsra_simple_loop() {
+  test_utils::lsra("simple_loop", 2, 0);
 }

@@ -397,7 +397,7 @@ pub fn alloc_main<F: Function>(
   func: &mut F, reg_universe: &RealRegUniverse,
 ) -> Result<RegAllocResult<F>, String> {
   // Note that the analysis phase can fail; hence we propagate any error.
-  let (san_reg_uses, rlr_env, mut vlr_env, mut frag_env) =
+  let (san_reg_uses, rlr_env, mut vlr_env, mut frag_env, _liveouts) =
     run_analysis(func, reg_universe)?;
 
   // -------- Alloc main --------

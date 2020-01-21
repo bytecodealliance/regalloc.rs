@@ -58,6 +58,63 @@ fn test__straight_line() -> Func {
   func
 }
 
+// Requires a spill when there's only one register.
+fn test__simple_spill() -> Func {
+  let mut func = Func::new("simple_spill", "b0");
+
+  // Regs, virtual and real, that we want to use.
+  let vA = func.new_virtual_reg(RegClass::I32);
+  let vB = func.new_virtual_reg(RegClass::I32);
+
+  func.block(
+    "b0",
+    vec![
+      i_imm(vA, 10),
+      i_add(vA, vA, RI_I(3)), // vA = 13
+      i_imm(vB, 42),
+      i_add(vA, vA, RI_I(7)), // vA = 20
+      i_add(vB, vB, RI_I(3)), // vB = 45
+      i_add(vA, vB, RI_I(1)), // vA = 46
+      i_print_i(vA),
+      i_print_s("\n"),
+      i_finish(Some(vA)),
+    ],
+  );
+
+  func.finish();
+  func
+}
+
+fn test__simple_loop() -> Func {
+  let mut func = Func::new("simple_loop", "start");
+
+  let vNENT = func.new_virtual_reg(RegClass::I32);
+  let vI = func.new_virtual_reg(RegClass::I32);
+  let rTMP =
+    Reg::new_real(RegClass::I32, /*enc=*/ 0x42, /*index=*/ 0);
+
+  func
+    .block("start", vec![i_imm(vNENT, 10), i_imm(vI, 0), i_goto("preheader")]);
+
+  func.block("preheader", vec![i_goto("loop")]);
+
+  func.block(
+    "loop",
+    vec![
+      i_add(vI, vI, RI_I(1)),
+      i_cmp_lt(rTMP, vI, RI_R(vNENT)),
+      i_goto_ctf(rTMP, "continue", "end"),
+    ],
+  );
+
+  func.block("continue", vec![i_goto("preheader")]);
+
+  func.block("end", vec![i_finish(Some(vI))]);
+
+  func.finish();
+  func
+}
+
 fn test__fill_then_sum() -> Func {
   let mut func = Func::new("fill_then_sum", "set-loop-pre");
 
@@ -1384,7 +1441,9 @@ pub fn find_Func(name: &str) -> Result<Func, Vec<String>> {
   let all_Funcs = vec![
     test__badness(),          // Whatever the current badness is
     test__straight_line(),    // straight_line
+    test__simple_spill(),     // simple_spill
     test__fill_then_sum(),    // fill_then_sum
+    test__simple_loop(),      // simple_loop
     test__ssort(),            // shellsort
     test__3_loops(),          // three loops
     test__stmts(),            // a small Stmty test

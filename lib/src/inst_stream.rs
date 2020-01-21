@@ -10,6 +10,7 @@ use crate::data_structures::{
   RealRegUniverse, SanitizedInstRegUses, Set, TypedIxVec, VirtualReg,
 };
 use crate::interface::{Function, RegAllocResult};
+use log::trace;
 
 //=============================================================================
 // Edit list items
@@ -30,10 +31,18 @@ impl<F: Function> InstAndPoint<F> {
 pub(crate) type InstsAndPoints<F> = Vec<InstAndPoint<F>>;
 
 pub(crate) fn edit_inst_stream<F: Function>(
-  func: &mut F, mut insts_to_add: InstsAndPoints<F>,
-  frag_map: RangeAllocations, frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+  func: &mut F, insts_to_add: InstsAndPoints<F>, frag_map: RangeAllocations,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
   reg_universe: &RealRegUniverse, num_spill_slots: u32,
 ) -> Result<RegAllocResult<F>, String> {
+  apply_reg_uses(func, frag_map, frag_env);
+  fill_memory_moves(func, insts_to_add, reg_universe, num_spill_slots)
+}
+
+pub(crate) fn apply_reg_uses<F: Function>(
+  func: &mut F, frag_map: RangeAllocations,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+) {
   // Make two copies of the fragment mapping, one sorted by the fragment start
   // points (just the InstIx numbers, ignoring the Point), and one sorted by
   // fragment end points.
@@ -196,6 +205,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
 
     //debug!("QQQQ mapping insn {:?}", insnIx);
     //debug!("QQQQ current map {}", showMap(&map));
+    trace!("current map {:?}", map);
 
     // Update map for I.r:
     //   add frags starting at I.r
@@ -237,6 +247,9 @@ pub(crate) fn edit_inst_stream<F: Function>(
       }
     }
 
+    trace!("use map {:?}", map_uses);
+    trace!("map after I.u {:?}", map);
+
     // Update map for I.d:
     //   add frags starting at I.d
     //   map_defs := map
@@ -262,6 +275,9 @@ pub(crate) fn edit_inst_stream<F: Function>(
       }
     }
 
+    trace!("map defs {:?}", map_defs);
+    trace!("map after I.d {:?}", map);
+
     // Update map for I.s:
     //   no frags should start at I.s (it's a spill insn)
     //   remove frags ending at I.s
@@ -280,6 +296,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
     // Finally, we have map_uses/map_defs set correctly for this instruction.
     // Apply it.
     let mut insn = func.get_insn_mut(insnIx);
+    trace!("map_regs for {:?}", insnIx);
     F::map_regs(&mut insn, &map_uses, &map_defs);
 
     // Update cursorStarts and cursorEnds for the next iteration
@@ -295,7 +312,12 @@ pub(crate) fn edit_inst_stream<F: Function>(
   }
 
   debug_assert!(map.is_empty());
+}
 
+pub(crate) fn fill_memory_moves<F: Function>(
+  func: &mut F, mut insts_to_add: InstsAndPoints<F>,
+  reg_universe: &RealRegUniverse, num_spill_slots: u32,
+) -> Result<RegAllocResult<F>, String> {
   // Construct the final code by interleaving the mapped code with the the
   // spills, reloads and copies that we have been requested to insert.  To do
   // that requires having the latter sorted by InstPoint.

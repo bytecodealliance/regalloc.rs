@@ -922,6 +922,8 @@ pub fn run_analysis<F: Function>(
     TypedIxVec<VirtualRangeIx, VirtualRange>,
     // The fragment table
     TypedIxVec<RangeFragIx, RangeFrag>,
+    // Liveouts
+    TypedIxVec<BlockIx, Set<Reg>>,
   ),
   String,
 > {
@@ -1072,5 +1074,5 @@ pub fn run_analysis<F: Function>(
     n += 1;
   }
 
-  Ok((san_reg_uses, rlr_env, vlr_env, frag_env))
+  Ok((san_reg_uses, rlr_env, vlr_env, frag_env, liveout_sets_per_block))
 }
