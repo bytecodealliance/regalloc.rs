@@ -1413,9 +1413,9 @@ fn test_SortedRangeFragIxs() {
     last: InstPoint,
   ) -> RangeFragIx {
     assert!(first <= last);
-    let res = mkRangeFragIx(fenv.len() as u32);
+    let res = RangeFragIx::new(fenv.len() as u32);
     let frag = RangeFrag {
-      bix: mkBlockIx(123),
+      bix: BlockIx::new(123),
       kind: RangeFragKind::Local,
       first,
       last,
@@ -1447,30 +1447,30 @@ fn test_SortedRangeFragIxs() {
     true
   }
 
-  let iix3 = mkInstIx(3);
-  let iix4 = mkInstIx(4);
-  let iix5 = mkInstIx(5);
-  let iix6 = mkInstIx(6);
-  let iix7 = mkInstIx(7);
-  let iix10 = mkInstIx(10);
-  let iix12 = mkInstIx(12);
+  let iix3 = InstIx::new(3);
+  let iix4 = InstIx::new(4);
+  let iix5 = InstIx::new(5);
+  let iix6 = InstIx::new(6);
+  let iix7 = InstIx::new(7);
+  let iix10 = InstIx::new(10);
+  let iix12 = InstIx::new(12);
 
-  let fp_3u = InstPoint_Use(iix3);
-  let fp_3d = InstPoint_Def(iix3);
+  let fp_3u = InstPoint::newUse(iix3);
+  let fp_3d = InstPoint::newDef(iix3);
 
-  let fp_4u = InstPoint_Use(iix4);
+  let fp_4u = InstPoint::newUse(iix4);
 
-  let fp_5u = InstPoint_Use(iix5);
-  let fp_5d = InstPoint_Def(iix5);
+  let fp_5u = InstPoint::newUse(iix5);
+  let fp_5d = InstPoint::newDef(iix5);
 
-  let fp_6u = InstPoint_Use(iix6);
-  let fp_6d = InstPoint_Def(iix6);
+  let fp_6u = InstPoint::newUse(iix6);
+  let fp_6d = InstPoint::newDef(iix6);
 
-  let fp_7u = InstPoint_Use(iix7);
-  let fp_7d = InstPoint_Def(iix7);
+  let fp_7u = InstPoint::newUse(iix7);
+  let fp_7d = InstPoint::newDef(iix7);
 
-  let fp_10u = InstPoint_Use(iix10);
-  let fp_12u = InstPoint_Use(iix12);
+  let fp_10u = InstPoint::newUse(iix10);
+  let fp_12u = InstPoint::newUse(iix12);
 
   let mut fenv = TypedIxVec::<RangeFragIx, RangeFrag>::new();
 
