@@ -123,17 +123,36 @@ pub trait Function {
   /// 64-bit machine, spill slots may nominally be 64-bit words, but a 128-bit
   /// vector value will require two slots.  The regalloc will always align on
   /// this size.
-  fn get_spillslot_size(&self, regclass: RegClass) -> u32;
+  ///
+  /// This passes the associated virtual register to the client as well,
+  /// because the way in which we spill a real register may depend on the
+  /// value that we are using it for. E.g., if a machine has V128 registers
+  /// but we also use them for F32 and F64 values, we may use a different
+  /// store-slot size and smaller-operand store/load instructions for an F64
+  /// than for a true V128.
+  fn get_spillslot_size(&self, regclass: RegClass, for_vreg: VirtualReg)
+    -> u32;
 
-  /// Generate a spill instruction for insertion into the instruction sequence.
-  fn gen_spill(&self, to_slot: SpillSlot, from_reg: RealReg) -> Self::Inst;
+  /// Generate a spill instruction for insertion into the instruction
+  /// sequence. The associated virtual register (whose value is being spilled)
+  /// is passed so that the client may make decisions about the instruction to
+  /// generate based on the type of value in question.
+  fn gen_spill(
+    &self, to_slot: SpillSlot, from_reg: RealReg, for_vreg: VirtualReg,
+  ) -> Self::Inst;
 
-  /// Generate a reload instruction for insertion into the instruction sequence.
-  fn gen_reload(&self, to_reg: RealReg, from_slot: SpillSlot) -> Self::Inst;
+  /// Generate a reload instruction for insertion into the instruction
+  /// sequence. The associated virtual register (whose value is being loaded)
+  /// is passed as well.
+  fn gen_reload(
+    &self, to_reg: RealReg, from_slot: SpillSlot, for_vreg: VirtualReg,
+  ) -> Self::Inst;
 
   /// Generate a register-to-register move for insertion into the instruction
-  /// sequence.
-  fn gen_move(&self, to_reg: RealReg, from_reg: RealReg) -> Self::Inst;
+  /// sequence. The associatedd virtual register is passed as well.
+  fn gen_move(
+    &self, to_reg: RealReg, from_reg: RealReg, for_vreg: VirtualReg,
+  ) -> Self::Inst;
 
   /// Try to alter an existing instruction to use a value directly in a
   /// spillslot (accessing memory directly) instead of the given register. May
