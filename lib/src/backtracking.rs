@@ -9,8 +9,7 @@
 
 use crate::analysis::run_analysis;
 use crate::data_structures::{
-  mkInstPoint, mkRangeFragIx, mkSpillSlot, mkVirtualRangeIx, BlockIx, InstIx,
-  InstPoint_Def, InstPoint_Use, Point, RangeFrag, RangeFragIx, RangeFragKind,
+  BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx, RangeFragKind,
   RealRange, RealRegUniverse, RegClass, SortedRangeFragIxs, SpillSlot,
   TypedIxVec, VirtualRange, VirtualRangeIx,
 };
@@ -34,7 +33,9 @@ struct VirtualRangePrioQ {
 impl VirtualRangePrioQ {
   fn new(vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>) -> Self {
     let mut res = Self { unallocated: Vec::new() };
-    for vlrix in mkVirtualRangeIx(0).dotdot(mkVirtualRangeIx(vlr_env.len())) {
+    for vlrix in
+      VirtualRangeIx::new(0).dotdot(VirtualRangeIx::new(vlr_env.len()))
+    {
       assert!(vlr_env[vlrix].size > 0);
       res.unallocated.push(vlrix);
     }
@@ -386,7 +387,7 @@ pub fn alloc_main<F: Function>(
   );
 
   // This is technically part of the running state, at least for now.
-  let mut next_spill_slot: SpillSlot = mkSpillSlot(0);
+  let mut next_spill_slot: SpillSlot = SpillSlot::new(0);
 
   // Main allocation loop.  Each time round, pull out the longest
   // unallocated VirtualRange, and do one of three things:
@@ -582,7 +583,7 @@ pub fn alloc_main<F: Function>(
         // USES: Do we need to create a reload-to-use bridge
         // (VirtualRange) ?
         if reg_usage.used.contains(curr_vlr_reg)
-          && frag.contains(&InstPoint_Use(iix))
+          && frag.contains(&InstPoint::newUse(iix))
         {
           debug_assert!(!reg_usage.modified.contains(curr_vlr_reg));
           // Stash enough info that we can create a new VirtualRange
@@ -598,8 +599,8 @@ pub fn alloc_main<F: Function>(
         // later end up being assigned to different RealRegs, which is
         // obviously nonsensical.
         if reg_usage.modified.contains(curr_vlr_reg)
-          && frag.contains(&InstPoint_Use(iix))
-          && frag.contains(&InstPoint_Def(iix))
+          && frag.contains(&InstPoint::newUse(iix))
+          && frag.contains(&InstPoint::newDef(iix))
         {
           debug_assert!(!reg_usage.used.contains(curr_vlr_reg));
           debug_assert!(!reg_usage.defined.contains(curr_vlr_reg));
@@ -609,7 +610,7 @@ pub fn alloc_main<F: Function>(
         }
         // DEFS: Do we need to create a def-to-spill bridge?
         if reg_usage.defined.contains(curr_vlr_reg)
-          && frag.contains(&InstPoint_Def(iix))
+          && frag.contains(&InstPoint::newDef(iix))
         {
           debug_assert!(!reg_usage.modified.contains(curr_vlr_reg));
           let sri =
@@ -638,11 +639,11 @@ pub fn alloc_main<F: Function>(
       let new_vlr_frag = RangeFrag {
         bix: sri.bix,
         kind: RangeFragKind::Local,
-        first: mkInstPoint(sri.iix, new_vlr_first_pt),
-        last: mkInstPoint(sri.iix, new_vlr_last_pt),
+        first: InstPoint::new(sri.iix, new_vlr_first_pt),
+        last: InstPoint::new(sri.iix, new_vlr_last_pt),
         count: new_vlr_count,
       };
-      let new_vlr_fix = mkRangeFragIx(frag_env.len() as u32);
+      let new_vlr_fix = RangeFragIx::new(frag_env.len() as u32);
       frag_env.push(new_vlr_frag);
       debug!(
         "--     new RangeFrag       {:?}  :=  {:?}",
@@ -656,7 +657,7 @@ pub fn alloc_main<F: Function>(
         size: 1,
         spillCost: None, /*infinity*/
       };
-      let new_vlrix = mkVirtualRangeIx(vlr_env.len() as u32);
+      let new_vlrix = VirtualRangeIx::new(vlr_env.len() as u32);
       debug!(
         "--     new VirtualRange        {:?}  :=  {:?}",
         new_vlrix, &new_vlr

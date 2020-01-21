@@ -11,9 +11,9 @@ use log::{debug, trace};
 
 use crate::analysis::run_analysis;
 use crate::data_structures::{
-  cmpRangeFrags, mkVirtualRangeIx, InstPoint, RangeFrag, RangeFragIx,
-  RealRange, RealRangeIx, RealReg, RealRegUniverse, RegClass,
-  SortedRangeFragIxs, TypedIxVec, VirtualRange, VirtualRangeIx,
+  cmpRangeFrags, InstPoint, RangeFrag, RangeFragIx, RealRange, RealRangeIx,
+  RealReg, RealRegUniverse, RegClass, SortedRangeFragIxs, TypedIxVec,
+  VirtualRange, VirtualRangeIx,
 };
 use crate::inst_stream::{edit_inst_stream, EditList, RangeAllocations};
 use crate::interface::{Function, RegAllocResult};
@@ -485,7 +485,7 @@ pub fn run<F: Function>(
 
   for (i, vlr) in vlrs.iter().enumerate() {
     let rregNo = vlr.rreg.unwrap().get_index();
-    let curr_vlrix = mkVirtualRangeIx(i as u32);
+    let curr_vlrix = VirtualRangeIx::new(i as u32);
     per_real_reg[rregNo].push(curr_vlrix);
   }
 

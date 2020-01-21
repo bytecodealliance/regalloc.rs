@@ -25,8 +25,6 @@ pub use crate::data_structures::RegClass;
 
 // Registers, both real and virtual, and ways to create them
 
-pub use crate::data_structures::mkRealReg;
-pub use crate::data_structures::mkVirtualReg;
 pub use crate::data_structures::Reg;
 
 pub use crate::data_structures::RealReg;
@@ -36,7 +34,7 @@ pub use crate::data_structures::NUM_REG_CLASSES;
 
 // Spill slots
 
-pub use crate::data_structures::{mkSpillSlot, SpillSlot};
+pub use crate::data_structures::SpillSlot;
 
 // The real reg universe
 
@@ -45,21 +43,19 @@ pub use crate::data_structures::RealRegUniverse;
 /// Register uses for a given instruction.
 #[derive(Clone, Debug)]
 pub struct InstRegUses {
-  pub used: Set<Reg>,    // registers that are read.
-  pub defined: Set<Reg>, // registers that are written.
+  // Note that `modified` is distinct from just `used`+`defined` because the
+  // vreg must live in the same real reg both before and after the
+  // instruction.
+  pub used: Set<Reg>,     // registers that are read.
+  pub defined: Set<Reg>,  // registers that are written.
   pub modified: Set<Reg>, // registers that are modified.
-                         // Note that `modified` is distinct from just `used`+`defined` because
-                         // the vreg must live in the same real reg both before and after the
-                         // instruction.
 }
 
 // TypedIxVector, so that the interface can speak about vectors of blocks and
 // instructions.
 
 pub use crate::data_structures::TypedIxVec;
-pub use crate::data_structures::{
-  mkBlockIx, mkInstIx, BlockIx, InstIx, MyRange,
-};
+pub use crate::data_structures::{BlockIx, InstIx, MyRange};
 
 /// A trait defined by the regalloc client to provide access to its
 /// machine-instruction / CFG representation.
@@ -77,7 +73,7 @@ pub trait Function {
 
   /// Get all instruction indices as an iterable range.
   fn insn_indices(&self) -> MyRange<InstIx> {
-    MyRange::new(mkInstIx(0), self.insns().len())
+    MyRange::new(InstIx::new(0), self.insns().len())
   }
 
   /// Allow mutable access to the underlying vector of instructions.

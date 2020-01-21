@@ -328,16 +328,17 @@ where
 //=============================================================================
 
 macro_rules! generate_boilerplate {
-  ($TypeIx:ident, $mkTypeIx: ident, $Type:ident, $PrintingPrefix:expr) => {
+  ($TypeIx:ident, $Type:ident, $PrintingPrefix:expr) => {
     #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
     // Firstly, the indexing type (TypeIx)
     pub enum $TypeIx {
       $TypeIx(u32),
     }
-    pub fn $mkTypeIx(n: u32) -> $TypeIx {
-      $TypeIx::$TypeIx(n)
-    }
     impl $TypeIx {
+      #[allow(dead_code)]
+      pub fn new(n: u32) -> Self {
+        Self::$TypeIx(n)
+      }
       #[allow(dead_code)]
       pub fn max_value() -> Self {
         Self::$TypeIx(u32::max_value())
@@ -388,21 +389,21 @@ macro_rules! generate_boilerplate {
     }
     impl Zero for $TypeIx {
       fn zero() -> Self {
-        $mkTypeIx(0)
+        $TypeIx::new(0)
       }
     }
   };
 }
 
-generate_boilerplate!(InstIx, mkInstIx, Inst, "i");
+generate_boilerplate!(InstIx, Inst, "i");
 
-generate_boilerplate!(BlockIx, mkBlockIx, Block, "b");
+generate_boilerplate!(BlockIx, Block, "b");
 
-generate_boilerplate!(RangeFragIx, mkRangeFragIx, RangeFrag, "f");
+generate_boilerplate!(RangeFragIx, RangeFrag, "f");
 
-generate_boilerplate!(VirtualRangeIx, mkVirtualRangeIx, VirtualRange, "vr");
+generate_boilerplate!(VirtualRangeIx, VirtualRange, "vr");
 
-generate_boilerplate!(RealRangeIx, mkRealRangeIx, RealRange, "rr");
+generate_boilerplate!(RealRangeIx, RealRange, "rr");
 
 impl<TyIx, Ty: fmt::Debug> fmt::Debug for TypedIxVec<TyIx, Ty> {
   // This is something of a hack in the sense that it doesn't show the
@@ -512,6 +513,20 @@ impl Reg {
   pub fn is_real(self) -> bool {
     !self.is_virtual()
   }
+  pub fn newReal(rc: RegClass, enc: u8, index: u8) -> Self {
+    let n = (0 << 31)
+      | (rc.rc_to_u32() << 28)
+      | ((enc as u32) << 8)
+      | ((index as u32) << 0);
+    Reg { do_not_access_this_directly: n }
+  }
+  pub fn newVirtual(rc: RegClass, index: u32) -> Self {
+    if index >= (1 << 28) {
+      panic!("mkVirtualReg(): index too large");
+    }
+    let n = (1 << 31) | (rc.rc_to_u32() << 28) | (index << 0);
+    Reg { do_not_access_this_directly: n }
+  }
   pub fn get_class(self) -> RegClass {
     RegClass::rc_from_u32((self.do_not_access_this_directly >> 28) & 0x7)
   }
@@ -549,20 +564,6 @@ impl fmt::Debug for Reg {
       self.get_class().short_name(),
     )
   }
-}
-pub fn mkRealReg(rc: RegClass, enc: u8, index: u8) -> Reg {
-  let n = (0 << 31)
-    | (rc.rc_to_u32() << 28)
-    | ((enc as u32) << 8)
-    | ((index as u32) << 0);
-  Reg { do_not_access_this_directly: n }
-}
-pub fn mkVirtualReg(rc: RegClass, index: u32) -> Reg {
-  if index >= (1 << 28) {
-    panic!("mkVirtualReg(): index too large");
-  }
-  let n = (1 << 31) | (rc.rc_to_u32() << 28) | (index << 0);
-  Reg { do_not_access_this_directly: n }
 }
 
 // RealReg and VirtualReg are merely wrappers around Reg, which try to
@@ -675,10 +676,10 @@ impl Reg {
 pub enum SpillSlot {
   SpillSlot(u32),
 }
-pub fn mkSpillSlot(n: u32) -> SpillSlot {
-  SpillSlot::SpillSlot(n)
-}
 impl SpillSlot {
+  pub fn new(n: u32) -> Self {
+    SpillSlot::SpillSlot(n)
+  }
   pub fn get(self) -> u32 {
     match self {
       SpillSlot::SpillSlot(n) => n,
@@ -689,10 +690,10 @@ impl SpillSlot {
   }
   pub fn round_up(self, num_slots: u32) -> SpillSlot {
     assert!(num_slots > 0);
-    mkSpillSlot((self.get() + num_slots - 1) / num_slots * num_slots)
+    SpillSlot::new((self.get() + num_slots - 1) / num_slots * num_slots)
   }
   pub fn inc(self, num_slots: u32) -> SpillSlot {
-    mkSpillSlot(self.get() + num_slots)
+    SpillSlot::new(self.get() + num_slots)
   }
 }
 impl fmt::Debug for SpillSlot {
@@ -926,20 +927,22 @@ pub struct InstPoint {
   pub iix: InstIx,
   pub pt: Point,
 }
-pub fn mkInstPoint(iix: InstIx, pt: Point) -> InstPoint {
-  InstPoint { iix, pt }
-}
-pub fn InstPoint_Reload(iix: InstIx) -> InstPoint {
-  InstPoint { iix, pt: Point::Reload }
-}
-pub fn InstPoint_Use(iix: InstIx) -> InstPoint {
-  InstPoint { iix, pt: Point::Use }
-}
-pub fn InstPoint_Def(iix: InstIx) -> InstPoint {
-  InstPoint { iix, pt: Point::Def }
-}
-pub fn InstPoint_Spill(iix: InstIx) -> InstPoint {
-  InstPoint { iix, pt: Point::Spill }
+impl InstPoint {
+  pub fn new(iix: InstIx, pt: Point) -> Self {
+    InstPoint { iix, pt }
+  }
+  pub fn newReload(iix: InstIx) -> Self {
+    InstPoint { iix, pt: Point::Reload }
+  }
+  pub fn newUse(iix: InstIx) -> Self {
+    InstPoint { iix, pt: Point::Use }
+  }
+  pub fn newDef(iix: InstIx) -> Self {
+    InstPoint { iix, pt: Point::Def }
+  }
+  pub fn newSpill(iix: InstIx) -> Self {
+    InstPoint { iix, pt: Point::Spill }
+  }
 }
 impl PartialOrd for InstPoint {
   // Again .. don't assume anything about the #derive'd version.  These have
@@ -1074,28 +1077,29 @@ impl fmt::Debug for RangeFrag {
     )
   }
 }
-
-pub fn mkRangeFrag<F: Function>(
-  f: &F, bix: BlockIx, first: InstPoint, last: InstPoint, count: u16,
-) -> RangeFrag {
-  debug_assert!(f.block_insns(bix).len() >= 1);
-  debug_assert!(f.block_insns(bix).contains(first.iix));
-  debug_assert!(f.block_insns(bix).contains(last.iix));
-  debug_assert!(first <= last);
-  if first == last {
-    debug_assert!(count == 1);
+impl RangeFrag {
+  pub fn new<F: Function>(
+    f: &F, bix: BlockIx, first: InstPoint, last: InstPoint, count: u16,
+  ) -> Self {
+    debug_assert!(f.block_insns(bix).len() >= 1);
+    debug_assert!(f.block_insns(bix).contains(first.iix));
+    debug_assert!(f.block_insns(bix).contains(last.iix));
+    debug_assert!(first <= last);
+    if first == last {
+      debug_assert!(count == 1);
+    }
+    let first_iix_in_block = f.block_insns(bix).first();
+    let last_iix_in_block = f.block_insns(bix).last();
+    let first_pt_in_block = InstPoint::newUse(first_iix_in_block);
+    let last_pt_in_block = InstPoint::newDef(last_iix_in_block);
+    let kind = match (first == first_pt_in_block, last == last_pt_in_block) {
+      (false, false) => RangeFragKind::Local,
+      (false, true) => RangeFragKind::LiveOut,
+      (true, false) => RangeFragKind::LiveIn,
+      (true, true) => RangeFragKind::Thru,
+    };
+    RangeFrag { bix, kind, first, last, count }
   }
-  let first_iix_in_block = f.block_insns(bix).first();
-  let last_iix_in_block = f.block_insns(bix).last();
-  let first_pt_in_block = InstPoint_Use(first_iix_in_block);
-  let last_pt_in_block = InstPoint_Def(last_iix_in_block);
-  let kind = match (first == first_pt_in_block, last == last_pt_in_block) {
-    (false, false) => RangeFragKind::Local,
-    (false, true) => RangeFragKind::LiveOut,
-    (true, false) => RangeFragKind::LiveIn,
-    (true, true) => RangeFragKind::Thru,
-  };
-  RangeFrag { bix, kind, first, last, count }
 }
 
 // Comparison of RangeFrags.  They form a partial order.

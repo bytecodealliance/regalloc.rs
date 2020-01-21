@@ -8,9 +8,8 @@
 /// As part of this set of test cases, we define a mini IR and implement the
 /// `Function` trait for it so that we can use the regalloc public interface.
 use minira::interface::{
-  mkBlockIx, mkInstIx, mkRealReg, mkVirtualReg, BlockIx, InstIx, Map, MyRange,
-  RealReg, RealRegUniverse, Reg, RegClass, Set, SpillSlot, TypedIxVec,
-  VirtualReg, NUM_REG_CLASSES,
+  BlockIx, InstIx, Map, MyRange, RealReg, RealRegUniverse, Reg, RegClass, Set,
+  SpillSlot, TypedIxVec, VirtualReg, NUM_REG_CLASSES,
 };
 
 use std::fmt;
@@ -34,6 +33,9 @@ impl fmt::Debug for Label {
   }
 }
 impl Label {
+  pub fn newUnresolved(name: String) -> Label {
+    Label::Unresolved { name }
+  }
   pub fn getBlockIx(&self) -> BlockIx {
     match self {
       Label::Resolved { name: _, bix } => *bix,
@@ -42,7 +44,6 @@ impl Label {
       }
     }
   }
-
   pub fn remapControlFlow(&mut self, from: &String, to: &String) {
     match self {
       Label::Resolved { .. } => {
@@ -55,12 +56,6 @@ impl Label {
       }
     }
   }
-}
-pub fn mkTextLabel(n: usize) -> String {
-  "L".to_string() + &n.to_string()
-}
-fn mkUnresolved(name: String) -> Label {
-  Label::Unresolved { name }
 }
 
 #[derive(Copy, Clone)]
@@ -346,14 +341,14 @@ fn i_reloadf(dst: RealReg, src: SpillSlot) -> Inst {
   Inst::ReloadF { dst, src }
 }
 pub fn i_goto<'a>(target: &'a str) -> Inst {
-  Inst::Goto { target: mkUnresolved(target.to_string()) }
+  Inst::Goto { target: Label::newUnresolved(target.to_string()) }
 }
 pub fn i_goto_ctf<'a>(cond: Reg, targetT: &'a str, targetF: &'a str) -> Inst {
   debug_assert!(cond.get_class() == RegClass::I32);
   Inst::GotoCTF {
     cond,
-    targetT: mkUnresolved(targetT.to_string()),
-    targetF: mkUnresolved(targetF.to_string()),
+    targetT: Label::newUnresolved(targetT.to_string()),
+    targetF: Label::newUnresolved(targetF.to_string()),
   }
 }
 pub fn i_print_s<'a>(str: &'a str) -> Inst {
@@ -745,12 +740,6 @@ enum Value {
   U32(u32),
   F32(f32),
 }
-fn mkU32(n: u32) -> Value {
-  Value::U32(n)
-}
-fn mkF32(n: f32) -> Value {
-  Value::F32(n)
-}
 impl Value {
   fn toU32(self) -> u32 {
     match self {
@@ -885,7 +874,7 @@ impl<'a> IState<'a> {
       self.slots.resize(ix + 1, None);
     }
     debug_assert!(ix < self.slots.len());
-    self.slots[ix] = Some(mkU32(val));
+    self.slots[ix] = Some(Value::U32(val));
   }
 
   fn setSpillSlotF32(&mut self, slot: SpillSlot, val: f32) {
@@ -895,7 +884,7 @@ impl<'a> IState<'a> {
       self.slots.resize(ix + 1, None);
     }
     debug_assert!(ix < self.slots.len());
-    self.slots[ix] = Some(mkF32(val));
+    self.slots[ix] = Some(Value::F32(val));
   }
 
   fn get_reg(&self, reg: Reg) -> Value {
@@ -908,17 +897,17 @@ impl<'a> IState<'a> {
 
   fn set_reg_u32(&mut self, reg: Reg, val: u32) {
     if reg.is_virtual() {
-      self.setVirtualReg(reg.to_virtual_reg(), mkU32(val));
+      self.setVirtualReg(reg.to_virtual_reg(), Value::U32(val));
     } else {
-      self.setRealReg(reg.to_real_reg(), mkU32(val));
+      self.setRealReg(reg.to_real_reg(), Value::U32(val));
     }
   }
 
   fn set_reg_f32(&mut self, reg: Reg, val: f32) {
     if reg.is_virtual() {
-      self.setVirtualReg(reg.to_virtual_reg(), mkF32(val));
+      self.setVirtualReg(reg.to_virtual_reg(), Value::F32(val));
     } else {
-      self.setRealReg(reg.to_real_reg(), mkF32(val));
+      self.setRealReg(reg.to_real_reg(), Value::F32(val));
     }
   }
 
@@ -937,7 +926,7 @@ impl<'a> IState<'a> {
     // No auto resizing of the memory
     match self.mem.get_mut(addr as usize) {
       None => panic!("IState::setMemU32: invalid addr {}", addr),
-      Some(valP) => *valP = Some(mkU32(val)),
+      Some(valP) => *valP = Some(Value::U32(val)),
     }
   }
 
@@ -945,7 +934,7 @@ impl<'a> IState<'a> {
     // No auto resizing of the memory
     match self.mem.get_mut(addr as usize) {
       None => panic!("IState::setMemF32: invalid addr {}", addr),
-      Some(valP) => *valP = Some(mkF32(val)),
+      Some(valP) => *valP = Some(Value::F32(val)),
     }
   }
 
@@ -1087,8 +1076,10 @@ pub struct Block {
   pub len: u32,
   pub estFreq: u16, // Estimated execution frequency
 }
-pub fn mkBlock(name: String, start: InstIx, len: u32) -> Block {
-  Block { name, start, len, estFreq: 1 }
+impl Block {
+  pub fn new(name: String, start: InstIx, len: u32) -> Self {
+    Self { name, start, len, estFreq: 1 }
+  }
 }
 impl Clone for Block {
   // This is only needed for debug printing.
@@ -1133,7 +1124,7 @@ fn lookup(blocks: &TypedIxVec<BlockIx, Block>, name: String) -> BlockIx {
   let mut bix = 0;
   for b in blocks.iter() {
     if b.name == name {
-      return mkBlockIx(bix);
+      return BlockIx::new(bix);
     }
     bix += 1;
   }
@@ -1159,9 +1150,9 @@ impl Func {
       if ix > 0 {
         println!("");
       }
-      println!("  {:?}:{}", mkBlockIx(ix), b.name);
+      println!("  {:?}:{}", BlockIx::new(ix), b.name);
       for i in b.start.get()..b.start.get() + b.len {
-        let ixI = mkInstIx(i);
+        let ixI = InstIx::new(i);
         println!("      {:<3?}   {:?}", ixI, self.insns[ixI]);
       }
       ix += 1;
@@ -1171,7 +1162,7 @@ impl Func {
 
   // Get a new VirtualReg name
   pub fn newVirtualReg(&mut self, rc: RegClass) -> Reg {
-    let v = mkVirtualReg(rc, self.nVirtualRegs);
+    let v = Reg::newVirtual(rc, self.nVirtualRegs);
     self.nVirtualRegs += 1;
     v
   }
@@ -1183,7 +1174,7 @@ impl Func {
     let start = self.insns.len();
     let len = insns.len() as u32;
     self.insns.append(&mut insns);
-    let b = mkBlock(name.to_string(), mkInstIx(start), len);
+    let b = Block::new(name.to_string(), InstIx::new(start), len);
     self.blocks.push(b);
   }
 
@@ -1197,12 +1188,12 @@ impl Func {
         - convert references to block numbers
   */
   pub fn finish(&mut self) {
-    for bix in mkBlockIx(0).dotdot(mkBlockIx(self.blocks.len())) {
+    for bix in BlockIx::new(0).dotdot(BlockIx::new(self.blocks.len())) {
       let b = &self.blocks[bix];
       if b.len == 0 {
         panic!("Func::done: a block is empty");
       }
-      if bix > mkBlockIx(0)
+      if bix > BlockIx::new(0)
         && self.blocks[bix.minus(1)].start >= self.blocks[bix].start
       {
         panic!("Func: blocks are not in increasing order of InstIx");
@@ -1387,6 +1378,10 @@ pub struct Blockifier {
   nVirtualRegs: u32,
 }
 
+fn makeTextLabelStr(n: usize) -> String {
+  "L".to_string() + &n.to_string()
+}
+
 impl Blockifier {
   pub fn new<'a>(name: &'a str) -> Self {
     Self { name: name.to_string(), blocks: vec![], nVirtualRegs: 0 }
@@ -1394,7 +1389,7 @@ impl Blockifier {
 
   // Get a new VirtualReg name
   pub fn newVirtualReg(&mut self, rc: RegClass) -> Reg {
-    let v = mkVirtualReg(rc, self.nVirtualRegs);
+    let v = Reg::newVirtual(rc, self.nVirtualRegs);
     self.nVirtualRegs += 1;
     v
   }
@@ -1415,39 +1410,39 @@ impl Blockifier {
           let (e_ent, e_exit) = self.blockify(stmts_e);
           let cont = self.blocks.len();
           self.blocks.push(TypedIxVec::<InstIx, Inst>::new());
-          self.blocks[t_exit].push(i_goto(&mkTextLabel(cont)));
-          self.blocks[e_exit].push(i_goto(&mkTextLabel(cont)));
+          self.blocks[t_exit].push(i_goto(&makeTextLabelStr(cont)));
+          self.blocks[e_exit].push(i_goto(&makeTextLabelStr(cont)));
           self.blocks[currBNo].push(i_goto_ctf(
             cond,
-            &mkTextLabel(t_ent),
-            &mkTextLabel(e_ent),
+            &makeTextLabelStr(t_ent),
+            &makeTextLabelStr(e_ent),
           ));
           currBNo = cont;
         }
         Stmt::RepeatUntil { stmts, cond } => {
           let (s_ent, s_exit) = self.blockify(stmts);
-          self.blocks[currBNo].push(i_goto(&mkTextLabel(s_ent)));
+          self.blocks[currBNo].push(i_goto(&makeTextLabelStr(s_ent)));
           let cont = self.blocks.len();
           self.blocks.push(TypedIxVec::<InstIx, Inst>::new());
           self.blocks[s_exit].push(i_goto_ctf(
             cond,
-            &mkTextLabel(cont),
-            &mkTextLabel(s_ent),
+            &makeTextLabelStr(cont),
+            &makeTextLabelStr(s_ent),
           ));
           currBNo = cont;
         }
         Stmt::WhileDo { cond, stmts } => {
           let condblock = self.blocks.len();
           self.blocks.push(TypedIxVec::<InstIx, Inst>::new());
-          self.blocks[currBNo].push(i_goto(&mkTextLabel(condblock)));
+          self.blocks[currBNo].push(i_goto(&makeTextLabelStr(condblock)));
           let (s_ent, s_exit) = self.blockify(stmts);
-          self.blocks[s_exit].push(i_goto(&mkTextLabel(condblock)));
+          self.blocks[s_exit].push(i_goto(&makeTextLabelStr(condblock)));
           let cont = self.blocks.len();
           self.blocks.push(TypedIxVec::<InstIx, Inst>::new());
           self.blocks[condblock].push(i_goto_ctf(
             cond,
-            &mkTextLabel(s_ent),
-            &mkTextLabel(cont),
+            &makeTextLabelStr(s_ent),
+            &makeTextLabelStr(cont),
           ));
           currBNo = cont;
         }
@@ -1489,7 +1484,7 @@ impl Blockifier {
 
         debug_assert!(b.len() > 0);
         if b.len() == 1 {
-          if let Some(targetLabel) = is_goto_insn(&b[mkInstIx(0)]) {
+          if let Some(targetLabel) = is_goto_insn(&b[InstIx::new(0)]) {
             if let Label::Unresolved { name } = targetLabel {
               redir = Some((n - 1, name));
               break;
@@ -1511,10 +1506,10 @@ impl Blockifier {
               None => {}
               Some(ref mut insns) => {
                 let mmm = insns.len();
-                for j in mkInstIx(0).dotdot(mkInstIx(mmm)) {
+                for j in InstIx::new(0).dotdot(InstIx::new(mmm)) {
                   remapControlFlowTarget(
                     &mut insns[j],
-                    &mkTextLabel(from),
+                    &makeTextLabelStr(from),
                     &to,
                   );
                 }
@@ -1534,12 +1529,12 @@ impl Blockifier {
     // END optionally, short out blocks that merely jump somewhere else
 
     // Convert (ent_bno, exit_bno, cleanedUp) into a Func
-    let mut func = Func::new(&self.name, &mkTextLabel(ent_bno));
+    let mut func = Func::new(&self.name, &makeTextLabelStr(ent_bno));
     func.nVirtualRegs = 3; // or whatever
     let mut n = 0;
     for mb_ivec in cleanedUp {
       if let Some(ivec) = mb_ivec {
-        func.block(&mkTextLabel(n), ivec);
+        func.block(&makeTextLabelStr(n), ivec);
       }
       n += 1;
     }
@@ -1573,7 +1568,7 @@ impl minira::interface::Function for Func {
   }
 
   fn entry_block(&self) -> BlockIx {
-    mkBlockIx(0)
+    BlockIx::new(0)
   }
 
   fn blocks(&self) -> MyRange<BlockIx> {
@@ -1686,7 +1681,7 @@ pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
     let first = index as usize;
     for i in 0..nI32 {
       let name = format!("R{}", i).to_string();
-      let reg = mkRealReg(RegClass::I32, /*enc=*/ 0, index).to_real_reg();
+      let reg = Reg::newReal(RegClass::I32, /*enc=*/ 0, index).to_real_reg();
       regs.push((reg, name));
       index += 1;
     }
@@ -1698,7 +1693,7 @@ pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
     let first = index as usize;
     for i in 0..nF32 {
       let name = format!("F{}", i).to_string();
-      let reg = mkRealReg(RegClass::F32, /*enc=*/ 0, index).to_real_reg();
+      let reg = Reg::newReal(RegClass::F32, /*enc=*/ 0, index).to_real_reg();
       regs.push((reg, name));
       index += 1;
     }

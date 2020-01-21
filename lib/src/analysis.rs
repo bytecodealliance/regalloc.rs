@@ -9,10 +9,9 @@ use log::debug;
 use std::fmt;
 
 use crate::data_structures::{
-  mkBlockIx, mkRangeFrag, mkRangeFragIx, mkRealRangeIx, mkVirtualRangeIx,
-  BlockIx, InstPoint, InstPoint_Def, InstPoint_Use, Map, Queue, RangeFrag,
-  RangeFragIx, RangeFragKind, RealRange, RealRangeIx, Reg, Set,
-  SortedRangeFragIxs, TypedIxVec, VirtualRange, VirtualRangeIx,
+  BlockIx, InstPoint, Map, Queue, RangeFrag, RangeFragIx, RangeFragKind,
+  RealRange, RealRangeIx, Reg, Set, SortedRangeFragIxs, TypedIxVec,
+  VirtualRange, VirtualRangeIx,
 };
 use crate::interface::Function;
 
@@ -66,7 +65,7 @@ impl CFGInfo {
     pred_map.resize(nBlocks, Set::empty());
     for (src, dst_set) in (0..).zip(succ_map.iter()) {
       for dst in dst_set.iter() {
-        pred_map[*dst].insert(mkBlockIx(src));
+        pred_map[*dst].insert(BlockIx::new(src));
       }
     }
 
@@ -90,9 +89,10 @@ impl CFGInfo {
     // |back_edges| is a set rather than a vector so as to avoid
     // complications that might later arise if the same loop is enumerated
     // more than once.
-    let mut back_edges = Set::<(BlockIx, BlockIx)>::empty(); // (m->n)
-                                                             // Iterate over all edges
-    for bixM in mkBlockIx(0).dotdot(mkBlockIx(nBlocks)) {
+    //
+    // Iterate over all edges (m->n)
+    let mut back_edges = Set::<(BlockIx, BlockIx)>::empty();
+    for bixM in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
       for bixN in succ_map[bixM].iter() {
         if dom_map[bixM].contains(*bixN) {
           //println!("QQQQ back edge {} -> {}",
@@ -224,7 +224,7 @@ impl CFGInfo {
     if pre_ord.len() < nBlocks as usize {
       // This can happen if the graph contains nodes unreachable from
       // the entry point.  In which case, deal with any leftovers.
-      for bix in mkBlockIx(0).dotdot(mkBlockIx(nBlocks)) {
+      for bix in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
         if !visited[bix] {
           dfs(&mut pre_ord, &mut post_ord, &mut visited, &succ_map, bix);
         }
@@ -262,20 +262,20 @@ fn calc_dominators(
   {
     let r: BlockIx = start;
     let N: Set<BlockIx> =
-      Set::from_vec((0..nBlocks).map(|bixNo| mkBlockIx(bixNo)).collect());
+      Set::from_vec((0..nBlocks).map(|bixNo| BlockIx::new(bixNo)).collect());
     let mut D: Set<BlockIx>;
     let mut T: Set<BlockIx>;
     dom_map.resize(nBlocks, Set::<BlockIx>::empty());
     dom_map[r] = Set::unit(r);
     for ixnoN in 0..nBlocks {
-      let bixN = mkBlockIx(ixnoN);
+      let bixN = BlockIx::new(ixnoN);
       if bixN != r {
         dom_map[bixN] = N.clone();
       }
     }
     loop {
       let mut change = false;
-      for bixN in mkBlockIx(0).dotdot(mkBlockIx(nBlocks)) {
+      for bixN in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
         if bixN == r {
           continue;
         }
@@ -388,7 +388,7 @@ fn calc_livein_and_liveout<F: Function>(
   // too.
   let mut liveins = TypedIxVec::<BlockIx, Set<Reg>>::new();
   liveins.resize(nBlocks, empty.clone());
-  for bixI in mkBlockIx(0).dotdot(mkBlockIx(nBlocks)) {
+  for bixI in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
     let mut liveinI = liveouts[bixI].clone();
     liveinI.remove(&def_sets_per_block[bixI]);
     liveinI.union(&use_sets_per_block[bixI]);
@@ -398,7 +398,7 @@ fn calc_livein_and_liveout<F: Function>(
   if false {
     let mut sum_card_LI = 0;
     let mut sum_card_LO = 0;
-    for bix in mkBlockIx(0).dotdot(mkBlockIx(nBlocks)) {
+    for bix in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
       sum_card_LI += liveins[bix].card();
       sum_card_LO += liveouts[bix].card();
     }
@@ -483,8 +483,8 @@ fn get_RangeFrags_for_block<F: Function>(
   debug_assert!(f.block_insns(bix).len() >= 1);
   let first_iix_in_block = f.block_insns(bix).first();
   let last_iix_in_block = f.block_insns(bix).last();
-  let first_pt_in_block = InstPoint_Use(first_iix_in_block);
-  let last_pt_in_block = InstPoint_Def(last_iix_in_block);
+  let first_pt_in_block = InstPoint::newUse(first_iix_in_block);
+  let last_pt_in_block = InstPoint::newDef(last_iix_in_block);
 
   // The running state.
   let mut state = Map::<Reg, ProtoRangeFrag>::default();
@@ -534,7 +534,7 @@ fn get_RangeFrags_for_block<F: Function>(
         // the fact that |r| is listed in |livein|.  We don't care
         // here.
         Some(ProtoRangeFrag { uses, first, last }) => {
-          let new_last = InstPoint_Use(iix);
+          let new_last = InstPoint::newUse(iix);
           debug_assert!(last <= &new_last);
           new_pf = ProtoRangeFrag {
             uses: plus1(*uses),
@@ -560,7 +560,7 @@ fn get_RangeFrags_for_block<F: Function>(
         }
         // This the first or subsequent modify after a write.
         Some(ProtoRangeFrag { uses, first, last }) => {
-          let new_last = InstPoint_Def(iix);
+          let new_last = InstPoint::newDef(iix);
           debug_assert!(last <= &new_last);
           new_pf = ProtoRangeFrag {
             uses: plus1(*uses),
@@ -582,7 +582,7 @@ fn get_RangeFrags_for_block<F: Function>(
         // First mention of a Reg we've never heard of before.
         // Start a new ProtoRangeFrag for it and keep going.
         None => {
-          let new_pt = InstPoint_Def(iix);
+          let new_pt = InstPoint::newDef(iix);
           new_pf = ProtoRangeFrag { uses: 1, first: new_pt, last: new_pt };
         }
         // There's already a ProtoRangeFrag for |r|.  This write
@@ -592,9 +592,9 @@ fn get_RangeFrags_for_block<F: Function>(
           if first == last {
             debug_assert!(*uses == 1);
           }
-          let frag = mkRangeFrag(f, bix, *first, *last, *uses);
+          let frag = RangeFrag::new(f, bix, *first, *last, *uses);
           tmpResultVec.push((*r, frag));
-          let new_pt = InstPoint_Def(iix);
+          let new_pt = InstPoint::newDef(iix);
           new_pf = ProtoRangeFrag { uses: 1, first: new_pt, last: new_pt };
         }
       }
@@ -625,7 +625,7 @@ fn get_RangeFrags_for_block<F: Function>(
       // read "after" the block.  Create a |LiveOut| or |Thru| frag
       // accordingly.
       Some(ProtoRangeFrag { uses, first, last: _ }) => {
-        let frag = mkRangeFrag(f, bix, *first, last_pt_in_block, *uses);
+        let frag = RangeFrag::new(f, bix, *first, last_pt_in_block, *uses);
         tmpResultVec.push((*r, frag));
       }
     }
@@ -640,7 +640,7 @@ fn get_RangeFrags_for_block<F: Function>(
     if pf.first == pf.last {
       debug_assert!(pf.uses == 1);
     }
-    let frag = mkRangeFrag(f, bix, pf.first, pf.last, pf.uses);
+    let frag = RangeFrag::new(f, bix, pf.first, pf.last, pf.uses);
     //println!("QQQQ post: leftover: {}", (r,frag).show());
     tmpResultVec.push((*r, frag));
   }
@@ -650,7 +650,7 @@ fn get_RangeFrags_for_block<F: Function>(
   // vector.
   for (r, frag) in tmpResultVec {
     outFEnv.push(frag);
-    let new_fix = mkRangeFragIx(outFEnv.len() as u32 - 1);
+    let new_fix = RangeFragIx::new(outFEnv.len() as u32 - 1);
     match outMap.get_mut(&r) {
       None => {
         outMap.insert(r, vec![new_fix]);
@@ -888,7 +888,7 @@ pub fn run_analysis<F: Function>(
   let mut n = 0;
   debug!("");
   for (def, uce) in def_sets_per_block.iter().zip(use_sets_per_block.iter()) {
-    debug!("{:<3?}   def {:<16?}  use {:?}", mkBlockIx(n), def, uce);
+    debug!("{:<3?}   def {:<16?}  use {:?}", BlockIx::new(n), def, uce);
     n += 1;
   }
 
@@ -897,7 +897,7 @@ pub fn run_analysis<F: Function>(
   n = 0;
   debug!("");
   for (preds, succs) in cfg_info.pred_map.iter().zip(cfg_info.succ_map.iter()) {
-    debug!("{:<3?}   preds {:<16?}  succs {:?}", mkBlockIx(n), preds, succs);
+    debug!("{:<3?}   preds {:<16?}  succs {:?}", BlockIx::new(n), preds, succs);
     n += 1;
   }
 
@@ -905,7 +905,12 @@ pub fn run_analysis<F: Function>(
   debug!("");
   for (depth, dom_by) in cfg_info.depth_map.iter().zip(cfg_info.dom_map.iter())
   {
-    debug!("{:<3?}   depth {}   dom_by {:<16?}", mkBlockIx(n), depth, dom_by);
+    debug!(
+      "{:<3?}   depth {}   dom_by {:<16?}",
+      BlockIx::new(n),
+      depth,
+      dom_by
+    );
     n += 1;
   }
 
@@ -920,7 +925,7 @@ pub fn run_analysis<F: Function>(
     for _ in 0..depth {
       estFreq *= 10;
     }
-    assert!(bix == mkBlockIx(estFreqs.len()));
+    assert!(bix == BlockIx::new(estFreqs.len()));
     estFreqs.push(estFreq);
   }
 
@@ -940,7 +945,7 @@ pub fn run_analysis<F: Function>(
   {
     debug!(
       "{:<3?}   livein {:<16?}  liveout {:<16?}",
-      mkBlockIx(n),
+      BlockIx::new(n),
       livein,
       liveout
     );
@@ -957,7 +962,7 @@ pub fn run_analysis<F: Function>(
   debug!("");
   n = 0;
   for frag in frag_env.iter() {
-    debug!("{:<3?}   {:?}", mkRangeFragIx(n), frag);
+    debug!("{:<3?}   {:?}", RangeFragIx::new(n), frag);
     n += 1;
   }
 
@@ -973,14 +978,14 @@ pub fn run_analysis<F: Function>(
   debug!("");
   n = 0;
   for rlr in rlr_env.iter() {
-    debug!("{:<4?}   {:?}", mkRealRangeIx(n), rlr);
+    debug!("{:<4?}   {:?}", RealRangeIx::new(n), rlr);
     n += 1;
   }
 
   debug!("");
   n = 0;
   for vlr in vlr_env.iter() {
-    debug!("{:<4?}   {:?}", mkVirtualRangeIx(n), vlr);
+    debug!("{:<4?}   {:?}", VirtualRangeIx::new(n), vlr);
     n += 1;
   }
 

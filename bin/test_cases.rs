@@ -7,7 +7,7 @@
 
 /// Test cases.  The list of them is right at the bottom, function |find_Func|.
 /// Add new ones there.
-use minira::interface::{mkRealReg, InstIx, RegClass, TypedIxVec};
+use minira::interface::{InstIx, Reg, RegClass, TypedIxVec};
 
 use crate::test_framework::{
   i_add, i_addm, i_cmp_gt, i_cmp_le, i_cmp_lt, i_copy, i_finish, i_goto,
@@ -72,7 +72,7 @@ fn test__fill_then_sum() -> Func {
   let vI = func.newVirtualReg(RegClass::I32);
   let vSUM = func.newVirtualReg(RegClass::I32);
   // "index=2" is arbitrary.
-  let rTMP = mkRealReg(RegClass::I32, /*enc=*/ 0x42, /*index=*/ 2);
+  let rTMP = Reg::newReal(RegClass::I32, /*enc=*/ 0x42, /*index=*/ 2);
   let vTMP2 = func.newVirtualReg(RegClass::I32);
 
   // Loop pre-header for filling array with numbers.
@@ -1016,7 +1016,7 @@ fn test__fill_then_sum_2a() -> Func {
   let vI = func.newVirtualReg(RegClass::I32);
   let vSUM = func.newVirtualReg(RegClass::I32);
   // "index=2" is arbitrary.
-  let rTMP = mkRealReg(RegClass::I32, /*enc=*/ 0x42, /*index=*/ 2);
+  let rTMP = Reg::newReal(RegClass::I32, /*enc=*/ 0x42, /*index=*/ 2);
   let vTMP2 = func.newVirtualReg(RegClass::I32);
 
   // Loop pre-header for filling array with numbers.

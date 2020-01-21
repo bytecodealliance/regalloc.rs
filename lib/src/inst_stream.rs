@@ -6,9 +6,8 @@ use log::debug;
 use std::fmt;
 
 use crate::data_structures::{
-  mkBlockIx, mkInstIx, BlockIx, InstIx, InstPoint, InstPoint_Reload,
-  InstPoint_Spill, Map, RangeFrag, RangeFragIx, RealReg, Set, SpillSlot,
-  TypedIxVec, VirtualRange, VirtualRangeIx, VirtualReg,
+  BlockIx, InstIx, InstPoint, Map, RangeFrag, RangeFragIx, RealReg, Set,
+  SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx, VirtualReg,
 };
 use crate::interface::{Function, RegAllocResult};
 
@@ -392,7 +391,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
     .sort_unstable_by(|(ip1, _), (ip2, _)| ip1.partial_cmp(ip2).unwrap());
 
   let mut curSnR = 0; // cursor in |spillsAndReloads|
-  let mut curB = mkBlockIx(0); // cursor in Func::blocks
+  let mut curB = BlockIx::new(0); // cursor in Func::blocks
 
   let mut insns: Vec<F::Inst> = vec![];
   let mut target_map: TypedIxVec<BlockIx, InstIx> = TypedIxVec::new();
@@ -404,12 +403,12 @@ pub(crate) fn edit_inst_stream<F: Function>(
     debug_assert!(curB.get() < func.blocks().len() as u32);
     if func.block_insns(curB).start() == iix {
       assert!(curB.get() == target_map.len());
-      target_map.push(mkInstIx(insns.len() as u32));
+      target_map.push(InstIx::new(insns.len() as u32));
     }
 
     // Copy reloads for this insn
     while curSnR < spills_and_reloads.len()
-      && spills_and_reloads[curSnR].0 == InstPoint_Reload(iix)
+      && spills_and_reloads[curSnR].0 == InstPoint::newReload(iix)
     {
       insns.push(spills_and_reloads[curSnR].1.clone());
       curSnR += 1;
@@ -418,7 +417,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
     insns.push(func.get_insn(iix).clone());
     // Copy spills for this insn
     while curSnR < spills_and_reloads.len()
-      && spills_and_reloads[curSnR].0 == InstPoint_Spill(iix)
+      && spills_and_reloads[curSnR].0 == InstPoint::newSpill(iix)
     {
       insns.push(spills_and_reloads[curSnR].1.clone());
       curSnR += 1;
