@@ -513,16 +513,16 @@ impl Reg {
   pub fn is_real(self) -> bool {
     !self.is_virtual()
   }
-  pub fn newReal(rc: RegClass, enc: u8, index: u8) -> Self {
+  pub fn new_real(rc: RegClass, enc: u8, index: u8) -> Self {
     let n = (0 << 31)
       | (rc.rc_to_u32() << 28)
       | ((enc as u32) << 8)
       | ((index as u32) << 0);
     Reg { do_not_access_this_directly: n }
   }
-  pub fn newVirtual(rc: RegClass, index: u32) -> Self {
+  pub fn new_virtual(rc: RegClass, index: u32) -> Self {
     if index >= (1 << 28) {
-      panic!("mkVirtualReg(): index too large");
+      panic!("new_virtual(): index too large");
     }
     let n = (1 << 31) | (rc.rc_to_u32() << 28) | (index << 0);
     Reg { do_not_access_this_directly: n }

@@ -1161,8 +1161,8 @@ impl Func {
   }
 
   // Get a new VirtualReg name
-  pub fn newVirtualReg(&mut self, rc: RegClass) -> Reg {
-    let v = Reg::newVirtual(rc, self.nVirtualRegs);
+  pub fn new_virtual_reg(&mut self, rc: RegClass) -> Reg {
+    let v = Reg::new_virtual(rc, self.nVirtualRegs);
     self.nVirtualRegs += 1;
     v
   }
@@ -1388,8 +1388,8 @@ impl Blockifier {
   }
 
   // Get a new VirtualReg name
-  pub fn newVirtualReg(&mut self, rc: RegClass) -> Reg {
-    let v = Reg::newVirtual(rc, self.nVirtualRegs);
+  pub fn new_virtual_reg(&mut self, rc: RegClass) -> Reg {
+    let v = Reg::new_virtual(rc, self.nVirtualRegs);
     self.nVirtualRegs += 1;
     v
   }
@@ -1681,7 +1681,7 @@ pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
     let first = index as usize;
     for i in 0..nI32 {
       let name = format!("R{}", i).to_string();
-      let reg = Reg::newReal(RegClass::I32, /*enc=*/ 0, index).to_real_reg();
+      let reg = Reg::new_real(RegClass::I32, /*enc=*/ 0, index).to_real_reg();
       regs.push((reg, name));
       index += 1;
     }
@@ -1693,7 +1693,7 @@ pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
     let first = index as usize;
     for i in 0..nF32 {
       let name = format!("F{}", i).to_string();
-      let reg = Reg::newReal(RegClass::F32, /*enc=*/ 0, index).to_real_reg();
+      let reg = Reg::new_real(RegClass::F32, /*enc=*/ 0, index).to_real_reg();
       regs.push((reg, name));
       index += 1;
     }
