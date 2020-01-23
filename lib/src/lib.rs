@@ -2,9 +2,6 @@
  * vim: set ts=8 sts=2 et sw=2 tw=80:
 */
 
-#![allow(non_snake_case)]
-#![allow(non_camel_case_types)]
-
 //! Main file / top-level module for minira library.
 
 mod analysis;

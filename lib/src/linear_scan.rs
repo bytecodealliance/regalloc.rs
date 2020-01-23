@@ -484,9 +484,8 @@ pub fn run<F: Function>(
   let mut per_real_reg = vec![Vec::new(); reg_universe.allocable];
 
   for (i, vlr) in vlrs.iter().enumerate() {
-    let rregNo = vlr.rreg.unwrap().get_index();
-    let curr_vlrix = VirtualRangeIx::new(i as u32);
-    per_real_reg[rregNo].push(curr_vlrix);
+    per_real_reg[vlr.rreg.unwrap().get_index()]
+      .push(VirtualRangeIx::new(i as u32));
   }
 
   for i in 0..reg_universe.allocable {
