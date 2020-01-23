@@ -45,7 +45,7 @@ Performance:
 - Currently we call getRegUsage three times for each insn.  Just do this
   once and cache the results.
 
-- Inst rewrite loop: don't clone mapD; just use it as soon as it's available.
+- Inst rewrite loop: don't clone map_defs; just use it as soon as it's available.
 
 - Inst rewrite loop: move cursors forwards at Point granularity so we don't
   have to repeatedly re-scan the groups looking for particular LR kinds?

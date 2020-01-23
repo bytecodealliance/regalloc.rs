@@ -85,10 +85,10 @@ impl RI {
       RI::Imm { .. } => {}
     }
   }
-  fn apply_D_or_U(&mut self, map: &Map<VirtualReg, RealReg>) {
+  fn apply_defs_or_uses(&mut self, map: &Map<VirtualReg, RealReg>) {
     match self {
       RI::Reg { ref mut reg } => {
-        reg.apply_D_or_U(map);
+        reg.apply_defs_or_uses(map);
       }
       RI::Imm { .. } => {}
     }
@@ -131,14 +131,14 @@ impl AM {
       }
     }
   }
-  fn apply_D_or_U(&mut self, map: &Map<VirtualReg, RealReg>) {
+  fn apply_defs_or_uses(&mut self, map: &Map<VirtualReg, RealReg>) {
     match self {
       AM::RI { ref mut base, .. } => {
-        base.apply_D_or_U(map);
+        base.apply_defs_or_uses(map);
       }
       AM::RR { ref mut base, ref mut offset } => {
-        base.apply_D_or_U(map);
-        offset.apply_D_or_U(map);
+        base.apply_defs_or_uses(map);
+        offset.apply_defs_or_uses(map);
       }
     }
   }
@@ -634,65 +634,66 @@ impl Inst {
 
   // Apply the specified VirtualReg->RealReg mappings to the instruction,
   // thusly:
-  // * For registers mentioned in a read role, apply mapU.
-  // * For registers mentioned in a write role, apply mapD.
-  // * For registers mentioned in a modify role, mapU and mapD *must* agree
+  // * For registers mentioned in a read role, apply map_uses.
+  // * For registers mentioned in a write role, apply map_defs.
+  // * For registers mentioned in a modify role, map_uses and map_defs *must* agree
   //   (if not, our caller is buggy).  So apply either map to that register.
   pub fn mapRegs_D_U(
-    &mut self, mapD: &Map<VirtualReg, RealReg>, mapU: &Map<VirtualReg, RealReg>,
+    &mut self, map_defs: &Map<VirtualReg, RealReg>,
+    map_uses: &Map<VirtualReg, RealReg>,
   ) {
     let mut ok = true;
     match self {
       Inst::Imm { dst, imm: _ } => {
-        dst.apply_D_or_U(mapD);
+        dst.apply_defs_or_uses(map_defs);
       }
       Inst::ImmF { dst, imm: _ } => {
-        dst.apply_D_or_U(mapD);
+        dst.apply_defs_or_uses(map_defs);
       }
       Inst::Copy { dst, src } => {
-        dst.apply_D_or_U(mapD);
-        src.apply_D_or_U(mapU);
+        dst.apply_defs_or_uses(map_defs);
+        src.apply_defs_or_uses(map_uses);
       }
       Inst::BinOp { op: _, dst, srcL, srcR } => {
-        dst.apply_D_or_U(mapD);
-        srcL.apply_D_or_U(mapU);
-        srcR.apply_D_or_U(mapU);
+        dst.apply_defs_or_uses(map_defs);
+        srcL.apply_defs_or_uses(map_uses);
+        srcR.apply_defs_or_uses(map_uses);
       }
       Inst::BinOpM { op: _, dst, srcR } => {
-        dst.apply_M(mapD, mapU);
-        srcR.apply_D_or_U(mapU);
+        dst.apply_mods(map_defs, map_uses);
+        srcR.apply_defs_or_uses(map_uses);
       }
       Inst::BinOpF { op: _, dst, srcL, srcR } => {
-        dst.apply_D_or_U(mapD);
-        srcL.apply_D_or_U(mapU);
-        srcR.apply_D_or_U(mapU);
+        dst.apply_defs_or_uses(map_defs);
+        srcL.apply_defs_or_uses(map_uses);
+        srcR.apply_defs_or_uses(map_uses);
       }
       Inst::Store { addr, src } => {
-        addr.apply_D_or_U(mapU);
-        src.apply_D_or_U(mapU);
+        addr.apply_defs_or_uses(map_uses);
+        src.apply_defs_or_uses(map_uses);
       }
       Inst::StoreF { addr, src } => {
-        addr.apply_D_or_U(mapU);
-        src.apply_D_or_U(mapU);
+        addr.apply_defs_or_uses(map_uses);
+        src.apply_defs_or_uses(map_uses);
       }
       Inst::Load { dst, addr } => {
-        dst.apply_D_or_U(mapD);
-        addr.apply_D_or_U(mapU);
+        dst.apply_defs_or_uses(map_defs);
+        addr.apply_defs_or_uses(map_uses);
       }
       Inst::LoadF { dst, addr } => {
-        dst.apply_D_or_U(mapD);
-        addr.apply_D_or_U(mapU);
+        dst.apply_defs_or_uses(map_defs);
+        addr.apply_defs_or_uses(map_uses);
       }
       Inst::Goto { .. } => {}
       Inst::GotoCTF { cond, targetT: _, targetF: _ } => {
-        cond.apply_D_or_U(mapU);
+        cond.apply_defs_or_uses(map_uses);
       }
       Inst::PrintS { .. } => {}
       Inst::PrintI { reg } => {
-        reg.apply_D_or_U(mapU);
+        reg.apply_defs_or_uses(map_uses);
       }
       Inst::PrintF { reg } => {
-        reg.apply_D_or_U(mapU);
+        reg.apply_defs_or_uses(map_uses);
       }
       Inst::Finish {} => {}
       _ => {
@@ -1220,7 +1221,7 @@ impl Func {
   pub fn update_from_alloc(
     &mut self, result: minira::interface::RegAllocResult<Func>,
   ) {
-    self.insns = TypedIxVec::fromVec(result.insns);
+    self.insns = TypedIxVec::from_vec(result.insns);
     for bix in self.blocks.range() {
       let block = &mut self.blocks[bix];
       block.start = result.target_map[bix];

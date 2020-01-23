@@ -199,11 +199,11 @@ impl PerRealReg {
     let mut best_so_far: Option<(VirtualRangeIx, f32)> = None;
     for cand_vlrix in &self.vlrixs_assigned {
       let cand_vlr = &vlr_env[*cand_vlrix];
-      if cand_vlr.spillCost.is_none() {
+      if cand_vlr.spill_cost.is_none() {
         continue;
       }
-      let cand_cost = cand_vlr.spillCost.unwrap();
-      if !cost_is_less(Some(cand_cost), would_like_to_add.spillCost) {
+      let cand_cost = cand_vlr.spill_cost.unwrap();
+      if !cost_is_less(Some(cand_cost), would_like_to_add.spill_cost) {
         continue;
       }
       if !self.frags_in_use.can_add_if_we_first_del(
@@ -469,7 +469,7 @@ pub fn alloc_main<F: Function>(
         // We can only evict a LR with lower spill cost than the LR
         // we're trying to allocate.  This is really important, if only
         // to show that the algorithm will actually terminate.
-        debug_assert!(cost_is_less(Some(cand_cost), curr_vlr.spillCost));
+        debug_assert!(cost_is_less(Some(cand_cost), curr_vlr.spill_cost));
         let mut cand_is_better = true;
         if let Some((_, _, best_cost)) = best_so_far {
           if cost_is_less(Some(best_cost), Some(cand_cost)) {
@@ -519,7 +519,7 @@ pub fn alloc_main<F: Function>(
     // it's Game Over.  The constraints (availability of RealRegs vs
     // requirement for them) are impossible to fulfill, and so we cannot
     // generate any valid allocation for this function.
-    if curr_vlr.spillCost.is_none() {
+    if curr_vlr.spill_cost.is_none() {
       return Err("out of registers".to_string());
     }
 
@@ -568,7 +568,7 @@ pub fn alloc_main<F: Function>(
     let curr_vlr_class = curr_vlr_vreg.get_class();
     let curr_vlr_reg = curr_vlr_vreg.to_reg();
 
-    for fix in &curr_vlr.sorted_frags.fragIxs {
+    for fix in &curr_vlr.sorted_frags.frag_ixs {
       let frag: &RangeFrag = &frag_env[*fix];
       for iix in frag.first.iix.dotdot(frag.last.iix.plus(1)) {
         let reg_usage = func.get_regs(func.get_insn(iix));
@@ -583,7 +583,7 @@ pub fn alloc_main<F: Function>(
         // USES: Do we need to create a reload-to-use bridge
         // (VirtualRange) ?
         if reg_usage.used.contains(curr_vlr_reg)
-          && frag.contains(&InstPoint::newUse(iix))
+          && frag.contains(&InstPoint::new_use(iix))
         {
           debug_assert!(!reg_usage.modified.contains(curr_vlr_reg));
           // Stash enough info that we can create a new VirtualRange
@@ -599,8 +599,8 @@ pub fn alloc_main<F: Function>(
         // later end up being assigned to different RealRegs, which is
         // obviously nonsensical.
         if reg_usage.modified.contains(curr_vlr_reg)
-          && frag.contains(&InstPoint::newUse(iix))
-          && frag.contains(&InstPoint::newDef(iix))
+          && frag.contains(&InstPoint::new_use(iix))
+          && frag.contains(&InstPoint::new_def(iix))
         {
           debug_assert!(!reg_usage.used.contains(curr_vlr_reg));
           debug_assert!(!reg_usage.defined.contains(curr_vlr_reg));
@@ -610,7 +610,7 @@ pub fn alloc_main<F: Function>(
         }
         // DEFS: Do we need to create a def-to-spill bridge?
         if reg_usage.defined.contains(curr_vlr_reg)
-          && frag.contains(&InstPoint::newDef(iix))
+          && frag.contains(&InstPoint::new_def(iix))
         {
           debug_assert!(!reg_usage.modified.contains(curr_vlr_reg));
           let sri =
@@ -655,7 +655,7 @@ pub fn alloc_main<F: Function>(
         rreg: None,
         sorted_frags: new_vlr_sfixs,
         size: 1,
-        spillCost: None, /*infinity*/
+        spill_cost: None, /*infinity*/
       };
       let new_vlrix = VirtualRangeIx::new(vlr_env.len() as u32);
       debug!(
@@ -705,7 +705,7 @@ pub fn alloc_main<F: Function>(
       // All the RangeFrags in |vlr_assigned| require |vlr_assigned.reg|
       // to be mapped to the real reg |i|
       // .. collect up all its constituent RangeFrags.
-      for fix in &sorted_frags.fragIxs {
+      for fix in &sorted_frags.frag_ixs {
         frag_map.push((*fix, *vreg, rreg));
       }
     }

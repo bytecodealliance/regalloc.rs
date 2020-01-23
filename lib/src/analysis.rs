@@ -483,8 +483,8 @@ fn get_RangeFrags_for_block<F: Function>(
   debug_assert!(f.block_insns(bix).len() >= 1);
   let first_iix_in_block = f.block_insns(bix).first();
   let last_iix_in_block = f.block_insns(bix).last();
-  let first_pt_in_block = InstPoint::newUse(first_iix_in_block);
-  let last_pt_in_block = InstPoint::newDef(last_iix_in_block);
+  let first_pt_in_block = InstPoint::new_use(first_iix_in_block);
+  let last_pt_in_block = InstPoint::new_def(last_iix_in_block);
 
   // The running state.
   let mut state = Map::<Reg, ProtoRangeFrag>::default();
@@ -534,7 +534,7 @@ fn get_RangeFrags_for_block<F: Function>(
         // the fact that |r| is listed in |livein|.  We don't care
         // here.
         Some(ProtoRangeFrag { uses, first, last }) => {
-          let new_last = InstPoint::newUse(iix);
+          let new_last = InstPoint::new_use(iix);
           debug_assert!(last <= &new_last);
           new_pf = ProtoRangeFrag {
             uses: plus1(*uses),
@@ -560,7 +560,7 @@ fn get_RangeFrags_for_block<F: Function>(
         }
         // This the first or subsequent modify after a write.
         Some(ProtoRangeFrag { uses, first, last }) => {
-          let new_last = InstPoint::newDef(iix);
+          let new_last = InstPoint::new_def(iix);
           debug_assert!(last <= &new_last);
           new_pf = ProtoRangeFrag {
             uses: plus1(*uses),
@@ -582,7 +582,7 @@ fn get_RangeFrags_for_block<F: Function>(
         // First mention of a Reg we've never heard of before.
         // Start a new ProtoRangeFrag for it and keep going.
         None => {
-          let new_pt = InstPoint::newDef(iix);
+          let new_pt = InstPoint::new_def(iix);
           new_pf = ProtoRangeFrag { uses: 1, first: new_pt, last: new_pt };
         }
         // There's already a ProtoRangeFrag for |r|.  This write
@@ -594,7 +594,7 @@ fn get_RangeFrags_for_block<F: Function>(
           }
           let frag = RangeFrag::new(f, bix, *first, *last, *uses);
           tmpResultVec.push((*r, frag));
-          let new_pt = InstPoint::newDef(iix);
+          let new_pt = InstPoint::new_def(iix);
           new_pf = ProtoRangeFrag { uses: 1, first: new_pt, last: new_pt };
         }
       }
@@ -697,8 +697,8 @@ fn merge_RangeFrags(
 ) {
   let mut resR = TypedIxVec::<RealRangeIx, RealRange>::new();
   let mut resV = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
-  for (reg, all_fragIxs_for_reg) in fragIx_vecs_per_reg.iter() {
-    // BEGIN merge |all_fragIxs_for_reg| entries as much as possible.
+  for (reg, all_frag_ixs_for_reg) in fragIx_vecs_per_reg.iter() {
+    // BEGIN merge |all_frag_ixs_for_reg| entries as much as possible.
     // Each |state| entry has four components:
     //    (1) An is-this-entry-still-valid flag
     //    (2) A set of RangeFragIxs.  These should refer to disjoint
@@ -710,7 +710,7 @@ fn merge_RangeFrags(
     //        (== have an outbound value)
     struct MergeGroup {
       valid: bool,
-      fragIxs: Set<RangeFragIx>,
+      frag_ixs: Set<RangeFragIx>,
       live_in_blocks: Set<BlockIx>,
       succs_of_live_out_blocks: Set<BlockIx>,
     }
@@ -719,7 +719,7 @@ fn merge_RangeFrags(
 
     // Create the initial state by giving each RangeFragIx its own Vec, and
     // tagging it with its interface blocks.
-    for fix in all_fragIxs_for_reg {
+    for fix in all_frag_ixs_for_reg {
       let mut live_in_blocks = Set::<BlockIx>::empty();
       let mut succs_of_live_out_blocks = Set::<BlockIx>::empty();
       let frag = &frag_env[*fix];
@@ -740,9 +740,13 @@ fn merge_RangeFrags(
       }
 
       let valid = true;
-      let fragIxs = Set::unit(*fix);
-      let mg =
-        MergeGroup { valid, fragIxs, live_in_blocks, succs_of_live_out_blocks };
+      let frag_ixs = Set::unit(*fix);
+      let mg = MergeGroup {
+        valid,
+        frag_ixs,
+        live_in_blocks,
+        succs_of_live_out_blocks,
+      };
       state.push(mg);
     }
 
@@ -767,8 +771,8 @@ fn merge_RangeFrags(
                         state[j].succs_of_live_out_blocks
                                 .intersects(&state[i].live_in_blocks);
           if do_merge {
-            let mut tmp_fragIxs = state[i].fragIxs.clone();
-            state[j].fragIxs.union(&mut tmp_fragIxs);
+            let mut tmp_frag_ixs = state[i].frag_ixs.clone();
+            state[j].frag_ixs.union(&mut tmp_frag_ixs);
             let tmp_libs = state[i].live_in_blocks.clone();
             state[j].live_in_blocks.union(&tmp_libs);
             let tmp_solobs = state[i].succs_of_live_out_blocks.clone();
@@ -786,43 +790,43 @@ fn merge_RangeFrags(
 
     // Harvest the merged RangeFrag sets from |state|, and turn them into
     // RealRanges or VirtualRanges.
-    for MergeGroup { valid, fragIxs, .. } in state {
+    for MergeGroup { valid, frag_ixs, .. } in state {
       if !valid {
         continue;
       }
-      let sorted_frags = SortedRangeFragIxs::new(&fragIxs.to_vec(), &frag_env);
+      let sorted_frags = SortedRangeFragIxs::new(&frag_ixs.to_vec(), &frag_env);
       let size = 0;
-      let spillCost = Some(0.0);
+      let spill_cost = Some(0.0);
       if reg.is_virtual() {
         resV.push(VirtualRange {
           vreg: reg.to_virtual_reg(),
           rreg: None,
           sorted_frags,
           size,
-          spillCost,
+          spill_cost,
         });
       } else {
         resR.push(RealRange { rreg: reg.to_real_reg(), sorted_frags });
       }
     }
 
-    // END merge |all_fragIxs_for_reg| entries as much as possible
+    // END merge |all_frag_ixs_for_reg| entries as much as possible
   }
 
   (resR, resV)
 }
 
 //=============================================================================
-// Finalising of VirtualRanges, by setting the |size| and |spillCost| metrics.
+// Finalising of VirtualRanges, by setting the |size| and |spill_cost| metrics.
 
 // |size|: this is simple.  Simply sum the size of the individual fragments.
 // Note that this must produce a value > 0 for a dead write, hence the "+1".
 //
-// |spillCost|: try to estimate the number of spills and reloads that would
+// |spill_cost|: try to estimate the number of spills and reloads that would
 // result from spilling the VirtualRange, thusly:
 //    sum, for each frag
 //        # mentions of the VirtualReg in the frag
-//            (that's the per-frag, per pass spill spillCost)
+//            (that's the per-frag, per pass spill spill_cost)
 //        *
 //        the estimated execution count of the containing block
 //
@@ -834,12 +838,12 @@ fn set_VirtualRange_metrics(
   estFreq: &TypedIxVec<BlockIx, u32>,
 ) {
   for vlr in vlrs.iter_mut() {
-    debug_assert!(vlr.size == 0 && vlr.spillCost == Some(0.0));
+    debug_assert!(vlr.size == 0 && vlr.spill_cost == Some(0.0));
     debug_assert!(vlr.rreg.is_none());
     let mut tot_size: u32 = 0;
     let mut tot_cost: f32 = 0.0;
 
-    for fix in &vlr.sorted_frags.fragIxs {
+    for fix in &vlr.sorted_frags.frag_ixs {
       let frag = &fenv[*fix];
 
       // Add on the size of this fragment, but make sure we can't
@@ -866,7 +870,7 @@ fn set_VirtualRange_metrics(
     // short LRs in competition for registers.  This seems a bit of a hack
     // to me, but hey ..
     tot_cost /= tot_size as f32;
-    vlr.spillCost = Some(tot_cost);
+    vlr.spill_cost = Some(tot_cost);
   }
 }
 
@@ -956,7 +960,7 @@ pub fn run_analysis<F: Function>(
     return Err("entry block has live-in values".to_string());
   }
 
-  let (fragIxs_per_reg, frag_env) =
+  let (frag_ixs_per_reg, frag_env) =
     get_RangeFrags(func, &livein_sets_per_block, &liveout_sets_per_block);
 
   debug!("");
@@ -967,12 +971,12 @@ pub fn run_analysis<F: Function>(
   }
 
   debug!("");
-  for (reg, fragIxs) in fragIxs_per_reg.iter() {
-    debug!("frags for {:?}   {:?}", reg, fragIxs);
+  for (reg, frag_ixs) in frag_ixs_per_reg.iter() {
+    debug!("frags for {:?}   {:?}", reg, frag_ixs);
   }
 
   let (rlr_env, mut vlr_env) =
-    merge_RangeFrags(&fragIxs_per_reg, &frag_env, &cfg_info);
+    merge_RangeFrags(&frag_ixs_per_reg, &frag_env, &cfg_info);
   set_VirtualRange_metrics(&mut vlr_env, &frag_env, &estFreqs);
 
   debug!("");

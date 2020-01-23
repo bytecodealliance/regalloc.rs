@@ -11,7 +11,7 @@ use log::{debug, trace};
 
 use crate::analysis::run_analysis;
 use crate::data_structures::{
-  cmpRangeFrags, InstPoint, RangeFrag, RangeFragIx, RealRange, RealRangeIx,
+  cmp_range_frags, InstPoint, RangeFrag, RangeFragIx, RealRange, RealRangeIx,
   RealReg, RealRegUniverse, RegClass, SortedRangeFragIxs, TypedIxVec,
   VirtualRange, VirtualRangeIx,
 };
@@ -64,10 +64,10 @@ impl<'a> LiveIntervalKind<'a> {
     }
   }
   fn start_point(&self, fragments: &Fragments) -> InstPoint {
-    fragments[*self.fragments().fragIxs.first().unwrap()].first
+    fragments[*self.fragments().frag_ixs.first().unwrap()].first
   }
   fn end_point(&self, fragments: &Fragments) -> InstPoint {
-    fragments[*self.fragments().fragIxs.last().unwrap()].last
+    fragments[*self.fragments().frag_ixs.last().unwrap()].last
   }
 }
 
@@ -109,7 +109,7 @@ impl<'a> LiveInterval<'a> {
   fn covers(&self, pos: &InstPoint, fragments: &Fragments) -> bool {
     self
       .fragments()
-      .fragIxs
+      .frag_ixs
       .iter()
       .map(|&index| fragments[index])
       .any(|frag| frag.contains(pos))
@@ -118,8 +118,8 @@ impl<'a> LiveInterval<'a> {
   fn intersects_with(
     &self, other: &LiveInterval, fragments: &Fragments,
   ) -> Option<InstPoint> {
-    let frags = &self.fragments().fragIxs;
-    let other_frags = &other.fragments().fragIxs;
+    let frags = &self.fragments().frag_ixs;
+    let other_frags = &other.fragments().frag_ixs;
 
     let mut i = 0;
     let mut other_i = 0;
@@ -127,7 +127,7 @@ impl<'a> LiveInterval<'a> {
     while i < frags.len() && other_i < other_frags.len() {
       let cur = &fragments[frags[i]];
       let other = &fragments[other_frags[other_i]];
-      match cmpRangeFrags(cur, other) {
+      match cmp_range_frags(cur, other) {
         None => {
           // They intersect!
           return Some(if cur.first < other.first {
@@ -492,7 +492,7 @@ pub fn run<F: Function>(
     let rreg = reg_universe.regs[i].0;
     for vlrix_assigned in &per_real_reg[i] {
       let VirtualRange { vreg, sorted_frags, .. } = &vlrs[*vlrix_assigned];
-      for frag_index in &sorted_frags.fragIxs {
+      for frag_index in &sorted_frags.frag_ixs {
         frag_map.push((*frag_index, *vreg, rreg));
       }
     }

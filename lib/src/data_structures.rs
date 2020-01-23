@@ -2,9 +2,6 @@
  * vim: set ts=8 sts=2 et sw=2 tw=80:
 */
 
-#![allow(non_snake_case)]
-#![allow(non_camel_case_types)]
-
 //! Data structures for the whole crate.
 
 use rustc_hash::FxHashMap;
@@ -188,7 +185,7 @@ pub trait PlusN: PlusOne {
 #[derive(Clone, Copy)]
 pub struct MyRange<T> {
   first: T,
-  lastPlus1: T,
+  last_plus1: T,
   len: usize,
 }
 impl<T: Copy + PartialOrd + PlusOne> IntoIterator for MyRange<T> {
@@ -202,7 +199,7 @@ impl<T: Copy + PartialOrd + PlusOne> IntoIterator for MyRange<T> {
 impl<T: Copy + Eq + Ord + PlusOne + PlusN> MyRange<T> {
   /// Create a new range object.
   pub fn new(from: T, len: usize) -> MyRange<T> {
-    MyRange { first: from, lastPlus1: from.plus_n(len), len }
+    MyRange { first: from, last_plus1: from.plus_n(len), len }
   }
 
   pub fn start(&self) -> T {
@@ -235,7 +232,7 @@ pub struct MyIterator<T> {
 impl<T: Copy + PartialOrd + PlusOne> Iterator for MyIterator<T> {
   type Item = T;
   fn next(&mut self) -> Option<Self::Item> {
-    if self.next >= self.range.lastPlus1 {
+    if self.next >= self.range.last_plus1 {
       None
     } else {
       let res = Some(self.next);
@@ -261,7 +258,7 @@ where
   pub fn new() -> Self {
     Self { vek: Vec::new(), ty_ix: PhantomData::<TyIx> }
   }
-  pub fn fromVec(vek: Vec<Ty>) -> Self {
+  pub fn from_vec(vek: Vec<Ty>) -> Self {
     Self { vek, ty_ix: PhantomData::<TyIx> }
   }
   pub fn append(&mut self, other: &mut TypedIxVec<TyIx, Ty>) {
@@ -362,8 +359,8 @@ macro_rules! generate_boilerplate {
         $TypeIx::$TypeIx(self.get() - delta)
       }
       #[allow(dead_code)]
-      pub fn dotdot(&self, lastPlus1: $TypeIx) -> MyRange<$TypeIx> {
-        let len = (lastPlus1.get() - self.get()) as usize;
+      pub fn dotdot(&self, last_plus1: $TypeIx) -> MyRange<$TypeIx> {
+        let len = (last_plus1.get() - self.get()) as usize;
         MyRange::new(*self, len)
       }
     }
@@ -636,33 +633,34 @@ impl fmt::Debug for VirtualReg {
 impl Reg {
   // Apply a vreg-rreg mapping to a Reg.  This used for registers used in
   // either a read- or a write-role.
-  pub fn apply_D_or_U(&mut self, map: &Map<VirtualReg, RealReg>) {
+  pub fn apply_defs_or_uses(&mut self, map: &Map<VirtualReg, RealReg>) {
     if let Some(vreg) = self.as_virtual_reg() {
       if let Some(rreg) = map.get(&vreg) {
         debug_assert!(rreg.get_class() == vreg.get_class());
         *self = rreg.to_reg();
       } else {
-        panic!("Reg::apply_D_or_U: no mapping for {:?}", self);
+        panic!("Reg::apply_defs_or_uses: no mapping for {:?}", self);
       }
     }
   }
   // Apply a pair of vreg-rreg mappings to a Reg.  The mappings *must*
   // agree!  This seems a bit strange at first.  It is used for registers
   // used in a modify-role.
-  pub fn apply_M(
-    &mut self, mapD: &Map<VirtualReg, RealReg>, mapU: &Map<VirtualReg, RealReg>,
+  pub fn apply_mods(
+    &mut self, map_defs: &Map<VirtualReg, RealReg>,
+    map_uses: &Map<VirtualReg, RealReg>,
   ) {
     if let Some(vreg) = self.as_virtual_reg() {
-      let mb_result_D = mapD.get(&vreg);
-      let mb_result_U = mapU.get(&vreg);
+      let mb_result_def = map_defs.get(&vreg);
+      let mb_result_use = map_uses.get(&vreg);
       // Failure of this is serious and should be investigated.
-      if mb_result_D != mb_result_U {
+      if mb_result_def != mb_result_use {
         panic!(
-          "Reg::apply_M: inconsistent mappings for {:?}: D={:?}, U={:?}",
-          vreg, mb_result_D, mb_result_U
+          "Reg::apply_mods: inconsistent mappings for {:?}: D={:?}, U={:?}",
+          vreg, mb_result_def, mb_result_use
         );
       }
-      if let Some(rreg) = mb_result_D {
+      if let Some(rreg) = mb_result_def {
         debug_assert!(rreg.get_class() == vreg.get_class());
         *self = rreg.to_reg();
       } else {
@@ -875,32 +873,32 @@ impl Point {
   pub fn max_value() -> Self {
     Self::Spill
   }
-  pub fn isReload(self) -> bool {
+  pub fn is_reload(self) -> bool {
     match self {
       Point::Reload => true,
       _ => false,
     }
   }
-  pub fn isUse(self) -> bool {
+  pub fn is_use(self) -> bool {
     match self {
       Point::Use => true,
       _ => false,
     }
   }
-  pub fn isDef(self) -> bool {
+  pub fn is_def(self) -> bool {
     match self {
       Point::Def => true,
       _ => false,
     }
   }
-  pub fn isSpill(self) -> bool {
+  pub fn is_spill(self) -> bool {
     match self {
       Point::Spill => true,
       _ => false,
     }
   }
-  pub fn isUseOrDef(self) -> bool {
-    self.isUse() || self.isDef()
+  pub fn is_use_or_def(self) -> bool {
+    self.is_use() || self.is_def()
   }
 }
 impl PartialOrd for Point {
@@ -931,16 +929,16 @@ impl InstPoint {
   pub fn new(iix: InstIx, pt: Point) -> Self {
     InstPoint { iix, pt }
   }
-  pub fn newReload(iix: InstIx) -> Self {
+  pub fn new_reload(iix: InstIx) -> Self {
     InstPoint { iix, pt: Point::Reload }
   }
-  pub fn newUse(iix: InstIx) -> Self {
+  pub fn new_use(iix: InstIx) -> Self {
     InstPoint { iix, pt: Point::Use }
   }
-  pub fn newDef(iix: InstIx) -> Self {
+  pub fn new_def(iix: InstIx) -> Self {
     InstPoint { iix, pt: Point::Def }
   }
-  pub fn newSpill(iix: InstIx) -> Self {
+  pub fn new_spill(iix: InstIx) -> Self {
     InstPoint { iix, pt: Point::Spill }
   }
 }
@@ -1090,8 +1088,8 @@ impl RangeFrag {
     }
     let first_iix_in_block = f.block_insns(bix).first();
     let last_iix_in_block = f.block_insns(bix).last();
-    let first_pt_in_block = InstPoint::newUse(first_iix_in_block);
-    let last_pt_in_block = InstPoint::newDef(last_iix_in_block);
+    let first_pt_in_block = InstPoint::new_use(first_iix_in_block);
+    let last_pt_in_block = InstPoint::new_def(last_iix_in_block);
     let kind = match (first == first_pt_in_block, last == last_pt_in_block) {
       (false, false) => RangeFragKind::Local,
       (false, true) => RangeFragKind::LiveOut,
@@ -1104,7 +1102,7 @@ impl RangeFrag {
 
 // Comparison of RangeFrags.  They form a partial order.
 
-pub fn cmpRangeFrags(f1: &RangeFrag, f2: &RangeFrag) -> Option<Ordering> {
+pub fn cmp_range_frags(f1: &RangeFrag, f2: &RangeFrag) -> Option<Ordering> {
   if f1.last < f2.first {
     return Some(Ordering::Less);
   }
@@ -1131,11 +1129,11 @@ impl RangeFrag {
 
 #[derive(Clone)]
 pub struct SortedRangeFragIxs {
-  pub fragIxs: Vec<RangeFragIx>,
+  pub frag_ixs: Vec<RangeFragIx>,
 }
 impl fmt::Debug for SortedRangeFragIxs {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    self.fragIxs.fmt(fmt)
+    self.frag_ixs.fmt(fmt)
   }
 }
 impl SortedRangeFragIxs {
@@ -1143,7 +1141,7 @@ impl SortedRangeFragIxs {
     &self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> String {
     let mut frags = TypedIxVec::<RangeFragIx, RangeFrag>::new();
-    for fix in &self.fragIxs {
+    for fix in &self.frag_ixs {
       frags.push(fenv[*fix]);
     }
     format!("SFIxs_{:?}", &frags)
@@ -1151,10 +1149,10 @@ impl SortedRangeFragIxs {
 
   fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
     let mut ok = true;
-    for i in 1..self.fragIxs.len() {
-      let prev_frag = &fenv[self.fragIxs[i - 1]];
-      let this_frag = &fenv[self.fragIxs[i - 0]];
-      if cmpRangeFrags(prev_frag, this_frag) != Some(Ordering::Less) {
+    for i in 1..self.frag_ixs.len() {
+      let prev_frag = &fenv[self.frag_ixs[i - 1]];
+      let this_frag = &fenv[self.frag_ixs[i - 0]];
+      if cmp_range_frags(prev_frag, this_frag) != Some(Ordering::Less) {
         ok = false;
         break;
       }
@@ -1167,10 +1165,10 @@ impl SortedRangeFragIxs {
   pub fn new(
     source: &Vec<RangeFragIx>, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> Self {
-    let mut res = SortedRangeFragIxs { fragIxs: source.clone() };
+    let mut res = SortedRangeFragIxs { frag_ixs: source.clone() };
     // check the source is ordered, and clone (or sort it)
-    res.fragIxs.sort_unstable_by(|fix_a, fix_b| {
-      match cmpRangeFrags(&fenv[*fix_a], &fenv[*fix_b]) {
+    res.frag_ixs.sort_unstable_by(|fix_a, fix_b| {
+      match cmp_range_frags(&fenv[*fix_a], &fenv[*fix_b]) {
         Some(Ordering::Less) => Ordering::Less,
         Some(Ordering::Greater) => Ordering::Greater,
         Some(Ordering::Equal) | None => {
@@ -1185,8 +1183,8 @@ impl SortedRangeFragIxs {
   pub fn unit(
     fix: RangeFragIx, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> Self {
-    let mut res = SortedRangeFragIxs { fragIxs: Vec::<RangeFragIx>::new() };
-    res.fragIxs.push(fix);
+    let mut res = SortedRangeFragIxs { frag_ixs: Vec::<RangeFragIx>::new() };
+    res.frag_ixs.push(fix);
     res.check(fenv);
     res
   }
@@ -1207,16 +1205,16 @@ impl SortedRangeFragIxs {
     let mut ix = 0;
     let mut iy = 0;
     let mut res = Vec::<RangeFragIx>::new();
-    while ix < sfixs_x.fragIxs.len() && iy < sfixs_y.fragIxs.len() {
-      let fx = fenv[sfixs_x.fragIxs[ix]];
-      let fy = fenv[sfixs_y.fragIxs[iy]];
-      match cmpRangeFrags(&fx, &fy) {
+    while ix < sfixs_x.frag_ixs.len() && iy < sfixs_y.frag_ixs.len() {
+      let fx = fenv[sfixs_x.frag_ixs[ix]];
+      let fy = fenv[sfixs_y.frag_ixs[iy]];
+      match cmp_range_frags(&fx, &fy) {
         Some(Ordering::Less) => {
-          res.push(sfixs_x.fragIxs[ix]);
+          res.push(sfixs_x.frag_ixs[ix]);
           ix += 1;
         }
         Some(Ordering::Greater) => {
-          res.push(sfixs_y.fragIxs[iy]);
+          res.push(sfixs_y.frag_ixs[iy]);
           iy += 1;
         }
         Some(Ordering::Equal) | None => {
@@ -1227,16 +1225,16 @@ impl SortedRangeFragIxs {
     // At this point, one or the other or both vectors are empty.  Hence
     // it doesn't matter in which order the following two while-loops
     // appear.
-    debug_assert!(ix == sfixs_x.fragIxs.len() || iy == sfixs_y.fragIxs.len());
-    while ix < sfixs_x.fragIxs.len() {
-      res.push(sfixs_x.fragIxs[ix]);
+    debug_assert!(ix == sfixs_x.frag_ixs.len() || iy == sfixs_y.frag_ixs.len());
+    while ix < sfixs_x.frag_ixs.len() {
+      res.push(sfixs_x.frag_ixs[ix]);
       ix += 1;
     }
-    while iy < sfixs_y.fragIxs.len() {
-      res.push(sfixs_y.fragIxs[iy]);
+    while iy < sfixs_y.frag_ixs.len() {
+      res.push(sfixs_y.frag_ixs[iy]);
       iy += 1;
     }
-    self.fragIxs = res;
+    self.frag_ixs = res;
     self.check(fenv);
   }
 
@@ -1251,10 +1249,10 @@ impl SortedRangeFragIxs {
     let sfixs_y = &to_add;
     let mut ix = 0;
     let mut iy = 0;
-    while ix < sfixs_x.fragIxs.len() && iy < sfixs_y.fragIxs.len() {
-      let fx = fenv[sfixs_x.fragIxs[ix]];
-      let fy = fenv[sfixs_y.fragIxs[iy]];
-      match cmpRangeFrags(&fx, &fy) {
+    while ix < sfixs_x.frag_ixs.len() && iy < sfixs_y.frag_ixs.len() {
+      let fx = fenv[sfixs_x.frag_ixs[ix]];
+      let fy = fenv[sfixs_y.frag_ixs[iy]];
+      match cmp_range_frags(&fx, &fy) {
         Some(Ordering::Less) => {
           ix += 1;
         }
@@ -1268,7 +1266,7 @@ impl SortedRangeFragIxs {
     }
     // At this point, one or the other or both vectors are empty.  So
     // we're guaranteed to succeed.
-    debug_assert!(ix == sfixs_x.fragIxs.len() || iy == sfixs_y.fragIxs.len());
+    debug_assert!(ix == sfixs_x.frag_ixs.len() || iy == sfixs_y.frag_ixs.len());
     true
   }
 
@@ -1282,12 +1280,12 @@ impl SortedRangeFragIxs {
     let mut ix = 0;
     let mut iy = 0;
     let mut res = Vec::<RangeFragIx>::new();
-    while ix < sfixs_x.fragIxs.len() && iy < sfixs_y.fragIxs.len() {
-      let fx = fenv[sfixs_x.fragIxs[ix]];
-      let fy = fenv[sfixs_y.fragIxs[iy]];
-      match cmpRangeFrags(&fx, &fy) {
+    while ix < sfixs_x.frag_ixs.len() && iy < sfixs_y.frag_ixs.len() {
+      let fx = fenv[sfixs_x.frag_ixs[ix]];
+      let fy = fenv[sfixs_y.frag_ixs[iy]];
+      match cmp_range_frags(&fx, &fy) {
         Some(Ordering::Less) => {
-          res.push(sfixs_x.fragIxs[ix]);
+          res.push(sfixs_x.frag_ixs[ix]);
           ix += 1;
         }
         Some(Ordering::Equal) => {
@@ -1300,13 +1298,13 @@ impl SortedRangeFragIxs {
         None => panic!("SortedRangeFragIxs::del: partial overlap"),
       }
     }
-    debug_assert!(ix == sfixs_x.fragIxs.len() || iy == sfixs_y.fragIxs.len());
+    debug_assert!(ix == sfixs_x.frag_ixs.len() || iy == sfixs_y.frag_ixs.len());
     // Handle leftovers
-    while ix < sfixs_x.fragIxs.len() {
-      res.push(sfixs_x.fragIxs[ix]);
+    while ix < sfixs_x.frag_ixs.len() {
+      res.push(sfixs_x.frag_ixs[ix]);
       ix += 1;
     }
-    self.fragIxs = res;
+    self.frag_ixs = res;
     self.check(fenv);
   }
 
@@ -1339,7 +1337,7 @@ impl SortedRangeFragIxs {
 // * |size| is the number of instructions in total spanned by the LR.  It must
 //   not be zero.
 //
-// * |spillCost| is an abstractified measure of the cost of spilling the LR.
+// * |spill_cost| is an abstractified measure of the cost of spilling the LR.
 //   The only constraint (w.r.t. correctness) is that normal LRs have a |Some|
 //   value, whilst |None| is reserved for live ranges created for spills and
 //   reloads and interpreted to mean "infinity".  This is needed to guarantee
@@ -1385,12 +1383,12 @@ pub struct VirtualRange {
   pub rreg: Option<RealReg>,
   pub sorted_frags: SortedRangeFragIxs,
   pub size: u16,
-  pub spillCost: Option<f32>,
+  pub spill_cost: Option<f32>,
 }
 
 impl fmt::Debug for VirtualRange {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    let cost_str = match self.spillCost {
+    let cost_str = match self.spill_cost {
       None => "INFIN".to_string(),
       Some(c) => format!("{:<5.2}", c),
     };
@@ -1406,7 +1404,7 @@ impl fmt::Debug for VirtualRange {
 // Test cases
 
 #[test]
-fn test_SortedRangeFragIxs() {
+fn test_sorted_frag_ranges() {
   // Create a RangeFrag and RangeFragIx from two InstPoints.
   fn gen_fix(
     fenv: &mut TypedIxVec<RangeFragIx, RangeFrag>, first: InstPoint,
@@ -1425,7 +1423,7 @@ fn test_SortedRangeFragIxs() {
     res
   }
 
-  fn getRangeFrag(
+  fn get_range_frag(
     fenv: &TypedIxVec<RangeFragIx, RangeFrag>, fix: RangeFragIx,
   ) -> &RangeFrag {
     &fenv[fix]
@@ -1433,13 +1431,13 @@ fn test_SortedRangeFragIxs() {
 
   // Structural equality, at least.  Not equality in the sense of
   // deferencing the contained RangeFragIxes.
-  fn equal_SortedRangeFragIxs(
+  fn sorted_range_eq(
     fixs1: &SortedRangeFragIxs, fixs2: &SortedRangeFragIxs,
   ) -> bool {
-    if fixs1.fragIxs.len() != fixs2.fragIxs.len() {
+    if fixs1.frag_ixs.len() != fixs2.frag_ixs.len() {
       return false;
     }
-    for (mf1, mf2) in fixs1.fragIxs.iter().zip(&fixs2.fragIxs) {
+    for (mf1, mf2) in fixs1.frag_ixs.iter().zip(&fixs2.frag_ixs) {
       if mf1 != mf2 {
         return false;
       }
@@ -1455,22 +1453,22 @@ fn test_SortedRangeFragIxs() {
   let iix10 = InstIx::new(10);
   let iix12 = InstIx::new(12);
 
-  let fp_3u = InstPoint::newUse(iix3);
-  let fp_3d = InstPoint::newDef(iix3);
+  let fp_3u = InstPoint::new_use(iix3);
+  let fp_3d = InstPoint::new_def(iix3);
 
-  let fp_4u = InstPoint::newUse(iix4);
+  let fp_4u = InstPoint::new_use(iix4);
 
-  let fp_5u = InstPoint::newUse(iix5);
-  let fp_5d = InstPoint::newDef(iix5);
+  let fp_5u = InstPoint::new_use(iix5);
+  let fp_5d = InstPoint::new_def(iix5);
 
-  let fp_6u = InstPoint::newUse(iix6);
-  let fp_6d = InstPoint::newDef(iix6);
+  let fp_6u = InstPoint::new_use(iix6);
+  let fp_6d = InstPoint::new_def(iix6);
 
-  let fp_7u = InstPoint::newUse(iix7);
-  let fp_7d = InstPoint::newDef(iix7);
+  let fp_7u = InstPoint::new_use(iix7);
+  let fp_7d = InstPoint::new_def(iix7);
 
-  let fp_10u = InstPoint::newUse(iix10);
-  let fp_12u = InstPoint::newUse(iix12);
+  let fp_10u = InstPoint::new_use(iix10);
+  let fp_12u = InstPoint::new_use(iix12);
 
   let mut fenv = TypedIxVec::<RangeFragIx, RangeFrag>::new();
 
@@ -1488,62 +1486,74 @@ fn test_SortedRangeFragIxs() {
 
   // Boundary checks for point ranges, 3u vs 3d
   assert!(
-    cmpRangeFrags(getRangeFrag(&fenv, fix_3u), getRangeFrag(&fenv, fix_3u))
-      == Some(Ordering::Equal)
+    cmp_range_frags(
+      get_range_frag(&fenv, fix_3u),
+      get_range_frag(&fenv, fix_3u)
+    ) == Some(Ordering::Equal)
   );
   assert!(
-    cmpRangeFrags(getRangeFrag(&fenv, fix_3u), getRangeFrag(&fenv, fix_3d))
-      == Some(Ordering::Less)
+    cmp_range_frags(
+      get_range_frag(&fenv, fix_3u),
+      get_range_frag(&fenv, fix_3d)
+    ) == Some(Ordering::Less)
   );
   assert!(
-    cmpRangeFrags(getRangeFrag(&fenv, fix_3d), getRangeFrag(&fenv, fix_3u))
-      == Some(Ordering::Greater)
+    cmp_range_frags(
+      get_range_frag(&fenv, fix_3d),
+      get_range_frag(&fenv, fix_3u)
+    ) == Some(Ordering::Greater)
   );
 
   // Boundary checks for point ranges, 3d vs 4u
   assert!(
-    cmpRangeFrags(getRangeFrag(&fenv, fix_3d), getRangeFrag(&fenv, fix_3d))
-      == Some(Ordering::Equal)
+    cmp_range_frags(
+      get_range_frag(&fenv, fix_3d),
+      get_range_frag(&fenv, fix_3d)
+    ) == Some(Ordering::Equal)
   );
   assert!(
-    cmpRangeFrags(getRangeFrag(&fenv, fix_3d), getRangeFrag(&fenv, fix_4u))
-      == Some(Ordering::Less)
+    cmp_range_frags(
+      get_range_frag(&fenv, fix_3d),
+      get_range_frag(&fenv, fix_4u)
+    ) == Some(Ordering::Less)
   );
   assert!(
-    cmpRangeFrags(getRangeFrag(&fenv, fix_4u), getRangeFrag(&fenv, fix_3d))
-      == Some(Ordering::Greater)
+    cmp_range_frags(
+      get_range_frag(&fenv, fix_4u),
+      get_range_frag(&fenv, fix_3d)
+    ) == Some(Ordering::Greater)
   );
 
   // Partially overlapping
   assert!(
-    cmpRangeFrags(
-      getRangeFrag(&fenv, fix_3d_5d),
-      getRangeFrag(&fenv, fix_3u_5u)
+    cmp_range_frags(
+      get_range_frag(&fenv, fix_3d_5d),
+      get_range_frag(&fenv, fix_3u_5u)
     ) == None
   );
   assert!(
-    cmpRangeFrags(
-      getRangeFrag(&fenv, fix_3u_5u),
-      getRangeFrag(&fenv, fix_3d_5d)
+    cmp_range_frags(
+      get_range_frag(&fenv, fix_3u_5u),
+      get_range_frag(&fenv, fix_3d_5d)
     ) == None
   );
 
   // Completely overlapping: one contained within the other
   assert!(
-    cmpRangeFrags(
-      getRangeFrag(&fenv, fix_3d_5u),
-      getRangeFrag(&fenv, fix_3u_5d)
+    cmp_range_frags(
+      get_range_frag(&fenv, fix_3d_5u),
+      get_range_frag(&fenv, fix_3u_5d)
     ) == None
   );
   assert!(
-    cmpRangeFrags(
-      getRangeFrag(&fenv, fix_3u_5d),
-      getRangeFrag(&fenv, fix_3d_5u)
+    cmp_range_frags(
+      get_range_frag(&fenv, fix_3u_5d),
+      get_range_frag(&fenv, fix_3d_5u)
     ) == None
   );
 
   // Create a SortedRangeFragIxs from a bunch of RangeFrag indices
-  fn genSFI(
+  fn new_sorted_frag_ranges(
     fenv: &TypedIxVec<RangeFragIx, RangeFrag>, frags: &Vec<RangeFragIx>,
   ) -> SortedRangeFragIxs {
     SortedRangeFragIxs::new(&frags, fenv)
@@ -1551,40 +1561,43 @@ fn test_SortedRangeFragIxs() {
 
   // Construction tests
   // These fail due to overlap
-  //let _ = genSFI(&fenv, &vec![fix_3u_3u, fix_3u_3u]);
-  //let _ = genSFI(&fenv, &vec![fix_3u_5u, fix_3d_5d]);
+  //let _ = new_sorted_frag_ranges(&fenv, &vec![fix_3u_3u, fix_3u_3u]);
+  //let _ = new_sorted_frag_ranges(&fenv, &vec![fix_3u_5u, fix_3d_5d]);
 
   // These fail due to not being in order
-  //let _ = genSFI(&fenv, &vec![fix_4u_4u, fix_3u_3u]);
+  //let _ = new_sorted_frag_ranges(&fenv, &vec![fix_4u_4u, fix_3u_3u]);
 
   // Simple non-overlap tests for add()
 
-  let smf_empty = genSFI(&fenv, &vec![]);
-  let smf_6_7_10 = genSFI(&fenv, &vec![fix_6u_6d, fix_7u_7d, fix_10u]);
-  let smf_3_12 = genSFI(&fenv, &vec![fix_3u, fix_12u]);
-  let smf_3_6_7_10_12 =
-    genSFI(&fenv, &vec![fix_3u, fix_6u_6d, fix_7u_7d, fix_10u, fix_12u]);
+  let smf_empty = new_sorted_frag_ranges(&fenv, &vec![]);
+  let smf_6_7_10 =
+    new_sorted_frag_ranges(&fenv, &vec![fix_6u_6d, fix_7u_7d, fix_10u]);
+  let smf_3_12 = new_sorted_frag_ranges(&fenv, &vec![fix_3u, fix_12u]);
+  let smf_3_6_7_10_12 = new_sorted_frag_ranges(
+    &fenv,
+    &vec![fix_3u, fix_6u_6d, fix_7u_7d, fix_10u, fix_12u],
+  );
   let mut tmp;
 
   tmp = smf_empty.clone();
   tmp.add(&smf_empty, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_empty));
+  assert!(sorted_range_eq(&tmp, &smf_empty));
 
   tmp = smf_3_12.clone();
   tmp.add(&smf_empty, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_3_12));
+  assert!(sorted_range_eq(&tmp, &smf_3_12));
 
   tmp = smf_empty.clone();
   tmp.add(&smf_3_12, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_3_12));
+  assert!(sorted_range_eq(&tmp, &smf_3_12));
 
   tmp = smf_6_7_10.clone();
   tmp.add(&smf_3_12, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_3_6_7_10_12));
+  assert!(sorted_range_eq(&tmp, &smf_3_6_7_10_12));
 
   tmp = smf_3_12.clone();
   tmp.add(&smf_6_7_10, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_3_6_7_10_12));
+  assert!(sorted_range_eq(&tmp, &smf_3_6_7_10_12));
 
   // Tests for can_add()
   assert!(true == smf_empty.can_add(&smf_empty, &fenv));
@@ -1597,45 +1610,45 @@ fn test_SortedRangeFragIxs() {
   assert!(true == smf_3_12.can_add(&smf_6_7_10, &fenv));
 
   // Tests for del()
-  let smf_6_7 = genSFI(&fenv, &vec![fix_6u_6d, fix_7u_7d]);
-  let smf_6_10 = genSFI(&fenv, &vec![fix_6u_6d, fix_10u]);
-  let smf_7 = genSFI(&fenv, &vec![fix_7u_7d]);
-  let smf_10 = genSFI(&fenv, &vec![fix_10u]);
+  let smf_6_7 = new_sorted_frag_ranges(&fenv, &vec![fix_6u_6d, fix_7u_7d]);
+  let smf_6_10 = new_sorted_frag_ranges(&fenv, &vec![fix_6u_6d, fix_10u]);
+  let smf_7 = new_sorted_frag_ranges(&fenv, &vec![fix_7u_7d]);
+  let smf_10 = new_sorted_frag_ranges(&fenv, &vec![fix_10u]);
 
   tmp = smf_empty.clone();
   tmp.del(&smf_empty, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_empty));
+  assert!(sorted_range_eq(&tmp, &smf_empty));
 
   tmp = smf_3_12.clone();
   tmp.del(&smf_empty, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_3_12));
+  assert!(sorted_range_eq(&tmp, &smf_3_12));
 
   tmp = smf_empty.clone();
   tmp.del(&smf_3_12, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_empty));
+  assert!(sorted_range_eq(&tmp, &smf_empty));
 
   tmp = smf_6_7_10.clone();
   tmp.del(&smf_3_12, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_6_7_10));
+  assert!(sorted_range_eq(&tmp, &smf_6_7_10));
 
   tmp = smf_3_12.clone();
   tmp.del(&smf_6_7_10, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_3_12));
+  assert!(sorted_range_eq(&tmp, &smf_3_12));
 
   tmp = smf_6_7_10.clone();
   tmp.del(&smf_6_7, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_10));
+  assert!(sorted_range_eq(&tmp, &smf_10));
 
   tmp = smf_6_7_10.clone();
   tmp.del(&smf_10, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_6_7));
+  assert!(sorted_range_eq(&tmp, &smf_6_7));
 
   tmp = smf_6_7_10.clone();
   tmp.del(&smf_7, &fenv);
-  assert!(equal_SortedRangeFragIxs(&tmp, &smf_6_10));
+  assert!(sorted_range_eq(&tmp, &smf_6_10));
 
   // Tests for can_add_if_we_first_del()
-  let smf_10_12 = genSFI(&fenv, &vec![fix_10u, fix_12u]);
+  let smf_10_12 = new_sorted_frag_ranges(&fenv, &vec![fix_10u, fix_12u]);
 
   assert!(
     true

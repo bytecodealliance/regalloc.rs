@@ -117,30 +117,30 @@ pub(crate) fn edit_inst_stream<F: Function>(
   fn is_sane(frag: &RangeFrag) -> bool {
     // "Normal" frag (unrelated to spilling).  No normal frag may start or
     // end at a .s or a .r point.
-    if frag.first.pt.isUseOrDef()
-      && frag.last.pt.isUseOrDef()
+    if frag.first.pt.is_use_or_def()
+      && frag.last.pt.is_use_or_def()
       && frag.first.iix <= frag.last.iix
     {
       return true;
     }
     // A spill-related ("bridge") frag.  There are three possibilities,
     // and they correspond exactly to |BridgeKind|.
-    if frag.first.pt.isReload()
-      && frag.last.pt.isUse()
+    if frag.first.pt.is_reload()
+      && frag.last.pt.is_use()
       && frag.last.iix == frag.first.iix
     {
       // BridgeKind::RtoU
       return true;
     }
-    if frag.first.pt.isReload()
-      && frag.last.pt.isSpill()
+    if frag.first.pt.is_reload()
+      && frag.last.pt.is_spill()
       && frag.last.iix == frag.first.iix
     {
       // BridgeKind::RtoS
       return true;
     }
-    if frag.first.pt.isDef()
-      && frag.last.pt.isSpill()
+    if frag.first.pt.is_def()
+      && frag.last.pt.is_spill()
       && frag.last.iix == frag.first.iix
     {
       // BridgeKind::DtoS
@@ -222,16 +222,16 @@ pub(crate) fn edit_inst_stream<F: Function>(
     //   no frags should end at I.r (it's a reload insn)
     // Update map for I.u:
     //   add frags starting at I.u
-    //   mapU := map
+    //   map_uses := map
     //   remove frags ending at I.u
     // Update map for I.d:
     //   add frags starting at I.d
-    //   mapD := map
+    //   map_defs := map
     //   remove frags ending at I.d
     // Update map for I.s:
     //   no frags should start at I.s (it's a spill insn)
     //   remove frags ending at I.s
-    // apply mapU/mapD to I
+    // apply map_uses/map_defs to I
 
     //debug!("QQQQ mapping insn {:?}", insnIx);
     //debug!("QQQQ current map {}", showMap(&map));
@@ -241,7 +241,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
     //   no frags should end at I.r (it's a reload insn)
     for j in cursor_starts..cursor_starts + numStarts {
       let frag = &frag_env[frag_maps_by_start[j].0];
-      if frag.first.pt.isReload() {
+      if frag.first.pt.is_reload() {
         //////// STARTS at I.r
         map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
         //debug!(
@@ -253,11 +253,11 @@ pub(crate) fn edit_inst_stream<F: Function>(
 
     // Update map for I.u:
     //   add frags starting at I.u
-    //   mapU := map
+    //   map_uses := map
     //   remove frags ending at I.u
     for j in cursor_starts..cursor_starts + numStarts {
       let frag = &frag_env[frag_maps_by_start[j].0];
-      if frag.first.pt.isUse() {
+      if frag.first.pt.is_use() {
         //////// STARTS at I.u
         map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
         //debug!(
@@ -266,10 +266,10 @@ pub(crate) fn edit_inst_stream<F: Function>(
         //);
       }
     }
-    let mapU = map.clone();
+    let map_uses = map.clone();
     for j in cursor_ends..cursor_ends + numEnds {
       let frag = &frag_env[frag_maps_by_end[j].0];
-      if frag.last.pt.isUse() {
+      if frag.last.pt.is_use() {
         //////// ENDS at I.U
         map.remove(&frag_maps_by_end[j].1);
         //debug!("QQQQ removed frag after use: {:?}", fragMapsByStart[j].1);
@@ -278,11 +278,11 @@ pub(crate) fn edit_inst_stream<F: Function>(
 
     // Update map for I.d:
     //   add frags starting at I.d
-    //   mapD := map
+    //   map_defs := map
     //   remove frags ending at I.d
     for j in cursor_starts..cursor_starts + numStarts {
       let frag = &frag_env[frag_maps_by_start[j].0];
-      if frag.first.pt.isDef() {
+      if frag.first.pt.is_def() {
         //////// STARTS at I.d
         map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
         //debug!(
@@ -291,10 +291,10 @@ pub(crate) fn edit_inst_stream<F: Function>(
         //);
       }
     }
-    let mapD = map.clone();
+    let map_defs = map.clone();
     for j in cursor_ends..cursor_ends + numEnds {
       let frag = &frag_env[frag_maps_by_end[j].0];
-      if frag.last.pt.isDef() {
+      if frag.last.pt.is_def() {
         //////// ENDS at I.d
         map.remove(&frag_maps_by_end[j].1);
         //debug!("QQQQ ended frag from def: {:?}", fragMapsByEnd[j].1);
@@ -306,20 +306,20 @@ pub(crate) fn edit_inst_stream<F: Function>(
     //   remove frags ending at I.s
     for j in cursor_ends..cursor_ends + numEnds {
       let frag = &frag_env[frag_maps_by_end[j].0];
-      if frag.last.pt.isSpill() {
+      if frag.last.pt.is_spill() {
         //////// ENDS at I.s
         map.remove(&frag_maps_by_end[j].1);
         //debug!("QQQQ ended frag from spill: {:?}", fragMapsByEnd[j].1);
       }
     }
 
-    //debug!("QQQQ mapU {}", showMap(&mapU));
-    //debug!("QQQQ mapD {}", showMap(&mapD));
+    //debug!("QQQQ map_uses {}", showMap(&map_uses));
+    //debug!("QQQQ map_defs {}", showMap(&map_defs));
 
-    // Finally, we have mapU/mapD set correctly for this instruction.
+    // Finally, we have map_uses/map_defs set correctly for this instruction.
     // Apply it.
     let mut insn = func.get_insn_mut(insnIx);
-    F::map_regs(&mut insn, &mapU, &mapD);
+    F::map_regs(&mut insn, &map_uses, &map_defs);
 
     // Update cursorStarts and cursorEnds for the next iteration
     cursor_starts += numStarts;
@@ -345,21 +345,21 @@ pub(crate) fn edit_inst_stream<F: Function>(
     debug!("editlist entry: {:?}", eli);
     let vlr = &vlr_env[eli.vlrix];
     let vlr_sfrags = &vlr.sorted_frags;
-    debug_assert!(vlr.sorted_frags.fragIxs.len() == 1);
-    let vlr_frag = frag_env[vlr_sfrags.fragIxs[0]];
+    debug_assert!(vlr.sorted_frags.frag_ixs.len() == 1);
+    let vlr_frag = frag_env[vlr_sfrags.frag_ixs[0]];
     let rreg = vlr.rreg.expect("Gen of spill/reload: reg not assigned?!");
     match eli.kind {
       BridgeKind::RtoU => {
-        debug_assert!(vlr_frag.first.pt.isReload());
-        debug_assert!(vlr_frag.last.pt.isUse());
+        debug_assert!(vlr_frag.first.pt.is_reload());
+        debug_assert!(vlr_frag.last.pt.is_use());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
         let insnR = func.gen_reload(rreg, eli.slot);
         let whereToR = vlr_frag.first;
         spills_and_reloads.push((whereToR, insnR));
       }
       BridgeKind::RtoS => {
-        debug_assert!(vlr_frag.first.pt.isReload());
-        debug_assert!(vlr_frag.last.pt.isSpill());
+        debug_assert!(vlr_frag.first.pt.is_reload());
+        debug_assert!(vlr_frag.last.pt.is_spill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
         let insnR = func.gen_reload(rreg, eli.slot);
         let whereToR = vlr_frag.first;
@@ -369,8 +369,8 @@ pub(crate) fn edit_inst_stream<F: Function>(
         spills_and_reloads.push((whereToS, insnS));
       }
       BridgeKind::DtoS => {
-        debug_assert!(vlr_frag.first.pt.isDef());
-        debug_assert!(vlr_frag.last.pt.isSpill());
+        debug_assert!(vlr_frag.first.pt.is_def());
+        debug_assert!(vlr_frag.last.pt.is_spill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
         let insnS = func.gen_spill(eli.slot, rreg);
         let whereToS = vlr_frag.last;
@@ -411,7 +411,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
 
     // Copy reloads for this insn
     while curSnR < spills_and_reloads.len()
-      && spills_and_reloads[curSnR].0 == InstPoint::newReload(iix)
+      && spills_and_reloads[curSnR].0 == InstPoint::new_reload(iix)
     {
       insns.push(spills_and_reloads[curSnR].1.clone());
       curSnR += 1;
@@ -420,7 +420,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
     insns.push(func.get_insn(iix).clone());
     // Copy spills for this insn
     while curSnR < spills_and_reloads.len()
-      && spills_and_reloads[curSnR].0 == InstPoint::newSpill(iix)
+      && spills_and_reloads[curSnR].0 == InstPoint::new_spill(iix)
     {
       insns.push(spills_and_reloads[curSnR].1.clone());
       curSnR += 1;
