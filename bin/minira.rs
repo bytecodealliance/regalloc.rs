@@ -159,6 +159,7 @@ mod test_utils {
   use super::*;
 
   pub fn bt(func_name: &str, num_gpr: usize, num_fpu: usize) {
+    let _ = pretty_env_logger::try_init();
     let mut func = test_cases::find_Func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
     let result = allocate_registers(
@@ -174,6 +175,7 @@ mod test_utils {
   }
 
   pub fn lsra(func_name: &str, num_gpr: usize, num_fpu: usize) {
+    let _ = pretty_env_logger::try_init();
     let mut func = test_cases::find_Func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
     let result = allocate_registers(
