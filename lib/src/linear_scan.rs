@@ -15,7 +15,7 @@ use crate::data_structures::{
   RealReg, RealRegUniverse, RegClass, SortedRangeFragIxs, TypedIxVec,
   VirtualRange, VirtualRangeIx,
 };
-use crate::inst_stream::{edit_inst_stream, EditList, RangeAllocations};
+use crate::inst_stream::{edit_inst_stream, MemoryMoves, RangeAllocations};
 use crate::interface::{Function, RegAllocResult};
 
 // Local renamings.
@@ -499,15 +499,14 @@ pub fn run<F: Function>(
   }
 
   // TODO not spilling yet.
-  let edit_list = EditList::new();
+  let memory_moves = MemoryMoves::new();
   let num_spill_slots = 0;
 
   edit_inst_stream(
     func,
-    edit_list,
+    memory_moves,
     frag_map,
     &fragments,
-    &vlrs,
     num_spill_slots,
   )
 }

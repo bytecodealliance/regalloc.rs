@@ -5,73 +5,33 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
-use log::debug;
-use std::fmt;
-
 use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Map, RangeFrag, RangeFragIx, RealReg, Set,
-  SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx, VirtualReg,
+  TypedIxVec, VirtualReg,
 };
 use crate::interface::{Function, RegAllocResult};
 
 //=============================================================================
 // Edit list items
 
-// VirtualRanges created by spilling all pertain to a single InstIx.  But
-// within that InstIx, there are three kinds of "bridges":
-#[derive(PartialEq)]
-pub(crate) enum BridgeKind {
-  RtoU, // A bridge for a USE.  This connects the reload to the use.
-  RtoS, // a bridge for a MOD.  This connects the reload, the use/def
-  // and the spill, since the value must first be reloade, then
-  // operated on, and finally re-spilled.
-  DtoS, // A bridge for a DEF.  This connects the def to the spill.
-}
-
-impl fmt::Debug for BridgeKind {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    match self {
-      BridgeKind::RtoU => write!(fmt, "R->U"),
-      BridgeKind::RtoS => write!(fmt, "R->S"),
-      BridgeKind::DtoS => write!(fmt, "D->S"),
-    }
-  }
-}
-
-pub(crate) struct EditListItem {
-  // This holds enough information to create a spill or reload instruction,
-  // or both, and also specifies where in the instruction stream it/they
-  // should be added.  Note that if the edit list as a whole specifies
-  // multiple items for the same location, then it is assumed that the order
-  // in which they execute isn't important.
-  //
-  // Some of the relevant info can be found via the VirtualRangeIx link:
-  // * the real reg involved
-  // * the place where the insn should go, since the VirtualRange should only
-  //   have one RangeFrag, and we can deduce the correct location from that.
-  pub slot: SpillSlot,
-  pub vlrix: VirtualRangeIx,
-  pub kind: BridgeKind,
-}
-
-impl fmt::Debug for EditListItem {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(
-      fmt,
-      "ELI {{ for {:?} add '{:?}' {:?} }}",
-      self.vlrix, self.kind, self.slot
-    )
-  }
-}
-
-pub(crate) type EditList = Vec<EditListItem>;
-
 pub(crate) type RangeAllocations = Vec<(RangeFragIx, VirtualReg, RealReg)>;
 
+pub(crate) struct MemoryMove<F: Function> {
+  at: InstPoint,
+  inst: F::Inst,
+}
+
+impl<F: Function> MemoryMove<F> {
+  pub(crate) fn new(at: InstPoint, inst: F::Inst) -> Self {
+    Self { at, inst }
+  }
+}
+
+pub(crate) type MemoryMoves<F> = Vec<MemoryMove<F>>;
+
 pub(crate) fn edit_inst_stream<F: Function>(
-  func: &mut F, edit_list: EditList, frag_map: RangeAllocations,
-  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-  vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>, num_spill_slots: u32,
+  func: &mut F, mut memory_moves: MemoryMoves<F>, frag_map: RangeAllocations,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>, num_spill_slots: u32,
 ) -> Result<RegAllocResult<F>, String> {
   // Make two copies of the fragment mapping, one sorted by the fragment start
   // points (just the InstIx numbers, ignoring the Point), and one sorted by
@@ -335,54 +295,6 @@ pub(crate) fn edit_inst_stream<F: Function>(
 
   debug_assert!(map.is_empty());
 
-  // At this point, we've successfully pushed the vreg->rreg assignments
-  // into the original instructions.  But the reload and spill instructions
-  // are missing.  To generate them, go through the "edit list", which
-  // contains info on both how to generate the instructions, and where to
-  // insert them.
-  let mut spills_and_reloads = Vec::<(InstPoint, F::Inst)>::new();
-  for eli in &edit_list {
-    debug!("editlist entry: {:?}", eli);
-    let vlr = &vlr_env[eli.vlrix];
-    let vlr_sfrags = &vlr.sorted_frags;
-    debug_assert!(vlr.sorted_frags.frag_ixs.len() == 1);
-    let vlr_frag = frag_env[vlr_sfrags.frag_ixs[0]];
-    let rreg = vlr.rreg.expect("Gen of spill/reload: reg not assigned?!");
-    match eli.kind {
-      BridgeKind::RtoU => {
-        debug_assert!(vlr_frag.first.pt.is_reload());
-        debug_assert!(vlr_frag.last.pt.is_use());
-        debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR = func.gen_reload(rreg, eli.slot);
-        let whereToR = vlr_frag.first;
-        spills_and_reloads.push((whereToR, insnR));
-      }
-      BridgeKind::RtoS => {
-        debug_assert!(vlr_frag.first.pt.is_reload());
-        debug_assert!(vlr_frag.last.pt.is_spill());
-        debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR = func.gen_reload(rreg, eli.slot);
-        let whereToR = vlr_frag.first;
-        let insnS = func.gen_spill(eli.slot, rreg);
-        let whereToS = vlr_frag.last;
-        spills_and_reloads.push((whereToR, insnR));
-        spills_and_reloads.push((whereToS, insnS));
-      }
-      BridgeKind::DtoS => {
-        debug_assert!(vlr_frag.first.pt.is_def());
-        debug_assert!(vlr_frag.last.pt.is_spill());
-        debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnS = func.gen_spill(eli.slot, rreg);
-        let whereToS = vlr_frag.last;
-        spills_and_reloads.push((whereToS, insnS));
-      }
-    }
-  }
-
-  //for pair in &spillsAndReloads {
-  //    debug!("spill/reload: {}", pair.show());
-  //}
-
   // Construct the final code by interleaving the mapped code with the
   // spills and reloads.  To do that requires having the latter sorted by
   // InstPoint.
@@ -390,8 +302,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
   // We also need to examine and update Func::blocks.  This is assumed to
   // be arranged in ascending order of the Block::start fields.
 
-  spills_and_reloads
-    .sort_unstable_by(|(ip1, _), (ip2, _)| ip1.partial_cmp(ip2).unwrap());
+  memory_moves.sort_by_key(|mem_move| mem_move.at);
 
   let mut curSnR = 0; // cursor in |spillsAndReloads|
   let mut curB = BlockIx::new(0); // cursor in Func::blocks
@@ -410,19 +321,19 @@ pub(crate) fn edit_inst_stream<F: Function>(
     }
 
     // Copy reloads for this insn
-    while curSnR < spills_and_reloads.len()
-      && spills_and_reloads[curSnR].0 == InstPoint::new_reload(iix)
+    while curSnR < memory_moves.len()
+      && memory_moves[curSnR].at == InstPoint::new_reload(iix)
     {
-      insns.push(spills_and_reloads[curSnR].1.clone());
+      insns.push(memory_moves[curSnR].inst.clone());
       curSnR += 1;
     }
     // And the insn itself
     insns.push(func.get_insn(iix).clone());
     // Copy spills for this insn
-    while curSnR < spills_and_reloads.len()
-      && spills_and_reloads[curSnR].0 == InstPoint::new_spill(iix)
+    while curSnR < memory_moves.len()
+      && memory_moves[curSnR].at == InstPoint::new_spill(iix)
     {
-      insns.push(spills_and_reloads[curSnR].1.clone());
+      insns.push(memory_moves[curSnR].inst.clone());
       curSnR += 1;
     }
 
@@ -433,7 +344,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
     }
   }
 
-  debug_assert!(curSnR == spills_and_reloads.len());
+  debug_assert!(curSnR == memory_moves.len());
   debug_assert!(curB.get() == func.blocks().len() as u32);
 
   // Compute clobbered registers with one final, quick pass.

@@ -7,6 +7,9 @@
 
 //! Core implementation of the backtracking allocator.
 
+use log::debug;
+use std::fmt;
+
 use crate::analysis::run_analysis;
 use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx, RangeFragKind,
@@ -14,10 +17,9 @@ use crate::data_structures::{
   TypedIxVec, VirtualRange, VirtualRangeIx,
 };
 use crate::inst_stream::{
-  edit_inst_stream, BridgeKind, EditListItem, RangeAllocations,
+  edit_inst_stream, MemoryMove, MemoryMoves, RangeAllocations,
 };
 use crate::interface::{Function, RegAllocResult};
-use log::debug;
 
 //=============================================================================
 // The as-yet-unallocated VirtualReg LR prio queue
@@ -333,6 +335,53 @@ fn show_commit_tab(commit_tab: &Vec::<SortedRangeFragIxs>,
     res
 }
 */
+
+// VirtualRanges created by spilling all pertain to a single InstIx.  But
+// within that InstIx, there are three kinds of "bridges":
+#[derive(PartialEq)]
+pub(crate) enum BridgeKind {
+  RtoU, // A bridge for a USE.  This connects the reload to the use.
+  RtoS, // a bridge for a MOD.  This connects the reload, the use/def
+  // and the spill, since the value must first be reloade, then
+  // operated on, and finally re-spilled.
+  DtoS, // A bridge for a DEF.  This connects the def to the spill.
+}
+
+impl fmt::Debug for BridgeKind {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      BridgeKind::RtoU => write!(fmt, "R->U"),
+      BridgeKind::RtoS => write!(fmt, "R->S"),
+      BridgeKind::DtoS => write!(fmt, "D->S"),
+    }
+  }
+}
+
+pub(crate) struct EditListItem {
+  // This holds enough information to create a spill or reload instruction,
+  // or both, and also specifies where in the instruction stream it/they
+  // should be added.  Note that if the edit list as a whole specifies
+  // multiple items for the same location, then it is assumed that the order
+  // in which they execute isn't important.
+  //
+  // Some of the relevant info can be found via the VirtualRangeIx link:
+  // * the real reg involved
+  // * the place where the insn should go, since the VirtualRange should only
+  //   have one RangeFrag, and we can deduce the correct location from that.
+  pub slot: SpillSlot,
+  pub vlrix: VirtualRangeIx,
+  pub kind: BridgeKind,
+}
+
+impl fmt::Debug for EditListItem {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    write!(
+      fmt,
+      "ELI {{ for {:?} add '{:?}' {:?} }}",
+      self.vlrix, self.kind, self.slot
+    )
+  }
+}
 
 // Allocator top level.  This function returns a result struct that contains
 // the final sequence of instructions, possibly with fills/spills/moves
@@ -677,6 +726,52 @@ pub fn alloc_main<F: Function>(
     next_spill_slot = next_spill_slot.inc(num_slots);
   }
 
+  // Reload and spill instructions are missing.  To generate them, go through
+  // the "edit list", which contains info on both how to generate the
+  // instructions, and where to insert them.
+  let mut memory_moves = MemoryMoves::new();
+  for eli in &edit_list {
+    debug!("editlist entry: {:?}", eli);
+    let vlr = &vlr_env[eli.vlrix];
+    let vlr_sfrags = &vlr.sorted_frags;
+    debug_assert!(vlr.sorted_frags.frag_ixs.len() == 1);
+    let vlr_frag = frag_env[vlr_sfrags.frag_ixs[0]];
+    let rreg = vlr.rreg.expect("Gen of spill/reload: reg not assigned?!");
+    match eli.kind {
+      BridgeKind::RtoU => {
+        debug_assert!(vlr_frag.first.pt.is_reload());
+        debug_assert!(vlr_frag.last.pt.is_use());
+        debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
+        let insnR = func.gen_reload(rreg, eli.slot);
+        let whereToR = vlr_frag.first;
+        memory_moves.push(MemoryMove::new(whereToR, insnR));
+      }
+      BridgeKind::RtoS => {
+        debug_assert!(vlr_frag.first.pt.is_reload());
+        debug_assert!(vlr_frag.last.pt.is_spill());
+        debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
+        let insnR = func.gen_reload(rreg, eli.slot);
+        let whereToR = vlr_frag.first;
+        let insnS = func.gen_spill(eli.slot, rreg);
+        let whereToS = vlr_frag.last;
+        memory_moves.push(MemoryMove::new(whereToR, insnR));
+        memory_moves.push(MemoryMove::new(whereToS, insnS));
+      }
+      BridgeKind::DtoS => {
+        debug_assert!(vlr_frag.first.pt.is_def());
+        debug_assert!(vlr_frag.last.pt.is_spill());
+        debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
+        let insnS = func.gen_spill(eli.slot, rreg);
+        let whereToS = vlr_frag.last;
+        memory_moves.push(MemoryMove::new(whereToS, insnS));
+      }
+    }
+  }
+
+  //for pair in &spillsAndReloads {
+  //    debug!("spill/reload: {}", pair.show());
+  //}
+
   debug!("");
   print_RA_state(
     "Final",
@@ -713,10 +808,9 @@ pub fn alloc_main<F: Function>(
 
   edit_inst_stream(
     func,
-    edit_list,
+    memory_moves,
     frag_map,
     &frag_env,
-    &vlr_env,
     next_spill_slot.get(),
   )
 }
