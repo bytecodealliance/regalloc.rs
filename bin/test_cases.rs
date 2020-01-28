@@ -27,7 +27,7 @@ fn test__badness() -> Func {
     "start",
     TypedIxVec::<InstIx, Inst>::from_vec(vec![
       i_print_s("!!Badness!!\n"),
-      i_finish(),
+      i_finish(None),
     ]),
   );
 
@@ -56,7 +56,7 @@ fn test__straight_line() -> Func {
       i_print_s("Result = "),
       i_print_i(vA),
       i_print_s("\n"),
-      i_finish(),
+      i_finish(Some(vA)),
     ]),
   );
 
@@ -127,7 +127,7 @@ fn test__fill_then_sum() -> Func {
       i_print_s("Sum = "),
       i_print_i(vSUM),
       i_print_s("\n"),
-      i_finish(),
+      i_finish(Some(vSUM)),
     ]),
   );
 
@@ -347,7 +347,7 @@ fn test__ssort() -> Func {
 
   func.block(
     "L62",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![i_print_s("\n"), i_finish()]),
+    TypedIxVec::<InstIx, Inst>::from_vec(vec![i_print_s("\n"), i_finish(None)]),
   );
 
   func.finish();
@@ -436,7 +436,7 @@ fn test__3_loops() -> Func {
       i_print_s("Sum = "),
       i_print_i(vSUM),
       i_print_s("\n"),
-      i_finish(),
+      i_finish(Some(vSUM)),
     ]),
   );
 
@@ -1072,7 +1072,7 @@ fn test__fill_then_sum_2a() -> Func {
       i_print_s("Sum = "),
       i_print_i(vSUM),
       i_print_s("\n"),
-      i_finish(),
+      i_finish(Some(vSUM)),
     ]),
   );
 
@@ -1299,7 +1299,7 @@ fn test__ssort_2a() -> Func {
 
   func.block(
     "L62",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![i_print_s("\n"), i_finish()]),
+    TypedIxVec::<InstIx, Inst>::from_vec(vec![i_print_s("\n"), i_finish(None)]),
   );
 
   func.finish();

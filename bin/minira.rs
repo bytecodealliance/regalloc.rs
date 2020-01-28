@@ -143,15 +143,23 @@ fn main() {
 
   func.print("after allocation");
 
-  run_func(
+  let expected_ret_value = run_func(
     &original_func,
     "Before allocation",
     &reg_universe,
     RunStage::BeforeRegalloc,
   );
-  run_func(&func, "After allocation", &reg_universe, RunStage::AfterRegalloc);
+
+  let observed_ret_value =
+    run_func(&func, "After allocation", &reg_universe, RunStage::AfterRegalloc);
 
   println!("");
+
+  assert_eq!(
+    expected_ret_value, observed_ret_value,
+    "Incorrect interpreter result: expected {:?}, observed {:?}",
+    expected_ret_value, observed_ret_value
+  );
 }
 
 #[cfg(test)]
@@ -162,6 +170,12 @@ mod test_utils {
     let _ = pretty_env_logger::try_init();
     let mut func = test_cases::find_Func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
+    let expected_ret_value = run_func(
+      &func,
+      "Before allocation",
+      &reg_universe,
+      RunStage::BeforeRegalloc,
+    );
     let result = allocate_registers(
       &mut func,
       RegAllocAlgorithm::Backtracking,
@@ -171,13 +185,29 @@ mod test_utils {
       panic!("allocation failed: {}", err);
     });
     func.update_from_alloc(result);
-    run_func(&func, "After allocation", &reg_universe, RunStage::AfterRegalloc);
+    let observed_ret_value = run_func(
+      &func,
+      "After allocation",
+      &reg_universe,
+      RunStage::AfterRegalloc,
+    );
+    assert_eq!(
+      expected_ret_value, observed_ret_value,
+      "Incorrect interpreter result: expected {:?}, observed {:?}",
+      expected_ret_value, observed_ret_value
+    );
   }
 
   pub fn lsra(func_name: &str, num_gpr: usize, num_fpu: usize) {
     let _ = pretty_env_logger::try_init();
     let mut func = test_cases::find_Func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
+    let expected_ret_value = run_func(
+      &func,
+      "Before allocation",
+      &reg_universe,
+      RunStage::BeforeRegalloc,
+    );
     let result = allocate_registers(
       &mut func,
       RegAllocAlgorithm::LinearScan,
@@ -187,7 +217,17 @@ mod test_utils {
       panic!("allocation failed: {}", err);
     });
     func.update_from_alloc(result);
-    run_func(&func, "After allocation", &reg_universe, RunStage::AfterRegalloc);
+    let observed_ret_value = run_func(
+      &func,
+      "After allocation",
+      &reg_universe,
+      RunStage::AfterRegalloc,
+    );
+    assert_eq!(
+      expected_ret_value, observed_ret_value,
+      "Incorrect interpreter result: expected {:?}, observed {:?}",
+      expected_ret_value, observed_ret_value
+    );
   }
 }
 

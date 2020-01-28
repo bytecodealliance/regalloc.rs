@@ -291,7 +291,7 @@ pub enum Inst {
   PrintS { str: String },
   PrintI { reg: Reg },
   PrintF { reg: Reg },
-  Finish {},
+  Finish { reg: Option<Reg> },
 }
 
 pub fn i_imm(dst: Reg, imm: u32) -> Inst {
@@ -363,8 +363,8 @@ pub fn i_print_f(reg: Reg) -> Inst {
   debug_assert!(reg.get_class() == RegClass::F32);
   Inst::PrintF { reg }
 }
-pub fn i_finish() -> Inst {
-  Inst::Finish {}
+pub fn i_finish(reg: Option<Reg>) -> Inst {
+  Inst::Finish { reg }
 }
 
 pub fn i_add(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
@@ -528,7 +528,7 @@ impl fmt::Debug for Inst {
       }
       Inst::PrintI { reg } => write!(fmt, "printi  {:?}", reg),
       Inst::PrintF { reg } => write!(fmt, "printf  {:?}", reg),
-      Inst::Finish {} => write!(fmt, "finish"),
+      Inst::Finish { reg } => write!(fmt, "finish  {:?}", reg),
     }
   }
 }
@@ -544,7 +544,7 @@ impl Inst {
       Inst::GotoCTF { cond: _, targetT, targetF } => {
         vec![targetT.getBlockIx(), targetF.getBlockIx()]
       }
-      Inst::Finish {} => vec![],
+      Inst::Finish { reg: _ } => vec![],
       _other => panic!("Inst::getTargets: incorrectly applied to: {:?}", self),
     }
   }
@@ -622,7 +622,11 @@ impl Inst {
       Inst::PrintF { reg } => {
         uce.insert(*reg);
       }
-      Inst::Finish {} => {}
+      Inst::Finish { reg } => {
+        if let Some(reg) = reg {
+          uce.insert(*reg);
+        }
+      }
       // Spill and Reload are seen here during the final pass over insts that
       // computes clobbered regs.
       Inst::Spill { src, .. } | Inst::SpillF { src, .. } => {
@@ -701,7 +705,11 @@ impl Inst {
       Inst::PrintF { reg } => {
         reg.apply_defs_or_uses(map_uses);
       }
-      Inst::Finish {} => {}
+      Inst::Finish { reg } => {
+        if let Some(reg) = reg {
+          reg.apply_defs_or_uses(map_uses);
+        }
+      }
       _ => {
         ok = false;
       }
@@ -714,7 +722,7 @@ impl Inst {
 
 fn is_control_flow_insn(insn: &Inst) -> bool {
   match insn {
-    Inst::Goto { .. } | Inst::GotoCTF { .. } | Inst::Finish {} => true,
+    Inst::Goto { .. } | Inst::GotoCTF { .. } | Inst::Finish { reg: _ } => true,
     _ => false,
   }
 }
@@ -742,8 +750,8 @@ pub fn remapControlFlowTarget(insn: &mut Inst, from: &String, to: &String) {
 //=============================================================================
 // The interpreter
 
-#[derive(Copy, Clone)]
-enum Value {
+#[derive(Copy, Clone, PartialEq)]
+pub enum Value {
   U32(u32),
   F32(f32),
 }
@@ -787,6 +795,7 @@ struct IState<'a> {
   n_spills: usize, // Stats: .. of which are spills
   n_reloads: usize, // Stats: .. of which are reloads
   run_stage: RunStage,
+  ret_value: Option<Value>,
 }
 
 impl<'a> IState<'a> {
@@ -804,6 +813,7 @@ impl<'a> IState<'a> {
       n_spills: 0,
       n_reloads: 0,
       run_stage,
+      ret_value: None,
     };
     state.rregs.resize(maxRealRegs, None);
     state.mem.resize(maxMem, None);
@@ -1048,7 +1058,10 @@ impl<'a> IState<'a> {
       Inst::PrintS { str } => print!("{}", str),
       Inst::PrintI { reg } => print!("{:?}", self.get_reg(*reg).toU32()),
       Inst::PrintF { reg } => print!("{:?}", self.get_reg(*reg).toF32()),
-      Inst::Finish {} => done = true,
+      Inst::Finish { reg } => {
+        self.ret_value = reg.map(|reg| self.get_reg(reg));
+        done = true;
+      }
     }
     done
   }
@@ -1056,7 +1069,7 @@ impl<'a> IState<'a> {
 
 pub fn run_func(
   f: &Func, who: &str, reg_universe: &RealRegUniverse, run_stage: RunStage,
-) {
+) -> Option<Value> {
   println!("");
   println!(
     "Running stage '{}': Func: name='{}' entry='{:?}'",
@@ -1074,6 +1087,8 @@ pub fn run_func(
     "Running stage '{}': done.  {} insns, {} spills, {} reloads",
     who, istate.n_insns, istate.n_spills, istate.n_reloads
   );
+
+  istate.ret_value
 }
 
 //=============================================================================
@@ -1464,7 +1479,7 @@ impl Blockifier {
   // The main external function.  Convert the given statements, into a Func.
   pub fn finish(&mut self, stmts: Vec<Stmt>) -> Func {
     let (ent_bno, exit_bno) = self.blockify(stmts);
-    self.blocks[exit_bno].push(i_finish());
+    self.blocks[exit_bno].push(i_finish(None));
 
     let mut blockz = Vec::<TypedIxVec<InstIx, Inst>>::new();
     std::mem::swap(&mut self.blocks, &mut blockz);
