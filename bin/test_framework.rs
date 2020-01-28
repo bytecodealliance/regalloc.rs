@@ -274,6 +274,7 @@ pub enum Inst {
   Imm { dst: Reg, imm: u32 },
   ImmF { dst: Reg, imm: f32 },
   Copy { dst: Reg, src: Reg },
+  CopyF { dst: Reg, src: Reg },
   BinOp { op: BinOp, dst: Reg, srcL: Reg, srcR: RI },
   BinOpM { op: BinOp, dst: Reg, srcR: RI }, // "mod" semantics for |dst|
   BinOpF { op: BinOpF, dst: Reg, srcL: Reg, srcR: Reg },
@@ -478,6 +479,7 @@ impl fmt::Debug for Inst {
       Inst::Imm { dst, imm } => write!(fmt, "imm     {:?}, {:?}", dst, imm),
       Inst::ImmF { dst, imm } => write!(fmt, "immf    {:?}, {:?}", dst, imm),
       Inst::Copy { dst, src } => write!(fmt, "copy    {:?}, {:?}", dst, src),
+      Inst::CopyF { dst, src } => write!(fmt, "copyf   {:?}, {:?}", dst, src),
       Inst::BinOp { op, dst, srcL, srcR } => write!(
         fmt,
         "{} {:?}, {:?}, {:?}",
@@ -572,6 +574,10 @@ impl Inst {
         def.insert(*dst);
       }
       Inst::Copy { dst, src } => {
+        def.insert(*dst);
+        uce.insert(*src);
+      }
+      Inst::CopyF { dst, src } => {
         def.insert(*dst);
         uce.insert(*src);
       }
@@ -969,6 +975,9 @@ impl<'a> IState<'a> {
       Inst::ImmF { dst, imm } => self.set_reg_f32(*dst, *imm),
       Inst::Copy { dst, src } => {
         self.set_reg_u32(*dst, self.get_reg(*src).toU32())
+      }
+      Inst::CopyF { dst, src } => {
+        self.set_reg_f32(*dst, self.get_reg(*src).toF32())
       }
       Inst::BinOp { op, dst, srcL, srcR } => {
         let srcL_v = self.get_reg(*srcL).toU32();
@@ -1646,7 +1655,15 @@ impl minira::interface::Function for Func {
   /// Generate a register-to-register move for insertion into the instruction
   /// sequence.
   fn gen_move(&self, to_reg: RealReg, from_reg: RealReg) -> Self::Inst {
-    Inst::Copy { src: from_reg.to_reg(), dst: to_reg.to_reg() }
+    match to_reg.get_class() {
+      RegClass::I32 => {
+        Inst::Copy { src: from_reg.to_reg(), dst: to_reg.to_reg() }
+      }
+      RegClass::F32 => {
+        Inst::CopyF { src: from_reg.to_reg(), dst: to_reg.to_reg() }
+      }
+      _ => unimplemented!("gen_move for non i32/f32"),
+    }
   }
 
   /// Try to alter an existing instruction to use a value directly in a
