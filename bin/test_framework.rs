@@ -822,7 +822,7 @@ impl<'a> IState<'a> {
     }
   }
 
-  fn setRealReg(&mut self, rreg: RealReg, val: Value) {
+  fn set_real_reg(&mut self, rreg: RealReg, val: Value) {
     // No automatic resizing.  If the rreg doesn't exist, just fail.
     match self.rregs.get_mut(rreg.get_index()) {
       None => panic!("IState::setRealReg: invalid rreg {:?}", rreg),
@@ -847,7 +847,7 @@ impl<'a> IState<'a> {
         }
   }
 
-  fn setVirtualReg(&mut self, vreg: VirtualReg, val: Value) {
+  fn set_virtual_reg(&mut self, vreg: VirtualReg, val: Value) {
     debug_assert!(
       self.run_stage != RunStage::AfterRegalloc,
       "trying to set a vreg after regalloc"
@@ -861,7 +861,7 @@ impl<'a> IState<'a> {
     self.vregs[ix] = Some(val);
   }
 
-  fn getSpillSlot(&self, slot: SpillSlot) -> Value {
+  fn get_spill_slot(&self, slot: SpillSlot) -> Value {
     // The vector might be too small.  But in that case we'd be
     // reading the slot uninitialised anyway, so just complain.
     match self.slots.get(slot.get_usize()) {
@@ -874,7 +874,7 @@ impl<'a> IState<'a> {
         }
   }
 
-  fn setSpillSlotU32(&mut self, slot: SpillSlot, val: u32) {
+  fn set_spill_slot_u32(&mut self, slot: SpillSlot, val: u32) {
     // Auto-resize the vector if necessary
     let ix = slot.get_usize();
     if ix >= self.slots.len() {
@@ -884,7 +884,7 @@ impl<'a> IState<'a> {
     self.slots[ix] = Some(Value::U32(val));
   }
 
-  fn setSpillSlotF32(&mut self, slot: SpillSlot, val: f32) {
+  fn set_spill_slot_f32(&mut self, slot: SpillSlot, val: f32) {
     // Auto-resize the vector if necessary
     let ix = slot.get_usize();
     if ix >= self.slots.len() {
@@ -904,21 +904,21 @@ impl<'a> IState<'a> {
 
   fn set_reg_u32(&mut self, reg: Reg, val: u32) {
     if reg.is_virtual() {
-      self.setVirtualReg(reg.to_virtual_reg(), Value::U32(val));
+      self.set_virtual_reg(reg.to_virtual_reg(), Value::U32(val));
     } else {
-      self.setRealReg(reg.to_real_reg(), Value::U32(val));
+      self.set_real_reg(reg.to_real_reg(), Value::U32(val));
     }
   }
 
   fn set_reg_f32(&mut self, reg: Reg, val: f32) {
     if reg.is_virtual() {
-      self.setVirtualReg(reg.to_virtual_reg(), Value::F32(val));
+      self.set_virtual_reg(reg.to_virtual_reg(), Value::F32(val));
     } else {
-      self.setRealReg(reg.to_real_reg(), Value::F32(val));
+      self.set_real_reg(reg.to_real_reg(), Value::F32(val));
     }
   }
 
-  fn getMem(&self, addr: u32) -> Value {
+  fn get_mem(&self, addr: u32) -> Value {
     // No auto resizing of the memory
     match self.mem.get(addr as usize) {
       None => panic!("IState::getMem: invalid addr {}", addr),
@@ -929,7 +929,7 @@ impl<'a> IState<'a> {
     }
   }
 
-  fn setMemU32(&mut self, addr: u32, val: u32) {
+  fn set_mem_u32(&mut self, addr: u32, val: u32) {
     // No auto resizing of the memory
     match self.mem.get_mut(addr as usize) {
       None => panic!("IState::setMemU32: invalid addr {}", addr),
@@ -937,7 +937,7 @@ impl<'a> IState<'a> {
     }
   }
 
-  fn setMemF32(&mut self, addr: u32, val: f32) {
+  fn set_mem_f32(&mut self, addr: u32, val: f32) {
     // No auto resizing of the memory
     match self.mem.get_mut(addr as usize) {
       None => panic!("IState::setMemF32: invalid addr {}", addr),
@@ -945,14 +945,14 @@ impl<'a> IState<'a> {
     }
   }
 
-  fn getRI(&self, ri: &RI) -> u32 {
+  fn get_RI(&self, ri: &RI) -> u32 {
     match ri {
       RI::Reg { reg } => self.get_reg(*reg).toU32(),
       RI::Imm { imm } => *imm,
     }
   }
 
-  fn getAM(&self, am: &AM) -> u32 {
+  fn get_AM(&self, am: &AM) -> u32 {
     match am {
       AM::RI { base, offset } => self.get_reg(*base).toU32() + offset,
       AM::RR { base, offset } => {
@@ -981,13 +981,13 @@ impl<'a> IState<'a> {
       }
       Inst::BinOp { op, dst, srcL, srcR } => {
         let srcL_v = self.get_reg(*srcL).toU32();
-        let srcR_v = self.getRI(srcR);
+        let srcR_v = self.get_RI(srcR);
         let dst_v = op.calc(srcL_v, srcR_v);
         self.set_reg_u32(*dst, dst_v);
       }
       Inst::BinOpM { op, dst, srcR } => {
         let mut dst_v = self.get_reg(*dst).toU32();
-        let srcR_v = self.getRI(srcR);
+        let srcR_v = self.get_RI(srcR);
         dst_v = op.calc(dst_v, srcR_v);
         self.set_reg_u32(*dst, dst_v);
       }
@@ -998,42 +998,42 @@ impl<'a> IState<'a> {
         self.set_reg_f32(*dst, dst_v);
       }
       Inst::Load { dst, addr } => {
-        let addr_v = self.getAM(addr);
-        let dst_v = self.getMem(addr_v).toU32();
+        let addr_v = self.get_AM(addr);
+        let dst_v = self.get_mem(addr_v).toU32();
         self.set_reg_u32(*dst, dst_v);
       }
       Inst::LoadF { dst, addr } => {
-        let addr_v = self.getAM(addr);
-        let dst_v = self.getMem(addr_v).toF32();
+        let addr_v = self.get_AM(addr);
+        let dst_v = self.get_mem(addr_v).toF32();
         self.set_reg_f32(*dst, dst_v);
       }
       Inst::Store { addr, src } => {
-        let addr_v = self.getAM(addr);
+        let addr_v = self.get_AM(addr);
         let src_v = self.get_reg(*src).toU32();
-        self.setMemU32(addr_v, src_v);
+        self.set_mem_u32(addr_v, src_v);
       }
       Inst::StoreF { addr, src } => {
-        let addr_v = self.getAM(addr);
+        let addr_v = self.get_AM(addr);
         let src_v = self.get_reg(*src).toF32();
-        self.setMemF32(addr_v, src_v);
+        self.set_mem_f32(addr_v, src_v);
       }
       Inst::Spill { dst, src } => {
         let src_v = self.get_real_reg(*src).toU32();
-        self.setSpillSlotU32(*dst, src_v);
+        self.set_spill_slot_u32(*dst, src_v);
         self.n_spills += 1;
       }
       Inst::SpillF { dst, src } => {
         let src_v = self.get_real_reg(*src).toF32();
-        self.setSpillSlotF32(*dst, src_v);
+        self.set_spill_slot_f32(*dst, src_v);
         self.n_spills += 1;
       }
       Inst::Reload { dst, src } => {
-        let src_v = self.getSpillSlot(*src).toU32();
+        let src_v = self.get_spill_slot(*src).toU32();
         self.set_reg_u32(dst.to_reg(), src_v);
         self.n_reloads += 1;
       }
       Inst::ReloadF { dst, src } => {
-        let src_v = self.getSpillSlot(*src).toF32();
+        let src_v = self.get_spill_slot(*src).toF32();
         self.set_reg_f32(dst.to_reg(), src_v);
         self.n_reloads += 1;
       }
