@@ -1246,9 +1246,17 @@ impl Func {
     &mut self, result: minira::interface::RegAllocResult<Func>,
   ) {
     self.insns = TypedIxVec::from_vec(result.insns);
+    let num_blocks = self.blocks.len();
+    let mut i = 0;
     for bix in self.blocks.range() {
       let block = &mut self.blocks[bix];
       block.start = result.target_map[bix];
+      block.len = if i + 1 < num_blocks {
+        result.target_map[BlockIx::new(i + 1)].get()
+      } else {
+        self.insns.len()
+      } - block.start.get();
+      i += 1;
     }
   }
 }
