@@ -56,7 +56,7 @@ use std::env;
 mod test_cases;
 mod test_framework;
 
-use minira::{allocate_registers, RegAllocAlgorithm};
+use regalloc::{allocate_registers, RegAllocAlgorithm};
 use test_framework::{make_universe, run_func, RunStage};
 
 use log::{self, error, info};

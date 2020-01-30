@@ -1,7 +1,7 @@
 [package]
 name = "minira-util"
 version = "0.1.0"
-authors = ["Julian Seward <jseward@acm.org>"]
+authors = ["The Regalloc.rs Developers"]
 edition = "2018"
 
 [workspace]
@@ -14,7 +14,7 @@ name = "minira-util"
 path = "./bin/minira.rs"
 
 [dependencies]
-minira =  { path = "./lib" }
+regalloc =  { path = "./lib" }
 rustc-hash = "1.0.1"
 log = { version = "0.4.8", default-features = false }
 pretty_env_logger = "0.3.1"

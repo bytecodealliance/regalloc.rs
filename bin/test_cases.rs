@@ -7,7 +7,7 @@
 
 /// Test cases.  The list of them is right at the bottom, function |find_Func|.
 /// Add new ones there.
-use minira::interface::{InstIx, Reg, RegClass, TypedIxVec};
+use regalloc::{InstIx, Reg, RegClass, TypedIxVec};
 
 use crate::test_framework::{
   i_add, i_addm, i_cmp_gt, i_cmp_le, i_cmp_lt, i_copy, i_finish, i_goto,

@@ -7,7 +7,7 @@
 
 /// As part of this set of test cases, we define a mini IR and implement the
 /// `Function` trait for it so that we can use the regalloc public interface.
-use minira::interface::{
+use regalloc::{
   BlockIx, InstIx, Map, MyRange, RealReg, RealRegUniverse, Reg, RegClass, Set,
   SpillSlot, TypedIxVec, VirtualReg, NUM_REG_CLASSES,
 };
@@ -1242,9 +1242,7 @@ impl Func {
     resolveLabel(&mut self.entry, |name| lookup(blocks, name));
   }
 
-  pub fn update_from_alloc(
-    &mut self, result: minira::interface::RegAllocResult<Func>,
-  ) {
+  pub fn update_from_alloc(&mut self, result: regalloc::RegAllocResult<Func>) {
     self.insns = TypedIxVec::from_vec(result.insns);
     let num_blocks = self.blocks.len();
     let mut i = 0;
@@ -1581,7 +1579,7 @@ impl Blockifier {
 // --------------------------------------------------
 // Implementation of `Function` trait for test cases.
 
-impl minira::interface::Function for Func {
+impl regalloc::Function for Func {
   type Inst = Inst;
 
   fn insns(&self) -> &[Inst] {
@@ -1620,9 +1618,9 @@ impl minira::interface::Function for Func {
   }
 
   /// Provide the defined, used, and modified registers for an instruction.
-  fn get_regs(&self, insn: &Self::Inst) -> minira::interface::InstRegUses {
+  fn get_regs(&self, insn: &Self::Inst) -> regalloc::InstRegUses {
     let (d, m, u) = insn.get_reg_usage();
-    minira::interface::InstRegUses { used: u, defined: d, modified: m }
+    regalloc::InstRegUses { used: u, defined: d, modified: m }
   }
 
   /// Map each register slot through a virt -> phys mapping indexed
