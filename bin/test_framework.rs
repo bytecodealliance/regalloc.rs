@@ -1650,13 +1650,17 @@ impl regalloc::Function for Func {
   /// 64-bit machine, spill slots may nominally be 64-bit words, but a 128-bit
   /// vector value will require two slots.  The regalloc will always align on
   /// this size.
-  fn get_spillslot_size(&self, _regclass: RegClass) -> u32 {
+  fn get_spillslot_size(
+    &self, _regclass: RegClass, _for_vreg: VirtualReg,
+  ) -> u32 {
     // For our simple test ISA, every value occupies one spill slot.
     1
   }
 
   /// Generate a spill instruction for insertion into the instruction sequence.
-  fn gen_spill(&self, to_slot: SpillSlot, from_reg: RealReg) -> Self::Inst {
+  fn gen_spill(
+    &self, to_slot: SpillSlot, from_reg: RealReg, _for_vreg: VirtualReg,
+  ) -> Self::Inst {
     match from_reg.get_class() {
       RegClass::I32 => i_spill(to_slot, from_reg),
       RegClass::F32 => i_spillf(to_slot, from_reg),
@@ -1665,7 +1669,9 @@ impl regalloc::Function for Func {
   }
 
   /// Generate a reload instruction for insertion into the instruction sequence.
-  fn gen_reload(&self, to_reg: RealReg, from_slot: SpillSlot) -> Self::Inst {
+  fn gen_reload(
+    &self, to_reg: RealReg, from_slot: SpillSlot, _for_vreg: VirtualReg,
+  ) -> Self::Inst {
     match to_reg.get_class() {
       RegClass::I32 => i_reload(to_reg, from_slot),
       RegClass::F32 => i_reloadf(to_reg, from_slot),
@@ -1675,7 +1681,9 @@ impl regalloc::Function for Func {
 
   /// Generate a register-to-register move for insertion into the instruction
   /// sequence.
-  fn gen_move(&self, to_reg: RealReg, from_reg: RealReg) -> Self::Inst {
+  fn gen_move(
+    &self, to_reg: RealReg, from_reg: RealReg, _for_vreg: VirtualReg,
+  ) -> Self::Inst {
     match to_reg.get_class() {
       RegClass::I32 => {
         Inst::Copy { src: from_reg.to_reg(), dst: to_reg.to_reg() }

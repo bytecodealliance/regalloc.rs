@@ -672,7 +672,7 @@ pub fn alloc_main<F: Function>(
     // Now that we no longer need to access |frag_env| or |vlr_env| for
     // the remainder of this iteration of the main allocation loop, we can
     // actually generate the required spill/reload artefacts.
-    let num_slots = func.get_spillslot_size(curr_vlr_class);
+    let num_slots = func.get_spillslot_size(curr_vlr_class, curr_vlr_vreg);
     next_spill_slot = next_spill_slot.round_up(num_slots);
     for sri in sri_vec {
       // For a spill for a MOD use, the new value will be referenced
@@ -737,12 +737,13 @@ pub fn alloc_main<F: Function>(
     debug_assert!(vlr.sorted_frags.frag_ixs.len() == 1);
     let vlr_frag = frag_env[vlr_sfrags.frag_ixs[0]];
     let rreg = vlr.rreg.expect("Gen of spill/reload: reg not assigned?!");
+    let vreg = vlr.vreg;
     match eli.kind {
       BridgeKind::RtoU => {
         debug_assert!(vlr_frag.first.pt.is_reload());
         debug_assert!(vlr_frag.last.pt.is_use());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR = func.gen_reload(rreg, eli.slot);
+        let insnR = func.gen_reload(rreg, eli.slot, vreg);
         let whereToR = vlr_frag.first;
         memory_moves.push(MemoryMove::new(whereToR, insnR));
       }
@@ -750,9 +751,9 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.is_reload());
         debug_assert!(vlr_frag.last.pt.is_spill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR = func.gen_reload(rreg, eli.slot);
+        let insnR = func.gen_reload(rreg, eli.slot, vreg);
         let whereToR = vlr_frag.first;
-        let insnS = func.gen_spill(eli.slot, rreg);
+        let insnS = func.gen_spill(eli.slot, rreg, vreg);
         let whereToS = vlr_frag.last;
         memory_moves.push(MemoryMove::new(whereToR, insnR));
         memory_moves.push(MemoryMove::new(whereToS, insnS));
@@ -761,7 +762,7 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.is_def());
         debug_assert!(vlr_frag.last.pt.is_spill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnS = func.gen_spill(eli.slot, rreg);
+        let insnS = func.gen_spill(eli.slot, rreg, vreg);
         let whereToS = vlr_frag.last;
         memory_moves.push(MemoryMove::new(whereToS, insnS));
       }
