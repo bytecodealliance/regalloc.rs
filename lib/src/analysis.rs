@@ -933,12 +933,14 @@ pub fn run_analysis<F: Function>(
     estFreqs.push(estFreq);
   }
 
-  let (livein_sets_per_block, liveout_sets_per_block) = calc_livein_and_liveout(
-    func,
-    &def_sets_per_block,
-    &use_sets_per_block,
-    &cfg_info,
-  );
+  // |liveout_sets_per_block| is amended below for return blocks, hence `mut`.
+  let (livein_sets_per_block, mut liveout_sets_per_block) =
+    calc_livein_and_liveout(
+      func,
+      &def_sets_per_block,
+      &use_sets_per_block,
+      &cfg_info,
+    );
   debug_assert!(livein_sets_per_block.len() == func.blocks().len() as u32);
   debug_assert!(liveout_sets_per_block.len() == func.blocks().len() as u32);
 
@@ -956,8 +958,37 @@ pub fn run_analysis<F: Function>(
     n += 1;
   }
 
-  if !livein_sets_per_block[func.entry_block()].is_empty() {
-    return Err("entry block has live-in values".to_string());
+  // Verify livein set of entry block against liveins specified by function
+  // (e.g., ABI params).
+  let func_liveins = Set::from_vec(
+    func
+      .func_liveins()
+      .to_vec()
+      .into_iter()
+      .map(|rreg| rreg.to_reg())
+      .collect(),
+  );
+  if !livein_sets_per_block[func.entry_block()].is_subset_of(&func_liveins) {
+    return Err(
+      "entry block has live-in value not present in function liveins"
+        .to_string(),
+    );
+  }
+
+  // Add function liveouts to every block ending in a return.
+  let func_liveouts = Set::from_vec(
+    func
+      .func_liveouts()
+      .to_vec()
+      .into_iter()
+      .map(|rreg| rreg.to_reg())
+      .collect(),
+  );
+  for block in func.blocks() {
+    let last_iix = func.block_insns(block).last();
+    if func.is_ret(last_iix) {
+      liveout_sets_per_block[block].union(&func_liveouts);
+    }
   }
 
   let (frag_ixs_per_reg, frag_env) =

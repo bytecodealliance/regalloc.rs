@@ -1617,6 +1617,13 @@ impl regalloc::Function for Func {
     self.insns[last_insn].getTargets()
   }
 
+  fn is_ret(&self, insn: InstIx) -> bool {
+    match &self.insns[insn] {
+      &Inst::Finish { .. } => true,
+      _ => false,
+    }
+  }
+
   /// Provide the defined, used, and modified registers for an instruction.
   fn get_regs(&self, insn: &Self::Inst) -> regalloc::InstRegUses {
     let (d, m, u) = insn.get_reg_usage();
@@ -1708,6 +1715,14 @@ impl regalloc::Function for Func {
   ) -> Option<Self::Inst> {
     // test ISA does not have register-memory ALU instruction forms.
     None
+  }
+
+  fn func_liveins(&self) -> Set<RealReg> {
+    Set::empty()
+  }
+
+  fn func_liveouts(&self) -> Set<RealReg> {
+    Set::empty()
   }
 }
 

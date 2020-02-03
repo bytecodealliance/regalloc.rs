@@ -550,6 +550,13 @@ impl Reg {
       None
     }
   }
+  pub fn as_real_reg(self) -> Option<RealReg> {
+    if self.is_real() {
+      Some(RealReg { reg: self })
+    } else {
+      None
+    }
+  }
 }
 impl fmt::Debug for Reg {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
