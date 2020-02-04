@@ -98,6 +98,13 @@ pub trait Function {
   /// Get CFG successors for a given block.
   fn block_succs(&self, block: BlockIx) -> Vec<BlockIx>;
 
+  /// Determine whether an instruction is a return instruction.
+  fn is_ret(&self, insn: InstIx) -> bool;
+
+  // --------------------------
+  // Instruction register slots
+  // --------------------------
+
   /// Provide the defined, used, and modified registers for an instruction.
   fn get_regs(&self, insn: &Self::Inst) -> InstRegUses;
 
@@ -118,6 +125,10 @@ pub trait Function {
 
   /// Allow the regalloc to query whether this is a move. Returns (dst, src).
   fn is_move(&self, insn: &Self::Inst) -> Option<(Reg, Reg)>;
+
+  // --------------
+  // Spills/reloads
+  // --------------
 
   /// How many logical spill slots does the given regclass require?  E.g., on a
   /// 64-bit machine, spill slots may nominally be 64-bit words, but a 128-bit
@@ -165,6 +176,22 @@ pub trait Function {
   fn maybe_direct_reload(
     &self, insn: &Self::Inst, reg: VirtualReg, slot: SpillSlot,
   ) -> Option<Self::Inst>;
+
+  // ----------------------------------------------------------
+  // Function liveins, liveouts, and direct-mode real registers
+  // ----------------------------------------------------------
+
+  /// Return the set of registers that should be considered live at the
+  /// beginning of the function. This is semantically equivalent to an
+  /// instruction at the top of the entry block def'ing all registers in this
+  /// set.
+  fn func_liveins(&self) -> Set<RealReg>;
+
+  /// Return the set of registers that should be considered live at the
+  /// end of the function (after every return instruction). This is
+  /// semantically equivalent to an instruction at each block with no successors
+  /// that uses each of these registers.
+  fn func_liveouts(&self) -> Set<RealReg>;
 }
 
 /// The result of register allocation.  Note that allocation can fail!
