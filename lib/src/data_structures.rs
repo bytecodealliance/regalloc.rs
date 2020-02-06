@@ -123,6 +123,13 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
   pub fn equals(&self, other: &Self) -> bool {
     self.set == other.set
   }
+
+  pub fn retain<F>(&mut self, f: F)
+  where
+    F: FnMut(&T) -> bool,
+  {
+    self.set.retain(f)
+  }
 }
 
 impl<T: Eq + Ord + Hash + Copy + fmt::Debug> fmt::Debug for Set<T> {
@@ -704,6 +711,97 @@ impl SpillSlot {
 impl fmt::Debug for SpillSlot {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     write!(fmt, "S{}", self.get())
+  }
+}
+
+//=============================================================================
+// Register uses for one instruction.
+//
+// InstRegUses is "unsanitized", which means that the sets inside it might
+// contain references to RealRegs which are not available to the allocator.
+// This is what the client gives us when we call its |get_regs| method.
+//
+// Within the allocator, we have to treat RealRegs that aren't allocatable as
+// "invisible".  Rather than have ad-hoc logic scattered around to deal with
+// them, we define a second type here, SanitizedInstRegUses, and work instead
+// with that.  To "sanitize" a register set requires having the
+// RealRegUniverse available.  We provide a handy method to convert
+// an InstRegUses to a SanitizedInstRegUses.
+//
+// SanitizedInstRegUses is for internal use only.  It isn't visible to the
+// client.
+
+#[derive(Clone, Debug)]
+pub struct InstRegUses {
+  // Note that |modified| is distinct from just |used|+|defined| because the
+  // vreg must live in the same real reg both before and after the
+  // instruction.
+  pub used: Set<Reg>,     // registers that are read.
+  pub defined: Set<Reg>,  // registers that are written.
+  pub modified: Set<Reg>, // registers that are modified.
+}
+impl InstRegUses {
+  pub fn new() -> InstRegUses {
+    InstRegUses {
+      used: Set::<Reg>::empty(),
+      defined: Set::<Reg>::empty(),
+      modified: Set::<Reg>::empty(),
+    }
+  }
+}
+
+#[derive(Clone)]
+pub struct SanitizedInstRegUses {
+  // These names are different from their unsanitized counterparts so as to
+  // make it more difficult to get the two types mixed up.
+  pub san_used: Set<Reg>,     // registers that are read.
+  pub san_defined: Set<Reg>,  // registers that are written.
+  pub san_modified: Set<Reg>, // registers that are modified.
+}
+impl SanitizedInstRegUses {
+  pub fn create_by_sanitizing(
+    iru: &InstRegUses, reg_universe: &RealRegUniverse,
+  ) -> SanitizedInstRegUses {
+    // Note, this is pretty inefficient.  But it doesn't matter; it will need
+    // to be redone anyway when it comes time to replace Set<Reg> with the
+    // pairing of a (specialised) bitset of RealReg and a (vanilla) bitset of
+    // VirtualReg, and once that happens it will be fast.
+    //
+    // The goal is:
+    // (1) to remove from |set|, any RealRegs which are not available to the
+    //     allocator, and
+    // (2) assert if any RealRegs in the set are not mentioned in the universe
+    fn sanitize_reg_set(set: &mut Set<Reg>, reg_universe: &RealRegUniverse) {
+      set.retain(|&reg| {
+        if reg.is_virtual() {
+          // Retain all virtual registers.
+          true
+        } else {
+          let rreg_ix = reg.get_index();
+          if rreg_ix >= reg_universe.regs.len() {
+            // This is a serious error which should be investigated.  It means
+            // the client gave us an instruction which mentions a RealReg which
+            // isn't listed in the RealRegUniverse it gave us.  That's not
+            // allowed.
+            panic!("sanitize_reg_set: unexpected RealReg in set");
+          } else {
+            // Retain only real registers that are available to the allocator.
+            rreg_ix < reg_universe.allocable
+          }
+        }
+      });
+    }
+
+    let mut sru = SanitizedInstRegUses {
+      san_used: iru.used.clone(),
+      san_defined: iru.defined.clone(),
+      san_modified: iru.modified.clone(),
+    };
+    sanitize_reg_set(&mut sru.san_used, reg_universe);
+    sanitize_reg_set(&mut sru.san_defined, reg_universe);
+    sanitize_reg_set(&mut sru.san_modified, reg_universe);
+
+    sru
   }
 }
 

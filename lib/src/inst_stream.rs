@@ -6,8 +6,8 @@
 #![allow(non_camel_case_types)]
 
 use crate::data_structures::{
-  BlockIx, InstIx, InstPoint, Map, RangeFrag, RangeFragIx, RealReg, Set,
-  TypedIxVec, VirtualReg,
+  BlockIx, InstIx, InstPoint, Map, RangeFrag, RangeFragIx, RealReg,
+  RealRegUniverse, SanitizedInstRegUses, Set, TypedIxVec, VirtualReg,
 };
 use crate::interface::{Function, RegAllocResult};
 
@@ -31,7 +31,8 @@ pub(crate) type MemoryMoves<F> = Vec<MemoryMove<F>>;
 
 pub(crate) fn edit_inst_stream<F: Function>(
   func: &mut F, mut memory_moves: MemoryMoves<F>, frag_map: RangeAllocations,
-  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>, num_spill_slots: u32,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+  reg_universe: &RealRegUniverse, num_spill_slots: u32,
 ) -> Result<RegAllocResult<F>, String> {
   // Make two copies of the fragment mapping, one sorted by the fragment start
   // points (just the InstIx numbers, ignoring the Point), and one sorted by
@@ -309,7 +310,6 @@ pub(crate) fn edit_inst_stream<F: Function>(
 
   let mut insns: Vec<F::Inst> = vec![];
   let mut target_map: TypedIxVec<BlockIx, InstIx> = TypedIxVec::new();
-  let mut clobbered_registers: Set<RealReg> = Set::empty();
 
   for iix in func.insn_indices() {
     // Is |iix| the first instruction in a block?  Meaning, are we
@@ -349,11 +349,21 @@ pub(crate) fn edit_inst_stream<F: Function>(
 
   // Compute clobbered registers with one final, quick pass.
   //
-  // TODO: derive this information directly from the allocation data
+  // FIXME: derive this information directly from the allocation data
   // structures used above.
+  //
+  // NB at this point, the |san_reg_uses| vector that was computed in the
+  // analysis phase is no longer valid, because we've added and removed
+  // instructions to the function relative to the one that san_reg_uses was
+  // computed from, so we have to re-visit all insns with |get_regs|.  That's
+  // inefficient, but we don't care .. this should only be a temporary fix.
+
+  let mut clobbered_registers: Set<RealReg> = Set::empty();
+
   for insn in insns.iter() {
-    let reg_usage = func.get_regs(insn);
-    for reg in reg_usage.modified.iter().chain(reg_usage.defined.iter()) {
+    let iru = func.get_regs(insn); // AUDITED
+    let sru = SanitizedInstRegUses::create_by_sanitizing(&iru, &reg_universe);
+    for reg in sru.san_modified.iter().chain(sru.san_defined.iter()) {
       assert!(reg.is_real());
       clobbered_registers.insert(reg.to_real_reg());
     }

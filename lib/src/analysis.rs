@@ -9,9 +9,10 @@ use log::debug;
 use std::fmt;
 
 use crate::data_structures::{
-  BlockIx, InstPoint, Map, Queue, RangeFrag, RangeFragIx, RangeFragKind,
-  RealRange, RealRangeIx, Reg, Set, SortedRangeFragIxs, TypedIxVec,
-  VirtualRange, VirtualRangeIx,
+  BlockIx, InstIx, InstPoint, Map, Queue, RangeFrag, RangeFragIx,
+  RangeFragKind, RealRange, RealRangeIx, RealRegUniverse, Reg,
+  SanitizedInstRegUses, Set, SortedRangeFragIxs, TypedIxVec, VirtualRange,
+  VirtualRangeIx,
 };
 use crate::interface::Function;
 
@@ -299,12 +300,31 @@ fn calc_dominators(
 }
 
 //=============================================================================
+// Extraction and sanitization of reg-use information.
+//
+// This calls the client's |get_regs| function on each instruction, then
+// "sanitizes" the sets.  See definition of |SanitizedInstRegUses| for meaning
+// of "sanitized".
+
+fn get_sanitized_reg_uses<F: Function>(
+  f: &F, reg_universe: &RealRegUniverse,
+) -> TypedIxVec<InstIx, SanitizedInstRegUses> {
+  let mut san_reg_uses = TypedIxVec::new();
+  for inst in f.insns() {
+    let iru = f.get_regs(inst); // AUDITED
+    let sru = SanitizedInstRegUses::create_by_sanitizing(&iru, reg_universe);
+    san_reg_uses.push(sru);
+  }
+  san_reg_uses
+}
+
+//=============================================================================
 // Computation of live-in and live-out sets
 
 // Returned TypedIxVecs contain one element per block
 #[inline(never)]
 fn calc_def_and_use<F: Function>(
-  f: &F,
+  f: &F, san_reg_uses: &TypedIxVec<InstIx, SanitizedInstRegUses>,
 ) -> (TypedIxVec<BlockIx, Set<Reg>>, TypedIxVec<BlockIx, Set<Reg>>) {
   let mut def_sets = TypedIxVec::new();
   let mut use_sets = TypedIxVec::new();
@@ -312,11 +332,11 @@ fn calc_def_and_use<F: Function>(
     let mut def = Set::empty();
     let mut uce = Set::empty();
     for iix in f.block_insns(b) {
-      let reg_usage = f.get_regs(f.get_insn(iix));
+      let sru = &san_reg_uses[iix];
       // Add to |uce|, any registers for which the first event
       // in this block is a read.  Dealing with the "first event"
       // constraint is a bit tricky.
-      for u in reg_usage.used.iter().chain(reg_usage.modified.iter()) {
+      for u in sru.san_used.iter().chain(sru.san_modified.iter()) {
         // |u| is used (either read or modified) by the
         // instruction.  Whether or not we should consider it
         // live-in for the block depends on whether it was been
@@ -331,7 +351,7 @@ fn calc_def_and_use<F: Function>(
       // This is simpler.
       // FIXME: isn't this just: defs union= (regs_d union regs_m) ?
       // (Similar comment applies for the |uce| update too)
-      for d in reg_usage.defined.iter().chain(reg_usage.modified.iter()) {
+      for d in sru.san_defined.iter().chain(sru.san_modified.iter()) {
         def.insert(*d);
       }
     }
@@ -378,6 +398,9 @@ fn calc_livein_and_liveout<F: Function>(
       liveouts[bixI] = set;
       // Add |bixI|'s predecessors to the work queue, since their
       // liveout values might be affected.
+      //
+      // FIXME JRS 2020Feb06: only add preds to the work queue if they are not
+      // already in it (possible speedup).
       for bixJ in cfg_info.pred_map[bixI].iter() {
         workQ.push_back(*bixJ);
       }
@@ -418,12 +441,13 @@ fn calc_livein_and_liveout<F: Function>(
 // handle (1) live-in and live-out Regs, (2) dead writes, and (3) instructions
 // that modify registers rather than merely reading or writing them.
 
-// Calculate all the RangeFrags for |bix|.  Add them to |outFEnv| and add
-// to |outMap|, the associated RangeFragIxs, segregated by Reg.  |bix|,
-// |livein| and |liveout| are expected to be valid in the context of the
-// Func |self| (duh!)
+// Calculate all the RangeFrags for |bix|.  Add them to |outFEnv| and add to
+// |outMap|, the associated RangeFragIxs, segregated by Reg.  |bix|, |livein|,
+// |liveout| and |san_reg_uses| are expected to be valid in the context of the
+// Func |f| (duh!)
 fn get_RangeFrags_for_block<F: Function>(
   f: &F, bix: BlockIx, livein: &Set<Reg>, liveout: &Set<Reg>,
+  san_reg_uses: &TypedIxVec<InstIx, SanitizedInstRegUses>,
   outMap: &mut Map<Reg, Vec<RangeFragIx>>,
   outFEnv: &mut TypedIxVec<RangeFragIx, RangeFrag>,
 ) {
@@ -509,18 +533,11 @@ fn get_RangeFrags_for_block<F: Function>(
   // Now visit each instruction in turn, examining first the registers
   // it reads, then those it modifies, and finally those it writes.
   for iix in f.block_insns(bix) {
-    //fn id<'a>(x: Vec::<(&'a Reg, &'a ProtoRangeFrag)>)
-    //          -> Vec::<(&'a Reg, &'a ProtoRangeFrag)> { x }
-    //println!("");
-    //println!("QQQQ state before {}",
-    //         id(state.iter().collect()).show());
-    //println!("QQQQ insn {} {}", iix.show(), insn.show());
-
-    let reg_usage = f.get_regs(f.get_insn(iix));
+    let sru = &san_reg_uses[iix];
 
     // Examine reads.  This is pretty simple.  They simply extend an
     // existing ProtoRangeFrag to the U point of the reading insn.
-    for r in reg_usage.used.iter() {
+    for r in sru.san_used.iter() {
       let new_pf: ProtoRangeFrag;
       match state.get(r) {
         // First event for |r| is a read, but it's not listed in
@@ -549,7 +566,7 @@ fn get_RangeFrags_for_block<F: Function>(
     // Examine modifies.  These are handled almost identically to
     // reads, except that they extend an existing ProtoRangeFrag down to
     // the D point of the modifying insn.
-    for r in reg_usage.modified.iter() {
+    for r in sru.san_modified.iter() {
       let new_pf: ProtoRangeFrag;
       match state.get(r) {
         // First event for |r| is a read (really, since this insn
@@ -576,7 +593,7 @@ fn get_RangeFrags_for_block<F: Function>(
     // general idea is that a write causes us to terminate the
     // existing ProtoRangeFrag, if any, add it to |tmpResultVec|,
     // and start a new frag.
-    for r in reg_usage.defined.iter() {
+    for r in sru.san_defined.iter() {
       let new_pf: ProtoRangeFrag;
       match state.get(r) {
         // First mention of a Reg we've never heard of before.
@@ -666,6 +683,7 @@ fn get_RangeFrags_for_block<F: Function>(
 fn get_RangeFrags<F: Function>(
   f: &F, livein_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>,
   liveout_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>,
+  san_reg_uses: &TypedIxVec<InstIx, SanitizedInstRegUses>,
 ) -> (Map<Reg, Vec<RangeFragIx>>, TypedIxVec<RangeFragIx, RangeFrag>) {
   debug_assert!(livein_sets_per_block.len() == f.blocks().len() as u32);
   debug_assert!(liveout_sets_per_block.len() == f.blocks().len() as u32);
@@ -677,6 +695,7 @@ fn get_RangeFrags<F: Function>(
       bix,
       &livein_sets_per_block[bix],
       &liveout_sets_per_block[bix],
+      &san_reg_uses,
       &mut resMap,
       &mut resFEnv,
     );
@@ -876,16 +895,25 @@ fn set_VirtualRange_metrics(
 
 #[inline(never)]
 pub fn run_analysis<F: Function>(
-  func: &F,
+  func: &F, reg_universe: &RealRegUniverse,
 ) -> Result<
   (
+    // The sanitized per-insn reg-use info
+    TypedIxVec<InstIx, SanitizedInstRegUses>,
+    // The real-reg live ranges
     TypedIxVec<RealRangeIx, RealRange>,
+    // The virtual-reg live ranges
     TypedIxVec<VirtualRangeIx, VirtualRange>,
+    // The fragment table
     TypedIxVec<RangeFragIx, RangeFrag>,
   ),
   String,
 > {
-  let (def_sets_per_block, use_sets_per_block) = calc_def_and_use(func);
+  // See |get_sanitized_reg_uses| for the meaning of "sanitized".
+  let san_reg_uses = get_sanitized_reg_uses(func, reg_universe);
+
+  let (def_sets_per_block, use_sets_per_block) =
+    calc_def_and_use(func, &san_reg_uses);
   debug_assert!(def_sets_per_block.len() == func.blocks().len() as u32);
   debug_assert!(use_sets_per_block.len() == func.blocks().len() as u32);
 
@@ -991,8 +1019,12 @@ pub fn run_analysis<F: Function>(
     }
   }
 
-  let (frag_ixs_per_reg, frag_env) =
-    get_RangeFrags(func, &livein_sets_per_block, &liveout_sets_per_block);
+  let (frag_ixs_per_reg, frag_env) = get_RangeFrags(
+    func,
+    &livein_sets_per_block,
+    &liveout_sets_per_block,
+    &san_reg_uses,
+  );
 
   debug!("");
   n = 0;
@@ -1024,5 +1056,5 @@ pub fn run_analysis<F: Function>(
     n += 1;
   }
 
-  Ok((rlr_env, vlr_env, frag_env))
+  Ok((san_reg_uses, rlr_env, vlr_env, frag_env))
 }

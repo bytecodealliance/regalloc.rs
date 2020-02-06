@@ -36,20 +36,15 @@ pub use crate::data_structures::NUM_REG_CLASSES;
 
 pub use crate::data_structures::SpillSlot;
 
-// The real reg universe
+// The "register universe".  This describes the registers available to the
+// allocator.  There are very strict requirements on the structure of the
+// universe.  See comments on the definition point for details.
 
 pub use crate::data_structures::RealRegUniverse;
 
-/// Register uses for a given instruction.
-#[derive(Clone, Debug)]
-pub struct InstRegUses {
-  // Note that `modified` is distinct from just `used`+`defined` because the
-  // vreg must live in the same real reg both before and after the
-  // instruction.
-  pub used: Set<Reg>,     // registers that are read.
-  pub defined: Set<Reg>,  // registers that are written.
-  pub modified: Set<Reg>, // registers that are modified.
-}
+// Register uses for one instruction.
+
+pub use crate::data_structures::InstRegUses;
 
 // TypedIxVector, so that the interface can speak about vectors of blocks and
 // instructions.
@@ -106,9 +101,12 @@ pub trait Function {
   // --------------------------
 
   /// Provide the defined, used, and modified registers for an instruction.
+  /// Note that it is required that if a register is present in the modified
+  /// set, then it is not present in either the used or defined sets.
+  /// Implementations of this function must take care to ensure that.
   fn get_regs(&self, insn: &Self::Inst) -> InstRegUses;
 
-  /// Map each register slot through a virt -> phys mapping indexed
+  /// Map each register slot through a virtual-to-real mapping indexed
   /// by virtual register. The two separate maps provide the
   /// mapping to use for uses (which semantically occur just prior
   /// to the instruction's effect) and defs (which semantically occur
@@ -147,20 +145,24 @@ pub trait Function {
   /// Generate a spill instruction for insertion into the instruction
   /// sequence. The associated virtual register (whose value is being spilled)
   /// is passed so that the client may make decisions about the instruction to
-  /// generate based on the type of value in question.
+  /// generate based on the type of value in question.  Because the register
+  /// allocator will insert spill instructions at arbitrary points, the
+  /// returned instruction here must not modify the machine's condition codes.
   fn gen_spill(
     &self, to_slot: SpillSlot, from_reg: RealReg, for_vreg: VirtualReg,
   ) -> Self::Inst;
 
   /// Generate a reload instruction for insertion into the instruction
   /// sequence. The associated virtual register (whose value is being loaded)
-  /// is passed as well.
+  /// is passed as well.  The returned instruction must not modify the
+  /// machine's condition codes.
   fn gen_reload(
     &self, to_reg: RealReg, from_slot: SpillSlot, for_vreg: VirtualReg,
   ) -> Self::Inst;
 
   /// Generate a register-to-register move for insertion into the instruction
-  /// sequence. The associatedd virtual register is passed as well.
+  /// sequence. The associated virtual register is passed as well.  The
+  /// returned instruction must not modify the machine's condition codes.
   fn gen_move(
     &self, to_reg: RealReg, from_reg: RealReg, for_vreg: VirtualReg,
   ) -> Self::Inst;
@@ -173,6 +175,9 @@ pub trait Function {
   /// value is def'd or modified, it should be written back to the spill slot
   /// as well. In other words, it is just using the spillslot as if it were a
   /// real register, for reads and/or writes.
+  ///
+  /// FIXME JRS 2020Feb06: state precisely the constraints on condition code
+  /// changes.
   fn maybe_direct_reload(
     &self, insn: &Self::Inst, reg: VirtualReg, slot: SpillSlot,
   ) -> Option<Self::Inst>;
@@ -208,7 +213,9 @@ pub struct RegAllocResult<F: Function> {
 
   /// Which real registers were overwritten? This will contain all real regs
   /// that appear as defs or modifies in register slots of the output
-  /// instruction list.
+  /// instruction list.  This will only list registers that are available to
+  /// the allocator.  If one of the instructions clobbers a register which
+  /// isn't available to the allocator, it won't be mentioned here.
   pub clobbered_registers: Set<RealReg>,
 
   /// How many spill slots were used?

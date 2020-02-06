@@ -395,7 +395,8 @@ pub fn alloc_main<F: Function>(
   func: &mut F, reg_universe: &RealRegUniverse,
 ) -> Result<RegAllocResult<F>, String> {
   // Note that the analysis phase can fail; hence we propagate any error.
-  let (rlr_env, mut vlr_env, mut frag_env) = run_analysis(func)?;
+  let (san_reg_uses, rlr_env, mut vlr_env, mut frag_env) =
+    run_analysis(func, reg_universe)?;
 
   // -------- Alloc main --------
 
@@ -620,21 +621,21 @@ pub fn alloc_main<F: Function>(
     for fix in &curr_vlr.sorted_frags.frag_ixs {
       let frag: &RangeFrag = &frag_env[*fix];
       for iix in frag.first.iix.dotdot(frag.last.iix.plus(1)) {
-        let reg_usage = func.get_regs(func.get_insn(iix));
+        let sru = &san_reg_uses[iix];
         // If this insn doesn't mention the vreg we're spilling for,
         // move on.
-        if !reg_usage.defined.contains(curr_vlr_reg)
-          && !reg_usage.modified.contains(curr_vlr_reg)
-          && !reg_usage.used.contains(curr_vlr_reg)
+        if !sru.san_defined.contains(curr_vlr_reg)
+          && !sru.san_modified.contains(curr_vlr_reg)
+          && !sru.san_used.contains(curr_vlr_reg)
         {
           continue;
         }
         // USES: Do we need to create a reload-to-use bridge
         // (VirtualRange) ?
-        if reg_usage.used.contains(curr_vlr_reg)
+        if sru.san_used.contains(curr_vlr_reg)
           && frag.contains(&InstPoint::new_use(iix))
         {
-          debug_assert!(!reg_usage.modified.contains(curr_vlr_reg));
+          debug_assert!(!sru.san_modified.contains(curr_vlr_reg));
           // Stash enough info that we can create a new VirtualRange
           // and a new edit list entry for the reload.
           let sri =
@@ -647,21 +648,21 @@ pub fn alloc_main<F: Function>(
         // two (one for the reload, one for the spill) they could
         // later end up being assigned to different RealRegs, which is
         // obviously nonsensical.
-        if reg_usage.modified.contains(curr_vlr_reg)
+        if sru.san_modified.contains(curr_vlr_reg)
           && frag.contains(&InstPoint::new_use(iix))
           && frag.contains(&InstPoint::new_def(iix))
         {
-          debug_assert!(!reg_usage.used.contains(curr_vlr_reg));
-          debug_assert!(!reg_usage.defined.contains(curr_vlr_reg));
+          debug_assert!(!sru.san_used.contains(curr_vlr_reg));
+          debug_assert!(!sru.san_defined.contains(curr_vlr_reg));
           let sri =
             SpillAndOrReloadInfo { bix: frag.bix, iix, kind: BridgeKind::RtoS };
           sri_vec.push(sri);
         }
         // DEFS: Do we need to create a def-to-spill bridge?
-        if reg_usage.defined.contains(curr_vlr_reg)
+        if sru.san_defined.contains(curr_vlr_reg)
           && frag.contains(&InstPoint::new_def(iix))
         {
-          debug_assert!(!reg_usage.modified.contains(curr_vlr_reg));
+          debug_assert!(!sru.san_modified.contains(curr_vlr_reg));
           let sri =
             SpillAndOrReloadInfo { bix: frag.bix, iix, kind: BridgeKind::DtoS };
           sri_vec.push(sri);
@@ -812,6 +813,7 @@ pub fn alloc_main<F: Function>(
     memory_moves,
     frag_map,
     &frag_env,
+    &reg_universe,
     next_spill_slot.get(),
   )
 }

@@ -457,7 +457,8 @@ impl<'a> State<'a> {
 pub fn run<F: Function>(
   func: &mut F, reg_universe: &RealRegUniverse,
 ) -> Result<RegAllocResult<F>, String> {
-  let (mut rlrs, mut vlrs, fragments) = run_analysis(func)?;
+  let (_sanitized_reg_uses, mut rlrs, mut vlrs, fragments) =
+    run_analysis(func, reg_universe)?;
 
   let intervals = Intervals::new(&mut rlrs, &mut vlrs, &fragments);
 
@@ -502,5 +503,12 @@ pub fn run<F: Function>(
   let memory_moves = MemoryMoves::new();
   let num_spill_slots = 0;
 
-  edit_inst_stream(func, memory_moves, frag_map, &fragments, num_spill_slots)
+  edit_inst_stream(
+    func,
+    memory_moves,
+    frag_map,
+    &fragments,
+    &reg_universe,
+    num_spill_slots,
+  )
 }
