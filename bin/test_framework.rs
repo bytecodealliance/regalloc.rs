@@ -1667,10 +1667,10 @@ impl regalloc::Function for Func {
   /// Generate a spill instruction for insertion into the instruction sequence.
   fn gen_spill(
     &self, to_slot: SpillSlot, from_reg: RealReg, _for_vreg: VirtualReg,
-  ) -> Self::Inst {
+  ) -> Vec<Self::Inst> {
     match from_reg.get_class() {
-      RegClass::I32 => i_spill(to_slot, from_reg),
-      RegClass::F32 => i_spillf(to_slot, from_reg),
+      RegClass::I32 => vec![i_spill(to_slot, from_reg)],
+      RegClass::F32 => vec![i_spillf(to_slot, from_reg)],
       _ => panic!("Unused register class in test ISA was used"),
     }
   }
@@ -1678,10 +1678,10 @@ impl regalloc::Function for Func {
   /// Generate a reload instruction for insertion into the instruction sequence.
   fn gen_reload(
     &self, to_reg: RealReg, from_slot: SpillSlot, _for_vreg: VirtualReg,
-  ) -> Self::Inst {
+  ) -> Vec<Self::Inst> {
     match to_reg.get_class() {
-      RegClass::I32 => i_reload(to_reg, from_slot),
-      RegClass::F32 => i_reloadf(to_reg, from_slot),
+      RegClass::I32 => vec![i_reload(to_reg, from_slot)],
+      RegClass::F32 => vec![i_reloadf(to_reg, from_slot)],
       _ => panic!("Unused register class in test ISA was used"),
     }
   }

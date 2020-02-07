@@ -150,7 +150,7 @@ pub trait Function {
   /// returned instruction here must not modify the machine's condition codes.
   fn gen_spill(
     &self, to_slot: SpillSlot, from_reg: RealReg, for_vreg: VirtualReg,
-  ) -> Self::Inst;
+  ) -> Vec<Self::Inst>;
 
   /// Generate a reload instruction for insertion into the instruction
   /// sequence. The associated virtual register (whose value is being loaded)
@@ -158,7 +158,7 @@ pub trait Function {
   /// machine's condition codes.
   fn gen_reload(
     &self, to_reg: RealReg, from_slot: SpillSlot, for_vreg: VirtualReg,
-  ) -> Self::Inst;
+  ) -> Vec<Self::Inst>;
 
   /// Generate a register-to-register move for insertion into the instruction
   /// sequence. The associated virtual register is passed as well.  The
