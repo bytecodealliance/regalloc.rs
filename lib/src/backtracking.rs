@@ -744,36 +744,28 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.is_reload());
         debug_assert!(vlr_frag.last.pt.is_use());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnsR = func.gen_reload(rreg, eli.slot, vreg);
+        let insnR = func.gen_reload(rreg, eli.slot, vreg);
         let whereToR = vlr_frag.first;
-        for insnR in insnsR.into_iter() {
-            memory_moves.push(MemoryMove::new(whereToR, insnR));
-        }
+        memory_moves.push(MemoryMove::new(whereToR, insnR));
       }
       BridgeKind::RtoS => {
         debug_assert!(vlr_frag.first.pt.is_reload());
         debug_assert!(vlr_frag.last.pt.is_spill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnsR = func.gen_reload(rreg, eli.slot, vreg);
+        let insnR = func.gen_reload(rreg, eli.slot, vreg);
         let whereToR = vlr_frag.first;
-        let insnsS = func.gen_spill(eli.slot, rreg, vreg);
+        let insnS = func.gen_spill(eli.slot, rreg, vreg);
         let whereToS = vlr_frag.last;
-        for insnR in insnsR.into_iter() {
-            memory_moves.push(MemoryMove::new(whereToR, insnR));
-        }
-        for insnS in insnsS.into_iter() {
-            memory_moves.push(MemoryMove::new(whereToS, insnS));
-        }
+        memory_moves.push(MemoryMove::new(whereToR, insnR));
+        memory_moves.push(MemoryMove::new(whereToS, insnS));
       }
       BridgeKind::DtoS => {
         debug_assert!(vlr_frag.first.pt.is_def());
         debug_assert!(vlr_frag.last.pt.is_spill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnsS = func.gen_spill(eli.slot, rreg, vreg);
+        let insnS = func.gen_spill(eli.slot, rreg, vreg);
         let whereToS = vlr_frag.last;
-        for insnS in insnsS.into_iter() {
-            memory_moves.push(MemoryMove::new(whereToS, insnS));
-        }
+        memory_moves.push(MemoryMove::new(whereToS, insnS));
       }
     }
   }
