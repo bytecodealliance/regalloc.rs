@@ -30,6 +30,8 @@ pub use crate::data_structures::Reg;
 pub use crate::data_structures::RealReg;
 pub use crate::data_structures::VirtualReg;
 
+pub use crate::data_structures::WritableReg;
+
 pub use crate::data_structures::NUM_REG_CLASSES;
 
 // Spill slots

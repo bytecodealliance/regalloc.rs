@@ -130,6 +130,14 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
   {
     self.set.retain(f)
   }
+
+  pub fn map<F, U>(&self, f: F) -> Set<U>
+  where
+    F: Fn(&T) -> U,
+    U: Eq + Ord + Hash + Copy + fmt::Debug,
+  {
+    Set { set: self.set.iter().map(f).collect() }
+  }
 }
 
 impl<T: Eq + Ord + Hash + Copy + fmt::Debug> fmt::Debug for Set<T> {
@@ -684,6 +692,32 @@ impl Reg {
   }
 }
 
+/// A "writable register". This is a wrapper that can be used by the client to ensure that,
+/// internally, it only generates instructions that write to registers that should be written. The
+/// `InstRegUses` below, which must be implemented for every instruction, requires a `WritableReg`
+/// (not just `Reg`) in its `defined` and `modified` sets. While we cannot hide the constructor for
+/// `WritableReg` from certain parts of the client while exposing it to others, the client *can*
+/// adopt conventions to e.g. only ever call the WritableReg constructor from its central
+/// vreg-management logic, and decide that any invocation of this constructor in a machine
+/// backend (for example) is an error.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct WritableReg {
+  reg: Reg,
+}
+
+impl WritableReg {
+  /// Create a WritableReg from a Reg. The client should carefully audit where it calls this
+  /// constructor to ensure correctness (see `WritableReg` struct documentation).
+  pub fn from_reg(reg: Reg) -> WritableReg {
+    WritableReg { reg }
+  }
+
+  /// Get the inner Reg.
+  pub fn to_reg(&self) -> Reg {
+    self.reg
+  }
+}
+
 #[derive(Copy, Clone)]
 pub enum SpillSlot {
   SpillSlot(u32),
@@ -736,16 +770,16 @@ pub struct InstRegUses {
   // Note that |modified| is distinct from just |used|+|defined| because the
   // vreg must live in the same real reg both before and after the
   // instruction.
-  pub used: Set<Reg>,     // registers that are read.
-  pub defined: Set<Reg>,  // registers that are written.
-  pub modified: Set<Reg>, // registers that are modified.
+  pub used: Set<Reg>,             // registers that are read.
+  pub defined: Set<WritableReg>,  // registers that are written.
+  pub modified: Set<WritableReg>, // registers that are modified.
 }
 impl InstRegUses {
   pub fn new() -> InstRegUses {
     InstRegUses {
       used: Set::<Reg>::empty(),
-      defined: Set::<Reg>::empty(),
-      modified: Set::<Reg>::empty(),
+      defined: Set::<WritableReg>::empty(),
+      modified: Set::<WritableReg>::empty(),
     }
   }
 }
@@ -794,8 +828,12 @@ impl SanitizedInstRegUses {
 
     let mut sru = SanitizedInstRegUses {
       san_used: iru.used.clone(),
-      san_defined: iru.defined.clone(),
-      san_modified: iru.modified.clone(),
+      san_defined: Set::from_vec(
+        iru.defined.iter().map(|r| r.to_reg()).collect(),
+      ),
+      san_modified: Set::from_vec(
+        iru.modified.iter().map(|r| r.to_reg()).collect(),
+      ),
     };
     sanitize_reg_set(&mut sru.san_used, reg_universe);
     sanitize_reg_set(&mut sru.san_defined, reg_universe);

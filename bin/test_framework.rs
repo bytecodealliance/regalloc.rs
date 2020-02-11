@@ -9,7 +9,7 @@
 /// `Function` trait for it so that we can use the regalloc public interface.
 use regalloc::{
   BlockIx, InstIx, Map, MyRange, RealReg, RealRegUniverse, Reg, RegClass, Set,
-  SpillSlot, TypedIxVec, VirtualReg, NUM_REG_CLASSES,
+  SpillSlot, TypedIxVec, VirtualReg, WritableReg, NUM_REG_CLASSES,
 };
 
 use std::fmt;
@@ -562,36 +562,38 @@ impl Inst {
   //
   // Also the following must hold: the union of |def| and |use| must be
   // disjoint from |mod|.
-  pub fn get_reg_usage(&self) -> (Set<Reg>, Set<Reg>, Set<Reg>) {
-    let mut def = Set::<Reg>::empty();
-    let mut m0d = Set::<Reg>::empty();
+  pub fn get_reg_usage(
+    &self,
+  ) -> (Set<WritableReg>, Set<WritableReg>, Set<Reg>) {
+    let mut def = Set::<WritableReg>::empty();
+    let mut m0d = Set::<WritableReg>::empty();
     let mut uce = Set::<Reg>::empty();
     match self {
       Inst::Imm { dst, imm: _ } => {
-        def.insert(*dst);
+        def.insert(WritableReg::from_reg(*dst));
       }
       Inst::ImmF { dst, imm: _ } => {
-        def.insert(*dst);
+        def.insert(WritableReg::from_reg(*dst));
       }
       Inst::Copy { dst, src } => {
-        def.insert(*dst);
+        def.insert(WritableReg::from_reg(*dst));
         uce.insert(*src);
       }
       Inst::CopyF { dst, src } => {
-        def.insert(*dst);
+        def.insert(WritableReg::from_reg(*dst));
         uce.insert(*src);
       }
       Inst::BinOp { op: _, dst, srcL, srcR } => {
-        def.insert(*dst);
+        def.insert(WritableReg::from_reg(*dst));
         uce.insert(*srcL);
         srcR.addRegReadsTo(&mut uce);
       }
       Inst::BinOpM { op: _, dst, srcR } => {
-        m0d.insert(*dst);
+        m0d.insert(WritableReg::from_reg(*dst));
         srcR.addRegReadsTo(&mut uce);
       }
       Inst::BinOpF { op: _, dst, srcL, srcR } => {
-        def.insert(*dst);
+        def.insert(WritableReg::from_reg(*dst));
         uce.insert(*srcL);
         uce.insert(*srcR);
       }
@@ -604,11 +606,11 @@ impl Inst {
         uce.insert(*src);
       }
       Inst::Load { dst, addr } => {
-        def.insert(*dst);
+        def.insert(WritableReg::from_reg(*dst));
         addr.addRegReadsTo(&mut uce);
       }
       Inst::LoadF { dst, addr } => {
-        def.insert(*dst);
+        def.insert(WritableReg::from_reg(*dst));
         addr.addRegReadsTo(&mut uce);
       }
       Inst::Goto { .. } => {}
@@ -633,12 +635,12 @@ impl Inst {
         uce.insert(src.to_reg());
       }
       Inst::Reload { dst, .. } | Inst::ReloadF { dst, .. } => {
-        def.insert(dst.to_reg());
+        def.insert(WritableReg::from_reg(dst.to_reg()));
       }
     }
     // Failure of either of these is serious and should be investigated.
     debug_assert!(!def.intersects(&m0d));
-    debug_assert!(!uce.intersects(&m0d));
+    debug_assert!(!uce.map(|r| WritableReg::from_reg(*r)).intersects(&m0d));
     (def, m0d, uce)
   }
 
