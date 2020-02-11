@@ -1648,9 +1648,9 @@ impl regalloc::Function for Func {
   }
 
   /// Allow the regalloc to query whether this is a move.
-  fn is_move(&self, insn: &Self::Inst) -> Option<(Reg, Reg)> {
+  fn is_move(&self, insn: &Self::Inst) -> Option<(WritableReg<Reg>, Reg)> {
     match insn {
-      &Inst::Copy { dst, src } => Some((dst, src)),
+      &Inst::Copy { dst, src } => Some((WritableReg::from_reg(dst), src)),
       _ => None,
     }
   }
@@ -1679,11 +1679,12 @@ impl regalloc::Function for Func {
 
   /// Generate a reload instruction for insertion into the instruction sequence.
   fn gen_reload(
-    &self, to_reg: RealReg, from_slot: SpillSlot, _for_vreg: VirtualReg,
+    &self, to_reg: WritableReg<RealReg>, from_slot: SpillSlot,
+    _for_vreg: VirtualReg,
   ) -> Self::Inst {
-    match to_reg.get_class() {
-      RegClass::I32 => i_reload(to_reg, from_slot),
-      RegClass::F32 => i_reloadf(to_reg, from_slot),
+    match to_reg.to_reg().get_class() {
+      RegClass::I32 => i_reload(to_reg.to_reg(), from_slot),
+      RegClass::F32 => i_reloadf(to_reg.to_reg(), from_slot),
       _ => panic!("Unused register class in test ISA was used"),
     }
   }
@@ -1691,14 +1692,15 @@ impl regalloc::Function for Func {
   /// Generate a register-to-register move for insertion into the instruction
   /// sequence.
   fn gen_move(
-    &self, to_reg: RealReg, from_reg: RealReg, _for_vreg: VirtualReg,
+    &self, to_reg: WritableReg<RealReg>, from_reg: RealReg,
+    _for_vreg: VirtualReg,
   ) -> Self::Inst {
-    match to_reg.get_class() {
+    match to_reg.to_reg().get_class() {
       RegClass::I32 => {
-        Inst::Copy { src: from_reg.to_reg(), dst: to_reg.to_reg() }
+        Inst::Copy { src: from_reg.to_reg(), dst: to_reg.to_reg().to_reg() }
       }
       RegClass::F32 => {
-        Inst::CopyF { src: from_reg.to_reg(), dst: to_reg.to_reg() }
+        Inst::CopyF { src: from_reg.to_reg(), dst: to_reg.to_reg().to_reg() }
       }
       _ => unimplemented!("gen_move for non i32/f32"),
     }

@@ -14,7 +14,7 @@ use crate::analysis::run_analysis;
 use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx, RangeFragKind,
   RealRange, RealRegUniverse, RegClass, SortedRangeFragIxs, SpillSlot,
-  TypedIxVec, VirtualRange, VirtualRangeIx,
+  TypedIxVec, VirtualRange, VirtualRangeIx, WritableReg,
 };
 use crate::inst_stream::{
   edit_inst_stream, MemoryMove, MemoryMoves, RangeAllocations,
@@ -744,7 +744,8 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.is_reload());
         debug_assert!(vlr_frag.last.pt.is_use());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR = func.gen_reload(rreg, eli.slot, vreg);
+        let insnR =
+          func.gen_reload(WritableReg::from_reg(rreg), eli.slot, vreg);
         let whereToR = vlr_frag.first;
         memory_moves.push(MemoryMove::new(whereToR, insnR));
       }
@@ -752,7 +753,8 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.is_reload());
         debug_assert!(vlr_frag.last.pt.is_spill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR = func.gen_reload(rreg, eli.slot, vreg);
+        let insnR =
+          func.gen_reload(WritableReg::from_reg(rreg), eli.slot, vreg);
         let whereToR = vlr_frag.first;
         let insnS = func.gen_spill(eli.slot, rreg, vreg);
         let whereToS = vlr_frag.last;

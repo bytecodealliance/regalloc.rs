@@ -124,7 +124,7 @@ pub trait Function {
   );
 
   /// Allow the regalloc to query whether this is a move. Returns (dst, src).
-  fn is_move(&self, insn: &Self::Inst) -> Option<(Reg, Reg)>;
+  fn is_move(&self, insn: &Self::Inst) -> Option<(WritableReg<Reg>, Reg)>;
 
   // --------------
   // Spills/reloads
@@ -159,14 +159,16 @@ pub trait Function {
   /// is passed as well.  The returned instruction must not modify the
   /// machine's condition codes.
   fn gen_reload(
-    &self, to_reg: RealReg, from_slot: SpillSlot, for_vreg: VirtualReg,
+    &self, to_reg: WritableReg<RealReg>, from_slot: SpillSlot,
+    for_vreg: VirtualReg,
   ) -> Self::Inst;
 
   /// Generate a register-to-register move for insertion into the instruction
   /// sequence. The associated virtual register is passed as well.  The
   /// returned instruction must not modify the machine's condition codes.
   fn gen_move(
-    &self, to_reg: RealReg, from_reg: RealReg, for_vreg: VirtualReg,
+    &self, to_reg: WritableReg<RealReg>, from_reg: RealReg,
+    for_vreg: VirtualReg,
   ) -> Self::Inst;
 
   /// Try to alter an existing instruction to use a value directly in a

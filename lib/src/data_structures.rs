@@ -720,6 +720,14 @@ impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug>
   pub fn to_reg(&self) -> R {
     self.reg
   }
+
+  pub fn map<F, U>(&self, f: F) -> WritableReg<U>
+  where
+    F: Fn(R) -> U,
+    U: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug,
+  {
+    WritableReg { reg: f(self.reg) }
+  }
 }
 
 #[derive(Copy, Clone)]
