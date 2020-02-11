@@ -564,9 +564,9 @@ impl Inst {
   // disjoint from |mod|.
   pub fn get_reg_usage(
     &self,
-  ) -> (Set<WritableReg>, Set<WritableReg>, Set<Reg>) {
-    let mut def = Set::<WritableReg>::empty();
-    let mut m0d = Set::<WritableReg>::empty();
+  ) -> (Set<WritableReg<Reg>>, Set<WritableReg<Reg>>, Set<Reg>) {
+    let mut def = Set::<WritableReg<Reg>>::empty();
+    let mut m0d = Set::<WritableReg<Reg>>::empty();
     let mut uce = Set::<Reg>::empty();
     match self {
       Inst::Imm { dst, imm: _ } => {

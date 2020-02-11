@@ -701,19 +701,23 @@ impl Reg {
 /// vreg-management logic, and decide that any invocation of this constructor in a machine
 /// backend (for example) is an error.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub struct WritableReg {
-  reg: Reg,
+pub struct WritableReg<
+  R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug,
+> {
+  reg: R,
 }
 
-impl WritableReg {
+impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug>
+  WritableReg<R>
+{
   /// Create a WritableReg from a Reg. The client should carefully audit where it calls this
   /// constructor to ensure correctness (see `WritableReg` struct documentation).
-  pub fn from_reg(reg: Reg) -> WritableReg {
+  pub fn from_reg(reg: R) -> WritableReg<R> {
     WritableReg { reg }
   }
 
   /// Get the inner Reg.
-  pub fn to_reg(&self) -> Reg {
+  pub fn to_reg(&self) -> R {
     self.reg
   }
 }
@@ -770,16 +774,16 @@ pub struct InstRegUses {
   // Note that |modified| is distinct from just |used|+|defined| because the
   // vreg must live in the same real reg both before and after the
   // instruction.
-  pub used: Set<Reg>,             // registers that are read.
-  pub defined: Set<WritableReg>,  // registers that are written.
-  pub modified: Set<WritableReg>, // registers that are modified.
+  pub used: Set<Reg>, // registers that are read.
+  pub defined: Set<WritableReg<Reg>>, // registers that are written.
+  pub modified: Set<WritableReg<Reg>>, // registers that are modified.
 }
 impl InstRegUses {
   pub fn new() -> InstRegUses {
     InstRegUses {
       used: Set::<Reg>::empty(),
-      defined: Set::<WritableReg>::empty(),
-      modified: Set::<WritableReg>::empty(),
+      defined: Set::<WritableReg<Reg>>::empty(),
+      modified: Set::<WritableReg<Reg>>::empty(),
     }
   }
 }
