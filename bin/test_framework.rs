@@ -1069,6 +1069,10 @@ impl<'a> IState<'a> {
   }
 }
 
+/// Number of dynamic steps allowed in a test program. Useful to detect infinite
+/// loops during testing.
+const MAX_NUM_STEPS: u32 = 1000000;
+
 pub fn run_func(
   f: &Func, who: &str, reg_universe: &RealRegUniverse, run_stage: RunStage,
 ) -> Option<Value> {
@@ -1081,8 +1085,14 @@ pub fn run_func(
   let mut istate =
     IState::new(f, reg_universe.regs.len(), /*maxMem=*/ 1000, run_stage);
   let mut done = false;
-  while !done {
+  let mut allowed_steps = MAX_NUM_STEPS;
+  while allowed_steps > 0 && !done {
     done = istate.step();
+    allowed_steps -= 1;
+  }
+
+  if allowed_steps == 0 {
+    panic!("too many dynamic steps. Maybe running an infinite loop?")
   }
 
   println!(
