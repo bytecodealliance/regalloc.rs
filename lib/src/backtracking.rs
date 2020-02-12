@@ -278,13 +278,15 @@ fn print_RA_state(
 ) {
   debug!("<<<<====---- RA state at '{}' ----====", who);
   for ix in 0..perRealReg.len() {
-    debug!(
-      "{:<4}   {}",
-      universe.regs[ix].1,
-      &perRealReg[ix].show1_with_envs(&frag_env)
-    );
-    debug!("      {}", &perRealReg[ix].show2_with_envs(&frag_env));
-    debug!("");
+    if ! &perRealReg[ix].frags_in_use.frag_ixs.is_empty() {
+      debug!(
+        "{:<5}  {}",
+        universe.regs[ix].1,
+        &perRealReg[ix].show1_with_envs(&frag_env)
+      );
+      debug!("       {}", &perRealReg[ix].show2_with_envs(&frag_env));
+      debug!("");
+    }
   }
   if !prioQ.is_empty() {
     for s in prioQ.show_with_envs(&vlr_env) {
@@ -377,7 +379,7 @@ impl fmt::Debug for EditListItem {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     write!(
       fmt,
-      "ELI {{ for {:?} add '{:?}' {:?} }}",
+      "(ELI: for {:?} add {:?}, slot={:?})",
       self.vlrix, self.kind, self.slot
     )
   }
@@ -488,7 +490,7 @@ pub fn alloc_main<F: Function>(
     if let Some(rregNo) = rreg_to_use {
       // Yay!
       let rreg = reg_universe.regs[rregNo].0;
-      debug!("--   direct alloc to  {:?}", rreg);
+      debug!("--   direct alloc to  {}", reg_universe.regs[rregNo].1);
       per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
       debug_assert!(curr_vlr.rreg.is_none());
       // Directly modify bits of vlr_env.  This means we have to abandon
@@ -550,7 +552,7 @@ pub fn alloc_main<F: Function>(
       debug_assert!(vlr_env[vlrix_to_evict].rreg.is_some());
       // .. and reassign.
       let rreg = reg_universe.regs[rregNo].0;
-      debug!("--   then alloc to    {:?}", rreg);
+      debug!("--   then alloc to    {}", reg_universe.regs[rregNo].1);
       per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
       debug_assert!(curr_vlr.rreg.is_none());
       // Directly modify bits of vlr_env.  This means we have to abandon
@@ -696,7 +698,7 @@ pub fn alloc_main<F: Function>(
       let new_vlr_fix = RangeFragIx::new(frag_env.len() as u32);
       frag_env.push(new_vlr_frag);
       debug!(
-        "--     new RangeFrag       {:?}  :=  {:?}",
+        "--     new RangeFrag    {:?}  :=  {:?}",
         &new_vlr_fix, &new_vlr_frag
       );
       let new_vlr_sfixs = SortedRangeFragIxs::unit(new_vlr_fix, &frag_env);
@@ -709,7 +711,7 @@ pub fn alloc_main<F: Function>(
       };
       let new_vlrix = VirtualRangeIx::new(vlr_env.len() as u32);
       debug!(
-        "--     new VirtualRange        {:?}  :=  {:?}",
+        "--     new VirtRange    {:?}  :=  {:?}",
         new_vlrix, &new_vlr
       );
       vlr_env.push(new_vlr);
@@ -720,7 +722,7 @@ pub fn alloc_main<F: Function>(
         vlrix: new_vlrix,
         kind: sri.kind,
       };
-      debug!("--     new ELI        {:?}", &new_eli);
+      debug!("--     new ELI          {:?}", &new_eli);
       edit_list.push(new_eli);
     }
 

@@ -1118,10 +1118,10 @@ impl fmt::Debug for InstPoint {
       "{:?}{}",
       self.iix,
       match self.pt {
-        Point::Reload => "/r",
-        Point::Use => "/u",
-        Point::Def => "/d",
-        Point::Spill => "/s",
+        Point::Reload => ".r",
+        Point::Use => ".u",
+        Point::Def => ".d",
+        Point::Spill => ".s",
       }
     )
   }
@@ -1225,7 +1225,7 @@ impl fmt::Debug for RangeFrag {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     write!(
       fmt,
-      "{:?}; count={}; {:?} [{:?} {:?}]",
+      "(RF: {:?}, count={}, {:?}, {:?}-{:?})",
       self.bix, self.count, self.kind, self.first, self.last
     )
   }
@@ -1299,7 +1299,7 @@ impl SortedRangeFragIxs {
     for fix in &self.frag_ixs {
       frags.push(fenv[*fix]);
     }
-    format!("SFIxs_{:?}", &frags)
+    format!("(SRFIxs {:?})", &frags)
   }
 
   fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
@@ -1524,7 +1524,7 @@ pub struct RealRange {
 }
 impl fmt::Debug for RealRange {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(fmt, "{:?} {:?}", self.rreg, self.sorted_frags)
+    write!(fmt, "(RR: {:?}, {:?})", self.rreg, self.sorted_frags)
   }
 }
 
@@ -1545,13 +1545,13 @@ impl fmt::Debug for VirtualRange {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     let cost_str = match self.spill_cost {
       None => "INFIN".to_string(),
-      Some(c) => format!("{:<5.2}", c),
+      Some(c) => format!("{:<.2}", c),
     };
-    write!(fmt, "{:?}", self.vreg)?;
+    write!(fmt, "(VR: {:?},", self.vreg)?;
     if self.rreg.is_some() {
       write!(fmt, " -> {:?}", self.rreg.unwrap())?;
     }
-    write!(fmt, " s={}, c={} {:?}", self.size, cost_str, self.sorted_frags)
+    write!(fmt, " s={}, c={}, {:?})", self.size, cost_str, self.sorted_frags)
   }
 }
 
