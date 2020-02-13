@@ -16,22 +16,22 @@ use crate::interface::{Function, RegAllocResult};
 
 pub(crate) type RangeAllocations = Vec<(RangeFragIx, VirtualReg, RealReg)>;
 
-pub(crate) struct MemoryMove<F: Function> {
+pub(crate) struct InstAndPoint<F: Function> {
   at: InstPoint,
   inst: F::Inst,
 }
 
-impl<F: Function> MemoryMove<F> {
+impl<F: Function> InstAndPoint<F> {
   pub(crate) fn new(at: InstPoint, inst: F::Inst) -> Self {
     Self { at, inst }
   }
 }
 
-pub(crate) type MemoryMoves<F> = Vec<MemoryMove<F>>;
+pub(crate) type InstsAndPoints<F> = Vec<InstAndPoint<F>>;
 
 pub(crate) fn edit_inst_stream<F: Function>(
-  func: &mut F, mut memory_moves: MemoryMoves<F>, frag_map: RangeAllocations,
-  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+  func: &mut F, mut insts_to_add: InstsAndPoints<F>,
+  frag_map: RangeAllocations, frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
   reg_universe: &RealRegUniverse, num_spill_slots: u32,
 ) -> Result<RegAllocResult<F>, String> {
   // Make two copies of the fragment mapping, one sorted by the fragment start
@@ -296,16 +296,16 @@ pub(crate) fn edit_inst_stream<F: Function>(
 
   debug_assert!(map.is_empty());
 
-  // Construct the final code by interleaving the mapped code with the
-  // spills and reloads.  To do that requires having the latter sorted by
-  // InstPoint.
+  // Construct the final code by interleaving the mapped code with the the
+  // spills, reloads and copies that we have been requested to insert.  To do
+  // that requires having the latter sorted by InstPoint.
   //
   // We also need to examine and update Func::blocks.  This is assumed to
   // be arranged in ascending order of the Block::start fields.
 
-  memory_moves.sort_by_key(|mem_move| mem_move.at);
+  insts_to_add.sort_by_key(|mem_move| mem_move.at);
 
-  let mut curSnR = 0; // cursor in |spillsAndReloads|
+  let mut curITA = 0; // cursor in |insts_to_add|
   let mut curB = BlockIx::new(0); // cursor in Func::blocks
 
   let mut insns: Vec<F::Inst> = vec![];
@@ -320,21 +320,23 @@ pub(crate) fn edit_inst_stream<F: Function>(
       target_map.push(InstIx::new(insns.len() as u32));
     }
 
-    // Copy reloads for this insn
-    while curSnR < memory_moves.len()
-      && memory_moves[curSnR].at == InstPoint::new_reload(iix)
+    // Copy to the output vector, the extra insts that are to be placed at the
+    // reload point of |iix|.
+    while curITA < insts_to_add.len()
+      && insts_to_add[curITA].at == InstPoint::new_reload(iix)
     {
-      insns.push(memory_moves[curSnR].inst.clone());
-      curSnR += 1;
+      insns.push(insts_to_add[curITA].inst.clone());
+      curITA += 1;
     }
-    // And the insn itself
+    // Copy the inst at |iix| itself
     insns.push(func.get_insn(iix).clone());
-    // Copy spills for this insn
-    while curSnR < memory_moves.len()
-      && memory_moves[curSnR].at == InstPoint::new_spill(iix)
+    // And copy the extra insts that are to be placed at the spill point of
+    // |iix|.
+    while curITA < insts_to_add.len()
+      && insts_to_add[curITA].at == InstPoint::new_spill(iix)
     {
-      insns.push(memory_moves[curSnR].inst.clone());
-      curSnR += 1;
+      insns.push(insts_to_add[curITA].inst.clone());
+      curITA += 1;
     }
 
     // Is |iix| the last instruction in a block?
@@ -344,7 +346,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
     }
   }
 
-  debug_assert!(curSnR == memory_moves.len());
+  debug_assert!(curITA == insts_to_add.len());
   debug_assert!(curB.get() == func.blocks().len() as u32);
 
   // Compute clobbered registers with one final, quick pass.

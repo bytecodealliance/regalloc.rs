@@ -17,7 +17,7 @@ use crate::data_structures::{
   TypedIxVec, VirtualRange, VirtualRangeIx, Writable,
 };
 use crate::inst_stream::{
-  edit_inst_stream, MemoryMove, MemoryMoves, RangeAllocations,
+  edit_inst_stream, InstAndPoint, InstsAndPoints, RangeAllocations,
 };
 use crate::interface::{Function, RegAllocResult};
 
@@ -729,7 +729,7 @@ pub fn alloc_main<F: Function>(
   // Reload and spill instructions are missing.  To generate them, go through
   // the "edit list", which contains info on both how to generate the
   // instructions, and where to insert them.
-  let mut memory_moves = MemoryMoves::new();
+  let mut spills_n_reloads = InstsAndPoints::new();
   for eli in &edit_list {
     debug!("editlist entry: {:?}", eli);
     let vlr = &vlr_env[eli.vlrix];
@@ -745,7 +745,7 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
         let insnR = func.gen_reload(Writable::from_reg(rreg), eli.slot, vreg);
         let whereToR = vlr_frag.first;
-        memory_moves.push(MemoryMove::new(whereToR, insnR));
+        spills_n_reloads.push(InstAndPoint::new(whereToR, insnR));
       }
       BridgeKind::RtoS => {
         debug_assert!(vlr_frag.first.pt.is_reload());
@@ -755,8 +755,8 @@ pub fn alloc_main<F: Function>(
         let whereToR = vlr_frag.first;
         let insnS = func.gen_spill(eli.slot, rreg, vreg);
         let whereToS = vlr_frag.last;
-        memory_moves.push(MemoryMove::new(whereToR, insnR));
-        memory_moves.push(MemoryMove::new(whereToS, insnS));
+        spills_n_reloads.push(InstAndPoint::new(whereToR, insnR));
+        spills_n_reloads.push(InstAndPoint::new(whereToS, insnS));
       }
       BridgeKind::DtoS => {
         debug_assert!(vlr_frag.first.pt.is_def());
@@ -764,7 +764,7 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
         let insnS = func.gen_spill(eli.slot, rreg, vreg);
         let whereToS = vlr_frag.last;
-        memory_moves.push(MemoryMove::new(whereToS, insnS));
+        spills_n_reloads.push(InstAndPoint::new(whereToS, insnS));
       }
     }
   }
@@ -809,7 +809,7 @@ pub fn alloc_main<F: Function>(
 
   edit_inst_stream(
     func,
-    memory_moves,
+    spills_n_reloads,
     frag_map,
     &frag_env,
     &reg_universe,
