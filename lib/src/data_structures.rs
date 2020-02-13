@@ -692,28 +692,39 @@ impl Reg {
   }
 }
 
-/// A "writable register". This is a wrapper that can be used by the client to ensure that,
-/// internally, it only generates instructions that write to registers that should be written. The
-/// `InstRegUses` below, which must be implemented for every instruction, requires a `WritableReg`
-/// (not just `Reg`) in its `defined` and `modified` sets. While we cannot hide the constructor for
-/// `WritableReg` from certain parts of the client while exposing it to others, the client *can*
-/// adopt conventions to e.g. only ever call the WritableReg constructor from its central
-/// vreg-management logic, and decide that any invocation of this constructor in a machine
-/// backend (for example) is an error.
+/// A "writable register". This is a zero-cost wrapper that can be used to
+/// create a distinction, at the Rust type level, between a plain "register"
+/// and a "writable register".
+///
+/// There is nothing that ensures that Writable<..> is only wrapped around Reg
+/// and its variants (`RealReg`, `VirtualReg`).  That however is its intended
+/// and currently its only use.
+///
+/// Writable<..> can be used by the client to ensure that, internally, it only
+/// generates instructions that write to registers that should be written. The
+/// `InstRegUses` below, which must be implemented for every instruction,
+/// requires a `Writable<Reg>` (not just `Reg`) in its `defined` and
+/// `modified` sets. While we cannot hide the constructor for `Writable<..>`
+/// from certain parts of the client while exposing it to others, the client
+/// *can* adopt conventions to e.g. only ever call the Writable<..>
+/// constructor from its central vreg-management logic, and decide that any
+/// invocation of this constructor in a machine backend (for example) is an
+/// error.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub struct WritableReg<
+pub struct Writable<
   R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug,
 > {
   reg: R,
 }
 
 impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug>
-  WritableReg<R>
+  Writable<R>
 {
-  /// Create a WritableReg from a Reg. The client should carefully audit where it calls this
-  /// constructor to ensure correctness (see `WritableReg` struct documentation).
-  pub fn from_reg(reg: R) -> WritableReg<R> {
-    WritableReg { reg }
+  /// Create a Writable<R> from an R. The client should carefully audit where
+  /// it calls this constructor to ensure correctness (see `Writable<..>`
+  /// struct documentation).
+  pub fn from_reg(reg: R) -> Writable<R> {
+    Writable { reg }
   }
 
   /// Get the inner Reg.
@@ -721,12 +732,12 @@ impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug>
     self.reg
   }
 
-  pub fn map<F, U>(&self, f: F) -> WritableReg<U>
+  pub fn map<F, U>(&self, f: F) -> Writable<U>
   where
     F: Fn(R) -> U,
     U: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug,
   {
-    WritableReg { reg: f(self.reg) }
+    Writable { reg: f(self.reg) }
   }
 }
 
@@ -782,16 +793,16 @@ pub struct InstRegUses {
   // Note that |modified| is distinct from just |used|+|defined| because the
   // vreg must live in the same real reg both before and after the
   // instruction.
-  pub used: Set<Reg>, // registers that are read.
-  pub defined: Set<WritableReg<Reg>>, // registers that are written.
-  pub modified: Set<WritableReg<Reg>>, // registers that are modified.
+  pub used: Set<Reg>,               // registers that are read.
+  pub defined: Set<Writable<Reg>>,  // registers that are written.
+  pub modified: Set<Writable<Reg>>, // registers that are modified.
 }
 impl InstRegUses {
   pub fn new() -> InstRegUses {
     InstRegUses {
       used: Set::<Reg>::empty(),
-      defined: Set::<WritableReg<Reg>>::empty(),
-      modified: Set::<WritableReg<Reg>>::empty(),
+      defined: Set::<Writable<Reg>>::empty(),
+      modified: Set::<Writable<Reg>>::empty(),
     }
   }
 }

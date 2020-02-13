@@ -30,7 +30,7 @@ pub use crate::data_structures::Reg;
 pub use crate::data_structures::RealReg;
 pub use crate::data_structures::VirtualReg;
 
-pub use crate::data_structures::WritableReg;
+pub use crate::data_structures::Writable;
 
 pub use crate::data_structures::NUM_REG_CLASSES;
 
@@ -124,7 +124,7 @@ pub trait Function {
   );
 
   /// Allow the regalloc to query whether this is a move. Returns (dst, src).
-  fn is_move(&self, insn: &Self::Inst) -> Option<(WritableReg<Reg>, Reg)>;
+  fn is_move(&self, insn: &Self::Inst) -> Option<(Writable<Reg>, Reg)>;
 
   // --------------
   // Spills/reloads
@@ -159,7 +159,7 @@ pub trait Function {
   /// is passed as well.  The returned instruction must not modify the
   /// machine's condition codes.
   fn gen_reload(
-    &self, to_reg: WritableReg<RealReg>, from_slot: SpillSlot,
+    &self, to_reg: Writable<RealReg>, from_slot: SpillSlot,
     for_vreg: VirtualReg,
   ) -> Self::Inst;
 
@@ -167,8 +167,7 @@ pub trait Function {
   /// sequence. The associated virtual register is passed as well.  The
   /// returned instruction must not modify the machine's condition codes.
   fn gen_move(
-    &self, to_reg: WritableReg<RealReg>, from_reg: RealReg,
-    for_vreg: VirtualReg,
+    &self, to_reg: Writable<RealReg>, from_reg: RealReg, for_vreg: VirtualReg,
   ) -> Self::Inst;
 
   /// Try to alter an existing instruction to use a value directly in a

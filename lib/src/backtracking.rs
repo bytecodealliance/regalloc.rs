@@ -14,7 +14,7 @@ use crate::analysis::run_analysis;
 use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx, RangeFragKind,
   RealRange, RealRegUniverse, RegClass, SortedRangeFragIxs, SpillSlot,
-  TypedIxVec, VirtualRange, VirtualRangeIx, WritableReg,
+  TypedIxVec, VirtualRange, VirtualRangeIx, Writable,
 };
 use crate::inst_stream::{
   edit_inst_stream, MemoryMove, MemoryMoves, RangeAllocations,
@@ -278,7 +278,7 @@ fn print_RA_state(
 ) {
   debug!("<<<<====---- RA state at '{}' ----====", who);
   for ix in 0..perRealReg.len() {
-    if ! &perRealReg[ix].frags_in_use.frag_ixs.is_empty() {
+    if !&perRealReg[ix].frags_in_use.frag_ixs.is_empty() {
       debug!(
         "{:<5}  {}",
         universe.regs[ix].1,
@@ -710,10 +710,7 @@ pub fn alloc_main<F: Function>(
         spill_cost: None, /*infinity*/
       };
       let new_vlrix = VirtualRangeIx::new(vlr_env.len() as u32);
-      debug!(
-        "--     new VirtRange    {:?}  :=  {:?}",
-        new_vlrix, &new_vlr
-      );
+      debug!("--     new VirtRange    {:?}  :=  {:?}", new_vlrix, &new_vlr);
       vlr_env.push(new_vlr);
       prioQ.add_VirtualRange(new_vlrix);
 
@@ -746,8 +743,7 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.is_reload());
         debug_assert!(vlr_frag.last.pt.is_use());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR =
-          func.gen_reload(WritableReg::from_reg(rreg), eli.slot, vreg);
+        let insnR = func.gen_reload(Writable::from_reg(rreg), eli.slot, vreg);
         let whereToR = vlr_frag.first;
         memory_moves.push(MemoryMove::new(whereToR, insnR));
       }
@@ -755,8 +751,7 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.is_reload());
         debug_assert!(vlr_frag.last.pt.is_spill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR =
-          func.gen_reload(WritableReg::from_reg(rreg), eli.slot, vreg);
+        let insnR = func.gen_reload(Writable::from_reg(rreg), eli.slot, vreg);
         let whereToR = vlr_frag.first;
         let insnS = func.gen_spill(eli.slot, rreg, vreg);
         let whereToS = vlr_frag.last;

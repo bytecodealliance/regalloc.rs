@@ -9,7 +9,7 @@
 /// `Function` trait for it so that we can use the regalloc public interface.
 use regalloc::{
   BlockIx, InstIx, Map, MyRange, RealReg, RealRegUniverse, Reg, RegClass, Set,
-  SpillSlot, TypedIxVec, VirtualReg, WritableReg, NUM_REG_CLASSES,
+  SpillSlot, TypedIxVec, VirtualReg, Writable, NUM_REG_CLASSES,
 };
 
 use std::fmt;
@@ -564,36 +564,36 @@ impl Inst {
   // disjoint from |mod|.
   pub fn get_reg_usage(
     &self,
-  ) -> (Set<WritableReg<Reg>>, Set<WritableReg<Reg>>, Set<Reg>) {
-    let mut def = Set::<WritableReg<Reg>>::empty();
-    let mut m0d = Set::<WritableReg<Reg>>::empty();
+  ) -> (Set<Writable<Reg>>, Set<Writable<Reg>>, Set<Reg>) {
+    let mut def = Set::<Writable<Reg>>::empty();
+    let mut m0d = Set::<Writable<Reg>>::empty();
     let mut uce = Set::<Reg>::empty();
     match self {
       Inst::Imm { dst, imm: _ } => {
-        def.insert(WritableReg::from_reg(*dst));
+        def.insert(Writable::from_reg(*dst));
       }
       Inst::ImmF { dst, imm: _ } => {
-        def.insert(WritableReg::from_reg(*dst));
+        def.insert(Writable::from_reg(*dst));
       }
       Inst::Copy { dst, src } => {
-        def.insert(WritableReg::from_reg(*dst));
+        def.insert(Writable::from_reg(*dst));
         uce.insert(*src);
       }
       Inst::CopyF { dst, src } => {
-        def.insert(WritableReg::from_reg(*dst));
+        def.insert(Writable::from_reg(*dst));
         uce.insert(*src);
       }
       Inst::BinOp { op: _, dst, srcL, srcR } => {
-        def.insert(WritableReg::from_reg(*dst));
+        def.insert(Writable::from_reg(*dst));
         uce.insert(*srcL);
         srcR.addRegReadsTo(&mut uce);
       }
       Inst::BinOpM { op: _, dst, srcR } => {
-        m0d.insert(WritableReg::from_reg(*dst));
+        m0d.insert(Writable::from_reg(*dst));
         srcR.addRegReadsTo(&mut uce);
       }
       Inst::BinOpF { op: _, dst, srcL, srcR } => {
-        def.insert(WritableReg::from_reg(*dst));
+        def.insert(Writable::from_reg(*dst));
         uce.insert(*srcL);
         uce.insert(*srcR);
       }
@@ -606,11 +606,11 @@ impl Inst {
         uce.insert(*src);
       }
       Inst::Load { dst, addr } => {
-        def.insert(WritableReg::from_reg(*dst));
+        def.insert(Writable::from_reg(*dst));
         addr.addRegReadsTo(&mut uce);
       }
       Inst::LoadF { dst, addr } => {
-        def.insert(WritableReg::from_reg(*dst));
+        def.insert(Writable::from_reg(*dst));
         addr.addRegReadsTo(&mut uce);
       }
       Inst::Goto { .. } => {}
@@ -635,12 +635,12 @@ impl Inst {
         uce.insert(src.to_reg());
       }
       Inst::Reload { dst, .. } | Inst::ReloadF { dst, .. } => {
-        def.insert(WritableReg::from_reg(dst.to_reg()));
+        def.insert(Writable::from_reg(dst.to_reg()));
       }
     }
     // Failure of either of these is serious and should be investigated.
     debug_assert!(!def.intersects(&m0d));
-    debug_assert!(!uce.map(|r| WritableReg::from_reg(*r)).intersects(&m0d));
+    debug_assert!(!uce.map(|r| Writable::from_reg(*r)).intersects(&m0d));
     (def, m0d, uce)
   }
 
@@ -1658,9 +1658,9 @@ impl regalloc::Function for Func {
   }
 
   /// Allow the regalloc to query whether this is a move.
-  fn is_move(&self, insn: &Self::Inst) -> Option<(WritableReg<Reg>, Reg)> {
+  fn is_move(&self, insn: &Self::Inst) -> Option<(Writable<Reg>, Reg)> {
     match insn {
-      &Inst::Copy { dst, src } => Some((WritableReg::from_reg(dst), src)),
+      &Inst::Copy { dst, src } => Some((Writable::from_reg(dst), src)),
       _ => None,
     }
   }
@@ -1689,7 +1689,7 @@ impl regalloc::Function for Func {
 
   /// Generate a reload instruction for insertion into the instruction sequence.
   fn gen_reload(
-    &self, to_reg: WritableReg<RealReg>, from_slot: SpillSlot,
+    &self, to_reg: Writable<RealReg>, from_slot: SpillSlot,
     _for_vreg: VirtualReg,
   ) -> Self::Inst {
     match to_reg.to_reg().get_class() {
@@ -1702,8 +1702,7 @@ impl regalloc::Function for Func {
   /// Generate a register-to-register move for insertion into the instruction
   /// sequence.
   fn gen_move(
-    &self, to_reg: WritableReg<RealReg>, from_reg: RealReg,
-    _for_vreg: VirtualReg,
+    &self, to_reg: Writable<RealReg>, from_reg: RealReg, _for_vreg: VirtualReg,
   ) -> Self::Inst {
     match to_reg.to_reg().get_class() {
       RegClass::I32 => {
