@@ -43,6 +43,7 @@ pub use crate::data_structures::SpillSlot;
 // universe.  See comments on the definition point for details.
 
 pub use crate::data_structures::RealRegUniverse;
+pub use crate::data_structures::RegClassInfo;
 
 // Register uses for one instruction.
 

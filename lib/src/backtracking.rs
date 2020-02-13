@@ -464,8 +464,8 @@ pub fn alloc_main<F: Function>(
     let curr_vlr_rc = curr_vlr.vreg.get_class().rc_to_usize();
 
     let (first_in_rc, last_in_rc) =
-      match reg_universe.allocable_by_class[curr_vlr_rc] {
-        None => {
+      match &reg_universe.allocable_by_class[curr_vlr_rc] {
+        &None => {
           // Urk.  This is very ungood.  Game over.
           let s = format!(
             "no available registers for class {:?}",
@@ -473,7 +473,7 @@ pub fn alloc_main<F: Function>(
           );
           return Err(s);
         }
-        Some((first, last)) => (first, last),
+        &Some(ref info) => (info.first, info.last),
       };
 
     // See if we can find a RealReg to which we can assign this

@@ -895,25 +895,46 @@ pub struct RealRegUniverse {
   // the allocator.  It must be < |regs|.len().
   pub allocable: usize,
 
-  // Ranges for groups of allocable registers. Used to quickly address only
-  // a group of allocable registers belonging to the same register class.
+  // Information about groups of allocable registers. Used to quickly address
+  // only a group of allocable registers belonging to the same register class.
   // Indexes into |allocable_by_class| are RegClass values, such as
   // RegClass::F32. If the resulting entry is |None| then there are no
-  // registers in that class.  Otherwise the value is |Some((first, last)),
-  // which specifies the range of entries in |regs| corresponding to that
-  // class.  The range includes both |first| and |last|.
+  // registers in that class.  Otherwise the value is a |RegClassInfo|, which
+  // provides a register range and possibly information about fixed uses.
+  pub allocable_by_class: [Option<RegClassInfo>; NUM_REG_CLASSES],
+}
+
+/// Information about a single register class in the `RealRegUniverse`.
+#[derive(Clone, Copy)]
+pub struct RegClassInfo {
+  // Range of allocatable registers in this register class, in terms of
+  // register indices.
   //
-  // In all cases, |last| must be < |allocable|.  In other words,
-  // |allocable_by_class| must describe only the allocable prefix of |regs|.
+  // A range (first, last) specifies the range of entries in
+  // |RealRegUniverse.regs| corresponding to that class.  The range includes
+  // both |first| and |last|.
+  //
+  // In all cases, |last| must be < |RealRegUniverse.allocable|.  In other
+  // words, all ranges together in |allocable_by_class| must describe only the
+  // allocable prefix of |regs|.
   //
   // For example, let's say
-  //    allocable_by_class[RegClass::F32] == Some((10, 14))
+  //    allocable_by_class[RegClass::F32] ==
+  //      Some(RegClassInfo { first: 10, last: 14, .. })
   // Then regs[10], regs[11], regs[12], regs[13], and regs[14] give all
   // registers of register class RegClass::F32.
   //
   // The effect of the above is that registers in |regs| must form
   // contiguous groups. This is checked by RealRegUniverse::check_is_sane().
-  pub allocable_by_class: [Option<(usize, usize)>; NUM_REG_CLASSES],
+  pub first: usize,
+  pub last: usize,
+
+  // A register, if any, that is *guaranteed* not to be used as a fixed use
+  // in any code, and so that the register allocator can statically reserve
+  // for its own use as a temporary. Some register allocators may need such
+  // a register for various maneuvers, for example a spillslot-to-spillslot
+  // move when no (other) registers are free.
+  pub suggested_scratch: Option<usize>,
 }
 
 impl RealRegUniverse {
@@ -965,13 +986,13 @@ impl RealRegUniverse {
       // once, and that all classes are contiguous groups.
       let mut regs_visited = 0;
       for rc in 0..NUM_REG_CLASSES {
-        match self.allocable_by_class[rc] {
-          None => {
+        match &self.allocable_by_class[rc] {
+          &None => {
             if regclass_used[rc] {
               ok = false;
             }
           }
-          Some((first, last)) => {
+          &Some(RegClassInfo { first, last, suggested_scratch }) => {
             if !regclass_used[rc] {
               ok = false;
             }
@@ -982,6 +1003,13 @@ impl RealRegUniverse {
                   ok = false;
                 }
                 regs_visited += 1;
+              }
+            }
+            if ok {
+              if let Some(s) = suggested_scratch {
+                if s < first || s > last {
+                  ok = false;
+                }
               }
             }
           }

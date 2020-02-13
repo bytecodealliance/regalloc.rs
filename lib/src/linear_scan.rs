@@ -321,11 +321,11 @@ impl<T: Copy> RegisterMapping<T> {
     let mut regs = Vec::new();
     let mut offset = 0;
     // Collect all the registers for the current class.
-    if let Some(ref range) = reg_universe.allocable_by_class[reg_class as usize]
+    if let Some(ref info) = reg_universe.allocable_by_class[reg_class as usize]
     {
-      debug_assert!(range.0 <= range.1);
-      offset = range.0;
-      for reg in &reg_universe.regs[range.0..=range.1] {
+      debug_assert!(info.first <= info.last);
+      offset = info.first;
+      for reg in &reg_universe.regs[info.first..=info.last] {
         debug_assert!(regs.len() == reg.0.get_index() - offset);
         regs.push((reg.0, initial_value));
       }

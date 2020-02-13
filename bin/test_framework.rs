@@ -8,8 +8,9 @@
 /// As part of this set of test cases, we define a mini IR and implement the
 /// `Function` trait for it so that we can use the regalloc public interface.
 use regalloc::{
-  BlockIx, InstIx, Map, MyRange, RealReg, RealRegUniverse, Reg, RegClass, Set,
-  SpillSlot, TypedIxVec, VirtualReg, Writable, NUM_REG_CLASSES,
+  BlockIx, InstIx, Map, MyRange, RealReg, RealRegUniverse, Reg, RegClass,
+  RegClassInfo, Set, SpillSlot, TypedIxVec, VirtualReg, Writable,
+  NUM_REG_CLASSES,
 };
 
 use std::fmt;
@@ -1761,7 +1762,8 @@ pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
       index += 1;
     }
     let last = index as usize - 1;
-    allocable_by_class[RegClass::I32.rc_to_usize()] = Some((first, last));
+    allocable_by_class[RegClass::I32.rc_to_usize()] =
+      Some(RegClassInfo { first, last, suggested_scratch: Some(last) });
   }
 
   if nF32 > 0 {
@@ -1773,7 +1775,8 @@ pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
       index += 1;
     }
     let last = index as usize - 1;
-    allocable_by_class[RegClass::F32.rc_to_usize()] = Some((first, last));
+    allocable_by_class[RegClass::F32.rc_to_usize()] =
+      Some(RegClassInfo { first, last, suggested_scratch: Some(last) });
   }
 
   debug_assert!(index as usize == total_regs);
