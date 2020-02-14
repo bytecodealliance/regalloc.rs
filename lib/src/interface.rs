@@ -235,6 +235,12 @@ pub enum RegAllocAlgorithm {
 /// Allocate registers for a function's code, given a universe of real
 /// registers that we are allowed to use.
 ///
+/// The control flow graph must not contain any critical edges, that is, any
+/// edge coming from a block with multiple successors must not flow into a block
+/// with multiple predecessors. The embedder must have split critical edges
+/// before handing over the function to this function. Otherwise, an error will
+/// be returned.
+///
 /// Allocate may succeed, returning a `RegAllocResult` with the new instruction
 /// sequence, or it may fail, returning an error string.
 ///

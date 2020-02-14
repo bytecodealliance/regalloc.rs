@@ -42,7 +42,7 @@ struct CFGInfo {
 
 impl CFGInfo {
   #[inline(never)]
-  fn create<F: Function>(func: &F) -> Self {
+  fn create<F: Function>(func: &F) -> Result<Self, String> {
     let nBlocks = func.blocks().len() as u32;
 
     // First calculate the succ map, since we can do that directly from
@@ -70,7 +70,23 @@ impl CFGInfo {
       }
     }
 
-    // Calculate dominators..
+    // Check that critical edges have been split.
+    for (src, dst_set) in (0..).zip(succ_map.iter()) {
+      if dst_set.card() < 2 {
+        continue;
+      }
+      for dst in dst_set.iter() {
+        if pred_map[*dst].card() >= 2 {
+          return Err(format!(
+            "critical edge found from {:?} to {:?}",
+            BlockIx::new(src),
+            dst
+          ));
+        }
+      }
+    }
+
+    // Calculate dominators.
     let dom_map = calc_dominators(&pred_map, func.entry_block());
 
     // Stay sane ..
@@ -238,14 +254,14 @@ impl CFGInfo {
 
     //println!("QQQQ pre_ord  {}", pre_ord.show());
     //println!("QQQQ post_ord {}", post_ord.show());
-    CFGInfo {
+    Ok(CFGInfo {
       pred_map,
       succ_map,
       dom_map,
       depth_map,
       pre_ord,
       _post_ord: post_ord,
-    }
+    })
   }
 }
 
@@ -924,7 +940,7 @@ pub fn run_analysis<F: Function>(
     n += 1;
   }
 
-  let cfg_info = CFGInfo::create(func);
+  let cfg_info = CFGInfo::create(func)?;
 
   n = 0;
   debug!("");
