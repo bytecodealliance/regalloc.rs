@@ -7,7 +7,7 @@
 
 /// Test cases.  The list of them is right at the bottom, function |find_Func|.
 /// Add new ones there.
-use regalloc::{InstIx, Reg, RegClass, TypedIxVec};
+use regalloc::{Reg, RegClass};
 
 use crate::test_framework::{
   i_add, i_addm, i_cmp_gt, i_cmp_le, i_cmp_lt, i_copy, i_finish, i_goto,
@@ -16,20 +16,14 @@ use crate::test_framework::{
   s_copy, s_fadd, s_fdiv, s_fmul, s_fsub, s_if_then, s_if_then_else, s_imm,
   s_immf, s_load, s_loadf, s_mod, s_mul, s_print_f, s_print_i, s_print_s,
   s_repeat_until, s_shr, s_store, s_storef, s_sub, s_while_do, Blockifier,
-  Func, Inst, AM_R, AM_RI, AM_RR, RI_I, RI_R,
+  Func, AM_R, AM_RI, AM_RR, RI_I, RI_R,
 };
 
 // Whatever the current badness is
 fn test__badness() -> Func {
   let mut func = Func::new("badness", "start");
 
-  func.block(
-    "start",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_print_s("!!Badness!!\n"),
-      i_finish(None),
-    ]),
-  );
+  func.block("start", vec![i_print_s("!!Badness!!\n"), i_finish(None)]);
 
   func.finish();
   func
@@ -43,21 +37,21 @@ fn test__straight_line() -> Func {
 
   func.block(
     "b0",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_print_s("Start\n"),
       i_imm(vA, 10),
       i_add(vA, vA, RI_I(7)),
       i_goto("b1"),
-    ]),
+    ],
   );
   func.block(
     "b1",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_print_s("Result = "),
       i_print_i(vA),
       i_print_s("\n"),
       i_finish(Some(vA)),
-    ]),
+    ],
   );
 
   func.finish();
@@ -80,55 +74,47 @@ fn test__fill_then_sum() -> Func {
   // This is also the entry point.
   func.block(
     "set-loop-pre",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_imm(vNENT, 10),
-      i_imm(vI, 0),
-      i_goto("set-loop"),
-    ]),
+    vec![i_imm(vNENT, 10), i_imm(vI, 0), i_goto("set-loop")],
   );
 
   // Filling loop
   func.block(
     "set-loop",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_store(AM_R(vI), vI),
       i_add(vI, vI, RI_I(1)),
       i_cmp_lt(rTMP, vI, RI_R(vNENT)),
       i_goto_ctf(rTMP, "set-loop", "sum-loop-pre"),
-    ]),
+    ],
   );
 
   // Loop pre-header for summing them
   func.block(
     "sum-loop-pre",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_imm(vSUM, 0),
-      i_imm(vI, 0),
-      i_goto("sum-loop"),
-    ]),
+    vec![i_imm(vSUM, 0), i_imm(vI, 0), i_goto("sum-loop")],
   );
 
   // Summing loop
   func.block(
     "sum-loop",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_load(rTMP, AM_R(vI)),
       i_add(vSUM, vSUM, RI_R(rTMP)),
       i_add(vI, vI, RI_I(1)),
       i_cmp_lt(vTMP2, vI, RI_R(vNENT)),
       i_goto_ctf(vTMP2, "sum-loop", "print-result"),
-    ]),
+    ],
   );
 
   // After loop.  Print result and stop.
   func.block(
     "print-result",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_print_s("Sum = "),
       i_print_i(vSUM),
       i_print_s("\n"),
       i_finish(Some(vSUM)),
-    ]),
+    ],
   );
 
   func.finish();
@@ -160,7 +146,7 @@ fn test__ssort() -> Func {
 
   func.block(
     "Lstart",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_imm(zero, 0),
       // Store the increment table
       i_imm(t0, 1),
@@ -221,75 +207,63 @@ fn test__ssort() -> Func {
       i_add(bigN, t0, RI_I(1)),
       i_imm(hp, 0),
       i_goto("L11"),
-    ]),
+    ],
   );
 
   func.block(
     "L11",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_load(t0, AM_R(hp)),
       i_cmp_gt(t0, t0, RI_R(bigN)),
       i_goto_ctf(t0, "L20", "L11a"),
-    ]),
+    ],
   );
 
-  func.block(
-    "L11a",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_add(hp, hp, RI_I(1)),
-      i_goto("L11"),
-    ]),
-  );
+  func.block("L11a", vec![i_add(hp, hp, RI_I(1)), i_goto("L11")]);
 
   func.block(
     "L20",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_cmp_lt(t0, hp, RI_I(1)),
-      i_goto_ctf(t0, "L60", "L21a"),
-    ]),
+    vec![i_cmp_lt(t0, hp, RI_I(1)), i_goto_ctf(t0, "L60", "L21a")],
   );
 
   func.block(
     "L21a",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_sub(t0, hp, RI_I(1)),
       i_load(h, AM_R(t0)),
       //printf("h = %u\n", h),
       i_add(i, lo, RI_R(h)),
       i_goto("L30"),
-    ]),
+    ],
   );
 
   func.block(
     "L30",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_cmp_gt(t0, i, RI_R(hi)),
-      i_goto_ctf(t0, "L50", "L30a"),
-    ]),
+    vec![i_cmp_gt(t0, i, RI_R(hi)), i_goto_ctf(t0, "L50", "L30a")],
   );
 
   func.block(
     "L30a",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_load(v, AM_R(i)),
       i_add(j, i, RI_I(0)), // FIXME: is this a coalescable copy?
       i_goto("L40"),
-    ]),
+    ],
   );
 
   func.block(
     "L40",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_sub(t0, j, RI_R(h)),
       i_load(t0, AM_R(t0)),
       i_cmp_le(t0, t0, RI_R(v)),
       i_goto_ctf(t0, "L45", "L40a"),
-    ]),
+    ],
   );
 
   func.block(
     "L40a",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_sub(t0, j, RI_R(h)),
       i_load(t0, AM_R(t0)),
       i_store(AM_R(j), t0),
@@ -298,57 +272,41 @@ fn test__ssort() -> Func {
       i_sub(t0, t0, RI_I(1)),
       i_cmp_le(t0, j, RI_R(t0)),
       i_goto_ctf(t0, "L45", "L40"),
-    ]),
+    ],
   );
 
   func.block(
     "L45",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_store(AM_R(j), v),
-      i_add(i, i, RI_I(1)),
-      i_goto("L30"),
-    ]),
+    vec![i_store(AM_R(j), v), i_add(i, i, RI_I(1)), i_goto("L30")],
   );
 
-  func.block(
-    "L50",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_sub(hp, hp, RI_I(1)),
-      i_goto("L20"),
-    ]),
-  );
+  func.block("L50", vec![i_sub(hp, hp, RI_I(1)), i_goto("L20")]);
 
   func.block(
     "L60",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_add(i, lo, RI_I(0)), // FIXME: ditto
       i_goto("L61"),
-    ]),
+    ],
   );
 
   func.block(
     "L61",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_cmp_gt(t0, i, RI_R(hi)),
-      i_goto_ctf(t0, "L62", "L61a"),
-    ]),
+    vec![i_cmp_gt(t0, i, RI_R(hi)), i_goto_ctf(t0, "L62", "L61a")],
   );
 
   func.block(
     "L61a",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_load(t0, AM_R(i)),
       i_print_i(t0),
       i_print_s(" "),
       i_add(i, i, RI_I(1)),
       i_goto("L61"),
-    ]),
+    ],
   );
 
-  func.block(
-    "L62",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![i_print_s("\n"), i_finish(None)]),
-  );
+  func.block("L62", vec![i_print_s("\n"), i_finish(None)]);
 
   func.finish();
   func
@@ -377,7 +335,7 @@ fn test__3_loops() -> Func {
   // This is also the entry point.
   func.block(
     "start",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_imm(v00, 0),
       i_imm(v01, 0),
       i_imm(v02, 0),
@@ -392,34 +350,34 @@ fn test__3_loops() -> Func {
       i_imm(v11, 0),
       i_imm(vI, 0),
       i_goto("outer-loop-cond"),
-    ]),
+    ],
   );
 
   // Outer loop
   func.block(
     "outer-loop-cond",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_add(vI, vI, RI_I(1)),
       i_cmp_le(vTMP, vI, RI_I(20)),
       i_goto_ctf(vTMP, "outer-loop-1", "after-outer-loop"),
-    ]),
+    ],
   );
 
   func.block(
     "outer-loop-1",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_add(v00, v00, RI_I(1)),
       i_add(v01, v01, RI_I(1)),
       i_add(v02, v02, RI_I(1)),
       i_add(v03, v03, RI_I(1)),
       i_goto("outer-loop-cond"),
-    ]),
+    ],
   );
 
   // After loop.  Print result and stop.
   func.block(
     "after-outer-loop",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_imm(vSUM, 0),
       i_add(vSUM, vSUM, RI_R(v00)),
       i_add(vSUM, vSUM, RI_R(v01)),
@@ -437,7 +395,7 @@ fn test__3_loops() -> Func {
       i_print_i(vSUM),
       i_print_s("\n"),
       i_finish(Some(vSUM)),
-    ]),
+    ],
   );
 
   func.finish();
@@ -1025,55 +983,47 @@ fn test__fill_then_sum_2a() -> Func {
   // This is also the entry point.
   func.block(
     "set-loop-pre",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_imm(vNENT, 10),
-      i_imm(vI, 0),
-      i_goto("set-loop"),
-    ]),
+    vec![i_imm(vNENT, 10), i_imm(vI, 0), i_goto("set-loop")],
   );
 
   // Filling loop
   func.block(
     "set-loop",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_store(AM_R(vI), vI),
       i_addm(vI, RI_I(1)),
       i_cmp_lt(rTMP, vI, RI_R(vNENT)),
       i_goto_ctf(rTMP, "set-loop", "sum-loop-pre"),
-    ]),
+    ],
   );
 
   // Loop pre-header for summing them
   func.block(
     "sum-loop-pre",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_imm(vSUM, 0),
-      i_imm(vI, 0),
-      i_goto("sum-loop"),
-    ]),
+    vec![i_imm(vSUM, 0), i_imm(vI, 0), i_goto("sum-loop")],
   );
 
   // Summing loop
   func.block(
     "sum-loop",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_load(rTMP, AM_R(vI)),
       i_addm(vSUM, RI_R(rTMP)),
       i_addm(vI, RI_I(1)),
       i_cmp_lt(vTMP2, vI, RI_R(vNENT)),
       i_goto_ctf(vTMP2, "sum-loop", "print-result"),
-    ]),
+    ],
   );
 
   // After loop.  Print result and stop.
   func.block(
     "print-result",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_print_s("Sum = "),
       i_print_i(vSUM),
       i_print_s("\n"),
       i_finish(Some(vSUM)),
-    ]),
+    ],
   );
 
   func.finish();
@@ -1106,7 +1056,7 @@ fn test__ssort_2a() -> Func {
 
   func.block(
     "Lstart",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_imm(zero, 0),
       // Store the increment table
       i_imm(t0, 1),
@@ -1168,37 +1118,28 @@ fn test__ssort_2a() -> Func {
       i_add(bigN, t0, RI_I(1)),
       i_imm(hp, 0),
       i_goto("L11"),
-    ]),
+    ],
   );
 
   func.block(
     "L11",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_load(t0, AM_R(hp)),
       i_cmp_gt(t0, t0, RI_R(bigN)),
       i_goto_ctf(t0, "L20", "L11a"),
-    ]),
+    ],
   );
 
-  func.block(
-    "L11a",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_addm(hp, RI_I(1)),
-      i_goto("L11"),
-    ]),
-  );
+  func.block("L11a", vec![i_addm(hp, RI_I(1)), i_goto("L11")]);
 
   func.block(
     "L20",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_cmp_lt(t0, hp, RI_I(1)),
-      i_goto_ctf(t0, "L60", "L21a"),
-    ]),
+    vec![i_cmp_lt(t0, hp, RI_I(1)), i_goto_ctf(t0, "L60", "L21a")],
   );
 
   func.block(
     "L21a",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_copy(t0, hp),
       i_subm(t0, RI_I(1)),
       i_load(h, AM_R(t0)),
@@ -1206,40 +1147,37 @@ fn test__ssort_2a() -> Func {
       i_copy(i, lo),
       i_addm(i, RI_R(h)),
       i_goto("L30"),
-    ]),
+    ],
   );
 
   func.block(
     "L30",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_cmp_gt(t0, i, RI_R(hi)),
-      i_goto_ctf(t0, "L50", "L30a"),
-    ]),
+    vec![i_cmp_gt(t0, i, RI_R(hi)), i_goto_ctf(t0, "L50", "L30a")],
   );
 
   func.block(
     "L30a",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_load(v, AM_R(i)),
       i_copy(j, i), // FIXME: is this a coalescable copy?
       i_goto("L40"),
-    ]),
+    ],
   );
 
   func.block(
     "L40",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_copy(t0, j),
       i_subm(t0, RI_R(h)),
       i_load(t0, AM_R(t0)),
       i_cmp_le(t0, t0, RI_R(v)),
       i_goto_ctf(t0, "L45", "L40a"),
-    ]),
+    ],
   );
 
   func.block(
     "L40a",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_copy(t0, j),
       i_subm(t0, RI_R(h)),
       i_load(t0, AM_R(t0)),
@@ -1250,57 +1188,39 @@ fn test__ssort_2a() -> Func {
       i_subm(t0, RI_I(1)),
       i_cmp_le(t0, j, RI_R(t0)),
       i_goto_ctf(t0, "L45", "L40"),
-    ]),
+    ],
   );
 
-  func.block(
-    "L45",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_store(AM_R(j), v),
-      i_addm(i, RI_I(1)),
-      i_goto("L30"),
-    ]),
-  );
+  func
+    .block("L45", vec![i_store(AM_R(j), v), i_addm(i, RI_I(1)), i_goto("L30")]);
 
-  func.block(
-    "L50",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_subm(hp, RI_I(1)),
-      i_goto("L20"),
-    ]),
-  );
+  func.block("L50", vec![i_subm(hp, RI_I(1)), i_goto("L20")]);
 
   func.block(
     "L60",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_copy(i, lo), // FIXME: ditto
       i_goto("L61"),
-    ]),
+    ],
   );
 
   func.block(
     "L61",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
-      i_cmp_gt(t0, i, RI_R(hi)),
-      i_goto_ctf(t0, "L62", "L61a"),
-    ]),
+    vec![i_cmp_gt(t0, i, RI_R(hi)), i_goto_ctf(t0, "L62", "L61a")],
   );
 
   func.block(
     "L61a",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![
+    vec![
       i_load(t0, AM_R(i)),
       i_print_i(t0),
       i_print_s(" "),
       i_addm(i, RI_I(1)),
       i_goto("L61"),
-    ]),
+    ],
   );
 
-  func.block(
-    "L62",
-    TypedIxVec::<InstIx, Inst>::from_vec(vec![i_print_s("\n"), i_finish(None)]),
-  );
+  func.block("L62", vec![i_print_s("\n"), i_finish(None)]);
 
   func.finish();
   func

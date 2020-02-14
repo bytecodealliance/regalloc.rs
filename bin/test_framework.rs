@@ -1206,9 +1206,8 @@ impl Func {
   }
 
   // Add a block to the Func
-  pub fn block<'a>(
-    &mut self, name: &'a str, mut insns: TypedIxVec<InstIx, Inst>,
-  ) {
+  pub fn block<'a>(&mut self, name: &'a str, insns: Vec<Inst>) {
+    let mut insns = TypedIxVec::from_vec(insns);
     let start = self.insns.len();
     let len = insns.len() as u32;
     self.insns.append(&mut insns);
@@ -1418,7 +1417,7 @@ pub fn s_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
 
 pub struct Blockifier {
   name: String,
-  blocks: Vec<TypedIxVec<InstIx, Inst>>,
+  blocks: Vec<Vec<Inst>>,
   nVirtualRegs: u32,
 }
 
@@ -1443,7 +1442,7 @@ impl Blockifier {
   fn blockify(&mut self, stmts: Vec<Stmt>) -> (usize, usize) {
     let entryBNo = self.blocks.len();
     let mut currBNo = entryBNo;
-    self.blocks.push(TypedIxVec::<InstIx, Inst>::new());
+    self.blocks.push(Vec::new());
     for s in stmts {
       match s {
         Stmt::Vanilla { insn } => {
@@ -1453,7 +1452,7 @@ impl Blockifier {
           let (t_ent, t_exit) = self.blockify(stmts_t);
           let (e_ent, e_exit) = self.blockify(stmts_e);
           let cont = self.blocks.len();
-          self.blocks.push(TypedIxVec::<InstIx, Inst>::new());
+          self.blocks.push(Vec::new());
           self.blocks[t_exit].push(i_goto(&makeTextLabelStr(cont)));
           self.blocks[e_exit].push(i_goto(&makeTextLabelStr(cont)));
           self.blocks[currBNo].push(i_goto_ctf(
@@ -1467,7 +1466,7 @@ impl Blockifier {
           let (s_ent, s_exit) = self.blockify(stmts);
           self.blocks[currBNo].push(i_goto(&makeTextLabelStr(s_ent)));
           let cont = self.blocks.len();
-          self.blocks.push(TypedIxVec::<InstIx, Inst>::new());
+          self.blocks.push(Vec::new());
           self.blocks[s_exit].push(i_goto_ctf(
             cond,
             &makeTextLabelStr(cont),
@@ -1477,12 +1476,12 @@ impl Blockifier {
         }
         Stmt::WhileDo { cond, stmts } => {
           let condblock = self.blocks.len();
-          self.blocks.push(TypedIxVec::<InstIx, Inst>::new());
+          self.blocks.push(Vec::new());
           self.blocks[currBNo].push(i_goto(&makeTextLabelStr(condblock)));
           let (s_ent, s_exit) = self.blockify(stmts);
           self.blocks[s_exit].push(i_goto(&makeTextLabelStr(condblock)));
           let cont = self.blocks.len();
-          self.blocks.push(TypedIxVec::<InstIx, Inst>::new());
+          self.blocks.push(Vec::new());
           self.blocks[condblock].push(i_goto_ctf(
             cond,
             &makeTextLabelStr(s_ent),
@@ -1500,11 +1499,11 @@ impl Blockifier {
     let (ent_bno, exit_bno) = self.blockify(stmts);
     self.blocks[exit_bno].push(i_finish(None));
 
-    let mut blockz = Vec::<TypedIxVec<InstIx, Inst>>::new();
+    let mut blockz = Vec::new();
     std::mem::swap(&mut self.blocks, &mut blockz);
 
     // BEGIN optionally, short out blocks that merely jump somewhere else
-    let mut cleanedUp = Vec::<Option<TypedIxVec<InstIx, Inst>>>::new();
+    let mut cleanedUp = Vec::new();
     for ivec in blockz {
       cleanedUp.push(Some(ivec));
     }
@@ -1528,7 +1527,7 @@ impl Blockifier {
 
         debug_assert!(b.len() > 0);
         if b.len() == 1 {
-          if let Some(targetLabel) = is_goto_insn(&b[InstIx::new(0)]) {
+          if let Some(targetLabel) = is_goto_insn(&b[0]) {
             if let Label::Unresolved { name } = targetLabel {
               redir = Some((n - 1, name));
               break;
@@ -1550,7 +1549,7 @@ impl Blockifier {
               None => {}
               Some(ref mut insns) => {
                 let mmm = insns.len();
-                for j in InstIx::new(0).dotdot(InstIx::new(mmm)) {
+                for j in 0..mmm {
                   remapControlFlowTarget(
                     &mut insns[j],
                     &makeTextLabelStr(from),
