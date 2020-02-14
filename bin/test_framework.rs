@@ -45,18 +45,6 @@ impl Label {
       }
     }
   }
-  pub fn remapControlFlow(&mut self, from: &String, to: &String) {
-    match self {
-      Label::Resolved { .. } => {
-        panic!("Label::remapControlFlow on resolved label");
-      }
-      Label::Unresolved { name } => {
-        if name == from {
-          *name = to.clone();
-        }
-      }
-    }
-  }
 }
 
 #[derive(Copy, Clone)]
@@ -727,26 +715,6 @@ fn is_control_flow_insn(insn: &Inst) -> bool {
   match insn {
     Inst::Goto { .. } | Inst::GotoCTF { .. } | Inst::Finish { reg: _ } => true,
     _ => false,
-  }
-}
-
-pub fn is_goto_insn(insn: &Inst) -> Option<Label> {
-  match insn {
-    Inst::Goto { target } => Some(target.clone()),
-    _ => None,
-  }
-}
-
-pub fn remapControlFlowTarget(insn: &mut Inst, from: &String, to: &String) {
-  match insn {
-    Inst::Goto { ref mut target } => {
-      target.remapControlFlow(from, to);
-    }
-    Inst::GotoCTF { cond: _, ref mut targetT, ref mut targetF } => {
-      targetT.remapControlFlow(from, to);
-      targetF.remapControlFlow(from, to);
-    }
-    _ => (),
   }
 }
 
@@ -1421,7 +1389,7 @@ pub struct Blockifier {
   nVirtualRegs: u32,
 }
 
-fn makeTextLabelStr(n: usize) -> String {
+fn make_text_label_str(n: usize) -> String {
   "L".to_string() + &n.to_string()
 }
 
@@ -1437,8 +1405,8 @@ impl Blockifier {
     v
   }
 
-  // Recursive worker function, which flattens out the control flow,
-  // producing a set of blocks
+  /// Recursive worker function, which flattens out the control flow, producing
+  /// a set of blocks.
   fn blockify(&mut self, stmts: Vec<Stmt>) -> (usize, usize) {
     let entryBNo = self.blocks.len();
     let mut currBNo = entryBNo;
@@ -1453,39 +1421,56 @@ impl Blockifier {
           let (e_ent, e_exit) = self.blockify(stmts_e);
           let cont = self.blocks.len();
           self.blocks.push(Vec::new());
-          self.blocks[t_exit].push(i_goto(&makeTextLabelStr(cont)));
-          self.blocks[e_exit].push(i_goto(&makeTextLabelStr(cont)));
+          self.blocks[t_exit].push(i_goto(&make_text_label_str(cont)));
+          self.blocks[e_exit].push(i_goto(&make_text_label_str(cont)));
           self.blocks[currBNo].push(i_goto_ctf(
             cond,
-            &makeTextLabelStr(t_ent),
-            &makeTextLabelStr(e_ent),
+            &make_text_label_str(t_ent),
+            &make_text_label_str(e_ent),
           ));
           currBNo = cont;
         }
         Stmt::RepeatUntil { stmts, cond } => {
           let (s_ent, s_exit) = self.blockify(stmts);
-          self.blocks[currBNo].push(i_goto(&makeTextLabelStr(s_ent)));
-          let cont = self.blocks.len();
+
+          // Don't create critical edges by creating the following loop
+          // structure:
+          //
+          // current -> loop_header -> s_ent -> s_exit -> after_loop
+          //            ^                       |
+          //            |-------- loop_continue <
+
+          let loop_header = self.blocks.len();
+          self.blocks.push(vec![i_goto(&make_text_label_str(s_ent))]);
+
+          self.blocks[currBNo].push(i_goto(&make_text_label_str(loop_header)));
+
+          let loop_continue = self.blocks.len();
+          self.blocks.push(vec![i_goto(&make_text_label_str(loop_header))]);
+
+          let after_loop = self.blocks.len();
           self.blocks.push(Vec::new());
+
           self.blocks[s_exit].push(i_goto_ctf(
             cond,
-            &makeTextLabelStr(cont),
-            &makeTextLabelStr(s_ent),
+            &make_text_label_str(after_loop),
+            &make_text_label_str(loop_continue),
           ));
-          currBNo = cont;
+
+          currBNo = after_loop;
         }
         Stmt::WhileDo { cond, stmts } => {
           let condblock = self.blocks.len();
           self.blocks.push(Vec::new());
-          self.blocks[currBNo].push(i_goto(&makeTextLabelStr(condblock)));
+          self.blocks[currBNo].push(i_goto(&make_text_label_str(condblock)));
           let (s_ent, s_exit) = self.blockify(stmts);
-          self.blocks[s_exit].push(i_goto(&makeTextLabelStr(condblock)));
+          self.blocks[s_exit].push(i_goto(&make_text_label_str(condblock)));
           let cont = self.blocks.len();
           self.blocks.push(Vec::new());
           self.blocks[condblock].push(i_goto_ctf(
             cond,
-            &makeTextLabelStr(s_ent),
-            &makeTextLabelStr(cont),
+            &make_text_label_str(s_ent),
+            &make_text_label_str(cont),
           ));
           currBNo = cont;
         }
@@ -1495,95 +1480,20 @@ impl Blockifier {
   }
 
   // The main external function.  Convert the given statements, into a Func.
-  pub fn finish(&mut self, stmts: Vec<Stmt>) -> Func {
+  pub fn finish(mut self, stmts: Vec<Stmt>) -> Func {
     let (ent_bno, exit_bno) = self.blockify(stmts);
     self.blocks[exit_bno].push(i_finish(None));
 
-    let mut blockz = Vec::new();
-    std::mem::swap(&mut self.blocks, &mut blockz);
-
-    // BEGIN optionally, short out blocks that merely jump somewhere else
-    let mut cleanedUp = Vec::new();
-    for ivec in blockz {
-      cleanedUp.push(Some(ivec));
-    }
-
-    //println!("Before:");
-    //let mut n = 0;
-    //for b in &cleanedUp {
-    //    println!("   {}  {}", n, b.show());
-    //    n += 1;
-    //}
-    loop {
-      // Repeatedly, look for a block that simply jumps to another one
-      let mut n = 0;
-      let mut redir: Option<(usize, String)> = None;
-      for maybe_b in &cleanedUp {
-        n += 1;
-        let b = match maybe_b {
-          None => continue,
-          Some(b) => b,
-        };
-
-        debug_assert!(b.len() > 0);
-        if b.len() == 1 {
-          if let Some(targetLabel) = is_goto_insn(&b[0]) {
-            if let Label::Unresolved { name } = targetLabel {
-              redir = Some((n - 1, name));
-              break;
-            }
-          }
-        }
-      }
-
-      match redir {
-        // We didn't find any
-        None => break,
-        // Forget about the block, and apply the redirection to all
-        // the rest
-        Some((from, to)) => {
-          cleanedUp[from] = None;
-          let nnn = cleanedUp.len();
-          for i in 0..nnn {
-            match cleanedUp[i] {
-              None => {}
-              Some(ref mut insns) => {
-                let mmm = insns.len();
-                for j in 0..mmm {
-                  remapControlFlowTarget(
-                    &mut insns[j],
-                    &makeTextLabelStr(from),
-                    &to,
-                  );
-                }
-              }
-            }
-          }
-        }
-      }
-    } // loop {
-
-    //println!("Blocks:");
-    //let mut n = 0;
-    //for b in &cleanedUp {
-    //    println!("   {}  {}", n, b.show());
-    //    n += 1;
-    //}
-    // END optionally, short out blocks that merely jump somewhere else
-
     // Convert (ent_bno, exit_bno, cleanedUp) into a Func
-    let mut func = Func::new(&self.name, &makeTextLabelStr(ent_bno));
+    let mut func = Func::new(&self.name, &make_text_label_str(ent_bno));
     func.nVirtualRegs = 3; // or whatever
     let mut n = 0;
-    for mb_ivec in cleanedUp {
-      if let Some(ivec) = mb_ivec {
-        func.block(&makeTextLabelStr(n), ivec);
-      }
+    for ivec in self.blocks {
+      func.block(&make_text_label_str(n), ivec);
       n += 1;
     }
 
     func.finish();
-
     func
   }
 }

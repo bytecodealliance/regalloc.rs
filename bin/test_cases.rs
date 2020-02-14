@@ -74,8 +74,10 @@ fn test__fill_then_sum() -> Func {
   // This is also the entry point.
   func.block(
     "set-loop-pre",
-    vec![i_imm(vNENT, 10), i_imm(vI, 0), i_goto("set-loop")],
+    vec![i_imm(vNENT, 10), i_imm(vI, 0), i_goto("set-loop-header")],
   );
+
+  func.block("set-loop-header", vec![i_goto("set-loop")]);
 
   // Filling loop
   func.block(
@@ -84,15 +86,19 @@ fn test__fill_then_sum() -> Func {
       i_store(AM_R(vI), vI),
       i_add(vI, vI, RI_I(1)),
       i_cmp_lt(rTMP, vI, RI_R(vNENT)),
-      i_goto_ctf(rTMP, "set-loop", "sum-loop-pre"),
+      i_goto_ctf(rTMP, "set-loop-continue", "sum-loop-pre"),
     ],
   );
+
+  func.block("set-loop-continue", vec![i_goto("set-loop-header")]);
 
   // Loop pre-header for summing them
   func.block(
     "sum-loop-pre",
     vec![i_imm(vSUM, 0), i_imm(vI, 0), i_goto("sum-loop")],
   );
+
+  func.block("sum-loop-header", vec![i_goto("sum-loop")]);
 
   // Summing loop
   func.block(
@@ -102,9 +108,11 @@ fn test__fill_then_sum() -> Func {
       i_add(vSUM, vSUM, RI_R(rTMP)),
       i_add(vI, vI, RI_I(1)),
       i_cmp_lt(vTMP2, vI, RI_R(vNENT)),
-      i_goto_ctf(vTMP2, "sum-loop", "print-result"),
+      i_goto_ctf(vTMP2, "sum-loop-continue", "print-result"),
     ],
   );
+
+  func.block("sum-loop-continue", vec![i_goto("sum-loop-header")]);
 
   // After loop.  Print result and stop.
   func.block(
@@ -215,9 +223,11 @@ fn test__ssort() -> Func {
     vec![
       i_load(t0, AM_R(hp)),
       i_cmp_gt(t0, t0, RI_R(bigN)),
-      i_goto_ctf(t0, "L20", "L11a"),
+      i_goto_ctf(t0, "L19", "L11a"),
     ],
   );
+
+  func.block("L19", vec![i_goto("L20")]);
 
   func.block("L11a", vec![i_add(hp, hp, RI_I(1)), i_goto("L11")]);
 
@@ -257,9 +267,11 @@ fn test__ssort() -> Func {
       i_sub(t0, j, RI_R(h)),
       i_load(t0, AM_R(t0)),
       i_cmp_le(t0, t0, RI_R(v)),
-      i_goto_ctf(t0, "L45", "L40a"),
+      i_goto_ctf(t0, "L41", "L40a"),
     ],
   );
+
+  func.block("L41", vec![i_goto("L45")]);
 
   func.block(
     "L40a",
@@ -271,9 +283,12 @@ fn test__ssort() -> Func {
       i_add(t0, lo, RI_R(h)),
       i_sub(t0, t0, RI_I(1)),
       i_cmp_le(t0, j, RI_R(t0)),
-      i_goto_ctf(t0, "L45", "L40"),
+      i_goto_ctf(t0, "L40a1", "L40a2"),
     ],
   );
+
+  func.block("L40a1", vec![i_goto("L45")]);
+  func.block("L40a2", vec![i_goto("L40")]);
 
   func.block(
     "L45",
@@ -983,8 +998,10 @@ fn test__fill_then_sum_2a() -> Func {
   // This is also the entry point.
   func.block(
     "set-loop-pre",
-    vec![i_imm(vNENT, 10), i_imm(vI, 0), i_goto("set-loop")],
+    vec![i_imm(vNENT, 10), i_imm(vI, 0), i_goto("set-loop-header")],
   );
+
+  func.block("set-loop-header", vec![i_goto("set-loop")]);
 
   // Filling loop
   func.block(
@@ -993,15 +1010,19 @@ fn test__fill_then_sum_2a() -> Func {
       i_store(AM_R(vI), vI),
       i_addm(vI, RI_I(1)),
       i_cmp_lt(rTMP, vI, RI_R(vNENT)),
-      i_goto_ctf(rTMP, "set-loop", "sum-loop-pre"),
+      i_goto_ctf(rTMP, "set-loop-continue", "sum-loop-pre"),
     ],
   );
+
+  func.block("set-loop-continue", vec![i_goto("set-loop-header")]);
 
   // Loop pre-header for summing them
   func.block(
     "sum-loop-pre",
-    vec![i_imm(vSUM, 0), i_imm(vI, 0), i_goto("sum-loop")],
+    vec![i_imm(vSUM, 0), i_imm(vI, 0), i_goto("sum-loop-header")],
   );
+
+  func.block("sum-loop-header", vec![i_goto("sum-loop")]);
 
   // Summing loop
   func.block(
@@ -1011,9 +1032,11 @@ fn test__fill_then_sum_2a() -> Func {
       i_addm(vSUM, RI_R(rTMP)),
       i_addm(vI, RI_I(1)),
       i_cmp_lt(vTMP2, vI, RI_R(vNENT)),
-      i_goto_ctf(vTMP2, "sum-loop", "print-result"),
+      i_goto_ctf(vTMP2, "sum-loop-continue", "print-result"),
     ],
   );
+
+  func.block("sum-loop-continue", vec![i_goto("sum-loop-header")]);
 
   // After loop.  Print result and stop.
   func.block(
@@ -1126,9 +1149,11 @@ fn test__ssort_2a() -> Func {
     vec![
       i_load(t0, AM_R(hp)),
       i_cmp_gt(t0, t0, RI_R(bigN)),
-      i_goto_ctf(t0, "L20", "L11a"),
+      i_goto_ctf(t0, "L19", "L11a"),
     ],
   );
+
+  func.block("L19", vec![i_goto("L20")]);
 
   func.block("L11a", vec![i_addm(hp, RI_I(1)), i_goto("L11")]);
 
@@ -1171,9 +1196,11 @@ fn test__ssort_2a() -> Func {
       i_subm(t0, RI_R(h)),
       i_load(t0, AM_R(t0)),
       i_cmp_le(t0, t0, RI_R(v)),
-      i_goto_ctf(t0, "L45", "L40a"),
+      i_goto_ctf(t0, "L41", "L40a"),
     ],
   );
+
+  func.block("L41", vec![i_goto("L45")]);
 
   func.block(
     "L40a",
@@ -1187,9 +1214,12 @@ fn test__ssort_2a() -> Func {
       i_addm(t0, RI_R(h)),
       i_subm(t0, RI_I(1)),
       i_cmp_le(t0, j, RI_R(t0)),
-      i_goto_ctf(t0, "L45", "L40"),
+      i_goto_ctf(t0, "L40a1", "L40a2"),
     ],
   );
+
+  func.block("L40a1", vec![i_goto("L45")]);
+  func.block("L40a2", vec![i_goto("L40")]);
 
   func
     .block("L45", vec![i_store(AM_R(j), v), i_addm(i, RI_I(1)), i_goto("L30")]);
