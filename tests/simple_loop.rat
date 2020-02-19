@@ -1,0 +1,22 @@
+vNENT = i32
+vI = i32
+rTMP = real i32 0
+
+start:
+    imm vNENT, 10
+    imm vI, 0
+    goto preheader
+
+preheader:
+    goto loop
+
+loop:
+    add vI, vI, 1
+    cmp_lt rTMP, vI, vNENT
+    goto_ctf rTMP, continue, end
+
+continue:
+    goto preheader
+
+end:
+    finish vI

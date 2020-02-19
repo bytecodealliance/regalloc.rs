@@ -9,6 +9,7 @@
 /// Add new ones there.
 use regalloc::{Reg, RegClass};
 
+use crate::parser;
 use crate::test_framework::{
   i_add, i_addm, i_cmp_gt, i_cmp_le, i_cmp_lt, i_copy, i_finish, i_goto,
   i_goto_ctf, i_imm, i_load, i_print_i, i_print_s, i_store, i_sub, i_subm,
@@ -19,175 +20,11 @@ use crate::test_framework::{
   Func, AM_R, AM_RI, AM_RR, RI_I, RI_R,
 };
 
-// Whatever the current badness is
-fn test__badness() -> Func {
-  let mut func = Func::new("badness", "start");
-
-  func.block("start", vec![i_print_s("!!Badness!!\n"), i_finish(None)]);
-
-  func.finish();
-  func
-}
-
-fn test__straight_line() -> Func {
-  let mut func = Func::new("straight_line", "b0");
-
-  // Regs, virtual and real, that we want to use.
-  let vA = func.new_virtual_reg(RegClass::I32);
-
-  func.block(
-    "b0",
-    vec![
-      i_print_s("Start\n"),
-      i_imm(vA, 10),
-      i_add(vA, vA, RI_I(7)),
-      i_goto("b1"),
-    ],
-  );
-  func.block(
-    "b1",
-    vec![
-      i_print_s("Result = "),
-      i_print_i(vA),
-      i_print_s("\n"),
-      i_finish(Some(vA)),
-    ],
-  );
-
-  func.finish();
-  func
-}
-
-// Requires a spill when there's only one register.
-fn test__simple_spill() -> Func {
-  let mut func = Func::new("simple_spill", "b0");
-
-  // Regs, virtual and real, that we want to use.
-  let vA = func.new_virtual_reg(RegClass::I32);
-  let vB = func.new_virtual_reg(RegClass::I32);
-
-  func.block(
-    "b0",
-    vec![
-      i_imm(vA, 10),
-      i_add(vA, vA, RI_I(3)), // vA = 13
-      i_imm(vB, 42),
-      i_add(vA, vA, RI_I(7)), // vA = 20
-      i_add(vB, vB, RI_I(3)), // vB = 45
-      i_add(vA, vB, RI_I(1)), // vA = 46
-      i_print_i(vA),
-      i_print_s("\n"),
-      i_finish(Some(vA)),
-    ],
-  );
-
-  func.finish();
-  func
-}
-
-fn test__simple_loop() -> Func {
-  let mut func = Func::new("simple_loop", "start");
-
-  let vNENT = func.new_virtual_reg(RegClass::I32);
-  let vI = func.new_virtual_reg(RegClass::I32);
-  let rTMP =
-    Reg::new_real(RegClass::I32, /*enc=*/ 0x42, /*index=*/ 0);
-
-  func
-    .block("start", vec![i_imm(vNENT, 10), i_imm(vI, 0), i_goto("preheader")]);
-
-  func.block("preheader", vec![i_goto("loop")]);
-
-  func.block(
-    "loop",
-    vec![
-      i_add(vI, vI, RI_I(1)),
-      i_cmp_lt(rTMP, vI, RI_R(vNENT)),
-      i_goto_ctf(rTMP, "continue", "end"),
-    ],
-  );
-
-  func.block("continue", vec![i_goto("preheader")]);
-
-  func.block("end", vec![i_finish(Some(vI))]);
-
-  func.finish();
-  func
-}
-
-fn test__fill_then_sum() -> Func {
-  let mut func = Func::new("fill_then_sum", "set-loop-pre");
-
-  // Regs, virtual and real, that we want to use.
-  let vNENT = func.new_virtual_reg(RegClass::I32);
-  let vI = func.new_virtual_reg(RegClass::I32);
-  let vSUM = func.new_virtual_reg(RegClass::I32);
-  // "index=2" is arbitrary.
-  let rTMP =
-    Reg::new_real(RegClass::I32, /*enc=*/ 0x42, /*index=*/ 2);
-  let vTMP2 = func.new_virtual_reg(RegClass::I32);
-
-  // Loop pre-header for filling array with numbers.
-  // This is also the entry point.
-  func.block(
-    "set-loop-pre",
-    vec![i_imm(vNENT, 10), i_imm(vI, 0), i_goto("set-loop-header")],
-  );
-
-  func.block("set-loop-header", vec![i_goto("set-loop")]);
-
-  // Filling loop
-  func.block(
-    "set-loop",
-    vec![
-      i_store(AM_R(vI), vI),
-      i_add(vI, vI, RI_I(1)),
-      i_cmp_lt(rTMP, vI, RI_R(vNENT)),
-      i_goto_ctf(rTMP, "set-loop-continue", "sum-loop-pre"),
-    ],
-  );
-
-  func.block("set-loop-continue", vec![i_goto("set-loop-header")]);
-
-  // Loop pre-header for summing them
-  func.block(
-    "sum-loop-pre",
-    vec![i_imm(vSUM, 0), i_imm(vI, 0), i_goto("sum-loop")],
-  );
-
-  func.block("sum-loop-header", vec![i_goto("sum-loop")]);
-
-  // Summing loop
-  func.block(
-    "sum-loop",
-    vec![
-      i_load(rTMP, AM_R(vI)),
-      i_add(vSUM, vSUM, RI_R(rTMP)),
-      i_add(vI, vI, RI_I(1)),
-      i_cmp_lt(vTMP2, vI, RI_R(vNENT)),
-      i_goto_ctf(vTMP2, "sum-loop-continue", "print-result"),
-    ],
-  );
-
-  func.block("sum-loop-continue", vec![i_goto("sum-loop-header")]);
-
-  // After loop.  Print result and stop.
-  func.block(
-    "print-result",
-    vec![
-      i_print_s("Sum = "),
-      i_print_i(vSUM),
-      i_print_s("\n"),
-      i_finish(Some(vSUM)),
-    ],
-  );
-
-  func.finish();
-  func
-}
+use std::path::Path;
 
 fn test__ssort() -> Func {
-  let mut func = Func::new("ssort", "Lstart");
+  let mut func = Func::new("ssort");
+  func.set_entry("Lstart");
 
   // This is a simple "shellsort" test.  An array of numbers to sort is
   // placed in mem[5..24] and an increment table is placed in mem[0..4].
@@ -385,7 +222,8 @@ fn test__ssort() -> Func {
 }
 
 fn test__3_loops() -> Func {
-  let mut func = Func::new("3_loops", "start");
+  let mut func = Func::new("3_loops");
+  func.set_entry("start");
 
   let v00 = func.new_virtual_reg(RegClass::I32);
   let v01 = func.new_virtual_reg(RegClass::I32);
@@ -1040,7 +878,8 @@ fn test__qsort() -> Func {
 
 // This is a version of fill_then_sum that uses some 2-operand insns.
 fn test__fill_then_sum_2a() -> Func {
-  let mut func = Func::new("fill_then_sum_2a", "set-loop-pre");
+  let mut func = Func::new("fill_then_sum_2a");
+  func.set_entry("set-loop-pre");
 
   // Regs, virtual and real, that we want to use.
   let vNENT = func.new_virtual_reg(RegClass::I32);
@@ -1112,7 +951,8 @@ fn test__fill_then_sum_2a() -> Func {
 
 // This is a version of ssort that uses some 2-operand insns.
 fn test__ssort_2a() -> Func {
-  let mut func = Func::new("ssort_2a", "Lstart");
+  let mut func = Func::new("ssort_2a");
+  func.set_entry("Lstart");
 
   // This is a simple "shellsort" test.  An array of numbers to sort is
   // placed in mem[5..24] and an increment table is placed in mem[0..4].
@@ -1439,11 +1279,6 @@ fn test__fp2() -> Func {
 pub fn find_Func(name: &str) -> Result<Func, Vec<String>> {
   // This is really stupid.  Fortunately it's not performance critical :)
   let all_Funcs = vec![
-    test__badness(),          // Whatever the current badness is
-    test__straight_line(),    // straight_line
-    test__simple_spill(),     // simple_spill
-    test__fill_then_sum(),    // fill_then_sum
-    test__simple_loop(),      // simple_loop
     test__ssort(),            // shellsort
     test__3_loops(),          // three loops
     test__stmts(),            // a small Stmty test
@@ -1467,5 +1302,27 @@ pub fn find_Func(name: &str) -> Result<Func, Vec<String>> {
     }
   }
 
+  let test_dir = Path::new("tests");
+  match test_dir.read_dir() {
+    Err(err) => {
+      println!("can't read test directory: {}", err);
+    }
+    Ok(entries) => {
+      for entry in entries {
+        if let Ok(entry) = entry {
+          let path = entry.path();
+          let basename = path.file_stem().unwrap().to_str().unwrap();
+          if basename == name {
+            let func = parser::parse_file(path).expect("unparseable test file");
+            return Ok(func);
+          } else {
+            all_names.push(basename.to_string())
+          }
+        }
+      }
+    }
+  }
+
+  all_names.sort();
   Err(all_names)
 }
