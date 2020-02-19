@@ -1,0 +1,13 @@
+vA = i32
+
+b0:
+    println "Start"
+    imm vA, 10
+    add vA, vA, 7
+    goto b1
+
+b1:
+    prints "Result ="
+    printi vA
+    println ""
+    finish vA

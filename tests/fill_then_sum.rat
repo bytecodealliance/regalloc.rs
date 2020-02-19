@@ -1,0 +1,53 @@
+; Regs, virtual and real, that we want to use.
+vNENT = i32
+vI = i32
+vSUM = i32
+rTMP = real i32 2
+vTMP2 = i32
+
+; Loop pre-header for filling array with numbers.
+; This is also the entry point.
+set-loop-pre:
+    imm vNENT, 10
+    imm vI, 0
+    goto set-loop-header
+
+set-loop-header:
+    goto set-loop
+
+; Filling loop
+set-loop:
+    store [vI], vI
+    add vI, vI, 1
+    cmp_lt rTMP, vI, vNENT
+    goto_ctf rTMP, set-loop-continue, sum-loop-pre
+
+set-loop-continue:
+    goto set-loop-header
+
+; Loop pre-header for summing them
+sum-loop-pre:
+    imm vSUM, 0
+    imm vI, 0
+    goto sum-loop
+
+sum-loop-header:
+    goto sum-loop
+
+; Summing loop
+sum-loop:
+    load rTMP, [vI]
+    add vSUM, vSUM, rTMP
+    add vI, vI, 1
+    cmp_lt vTMP2, vI, vNENT
+    goto_ctf vTMP2, sum-loop-continue, print-result
+
+sum-loop-continue:
+    goto sum-loop-header
+
+; After loop.  Print result and stop.
+print-result:
+    prints "Sum ="
+    printi vSUM
+    println ""
+    finish vSUM

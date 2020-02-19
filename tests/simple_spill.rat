@@ -1,0 +1,15 @@
+; Requires a spill when there's only one register.
+
+vA = i32
+vB = i32
+
+b0:
+    imm vA, 10
+    add vA, vA, 3
+    imm vB, 42
+    add vA, vA, 7
+    add vB, vB, 3
+    add vA, vB, 1
+    printi vA
+    println ""
+    finish vA

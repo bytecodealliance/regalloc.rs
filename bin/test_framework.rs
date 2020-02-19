@@ -775,7 +775,9 @@ impl<'a> IState<'a> {
   ) -> Self {
     let mut state = IState {
       func,
-      nia: func.blocks[func.entry.getBlockIx()].start,
+      nia: func.blocks
+        [func.entry.as_ref().expect("missing entry block").getBlockIx()]
+      .start,
       vregs: Vec::new(),
       rregs: Vec::new(),
       mem: Vec::new(),
@@ -1102,7 +1104,7 @@ impl Clone for Block {
 #[derive(Debug)]
 pub struct Func {
   pub name: String,
-  pub entry: Label,
+  pub entry: Option<Label>,
   pub nVirtualRegs: u32,
   pub insns: TypedIxVec<InstIx, Inst>, // indexed by InstIx
 
@@ -1138,14 +1140,18 @@ fn lookup(blocks: &TypedIxVec<BlockIx, Block>, name: String) -> BlockIx {
 }
 
 impl Func {
-  pub fn new<'a>(name: &'a str, entry: &'a str) -> Self {
+  pub fn new<'a>(name: &'a str) -> Self {
     Func {
       name: name.to_string(),
-      entry: Label::Unresolved { name: entry.to_string() },
+      entry: None,
       nVirtualRegs: 0,
       insns: TypedIxVec::<InstIx, Inst>::new(),
       blocks: TypedIxVec::<BlockIx, Block>::new(),
     }
+  }
+
+  pub fn set_entry(&mut self, entry: &str) {
+    self.entry = Some(Label::Unresolved { name: entry.to_string() });
   }
 
   pub fn print(&self, who: &str) {
@@ -1219,7 +1225,7 @@ impl Func {
     for i in self.insns.iter_mut() {
       resolveInst(i, |name| lookup(blocks, name));
     }
-    resolveLabel(&mut self.entry, |name| lookup(blocks, name));
+    resolveLabel(self.entry.as_mut().unwrap(), |name| lookup(blocks, name));
   }
 
   pub fn update_from_alloc(&mut self, result: regalloc::RegAllocResult<Func>) {
@@ -1485,7 +1491,8 @@ impl Blockifier {
     self.blocks[exit_bno].push(i_finish(None));
 
     // Convert (ent_bno, exit_bno, cleanedUp) into a Func
-    let mut func = Func::new(&self.name, &make_text_label_str(ent_bno));
+    let mut func = Func::new(&self.name);
+    func.set_entry(&make_text_label_str(ent_bno));
     func.nVirtualRegs = 3; // or whatever
     let mut n = 0;
     for ivec in self.blocks {
