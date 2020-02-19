@@ -2,9 +2,6 @@
  * vim: set ts=8 sts=2 et sw=2 tw=80:
 */
 
-#![allow(non_snake_case)]
-#![allow(non_camel_case_types)]
-
 /* TODOs, 11 Dec 2019
 
 MVP (without these, the implementation is useless in practice):
@@ -100,7 +97,7 @@ fn main() {
   let matches = app.get_matches();
 
   let func_name = matches.value_of("test").unwrap();
-  let mut func = match crate::test_cases::find_Func(func_name) {
+  let mut func = match crate::test_cases::find_func(func_name) {
     Ok(func) => func,
     Err(available_func_names) => {
       error!("can't find Func with name '{}'", func_name);
@@ -183,7 +180,7 @@ mod test_utils {
 
   pub fn bt(func_name: &str, num_gpr: usize, num_fpu: usize) {
     let _ = pretty_env_logger::try_init();
-    let mut func = test_cases::find_Func(func_name).unwrap();
+    let mut func = test_cases::find_func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
     let expected_ret_value = run_func(
       &func,
@@ -215,7 +212,7 @@ mod test_utils {
 
   pub fn lsra(func_name: &str, num_gpr: usize, num_fpu: usize) {
     let _ = pretty_env_logger::try_init();
-    let mut func = test_cases::find_Func(func_name).unwrap();
+    let mut func = test_cases::find_func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
     let expected_ret_value = run_func(
       &func,
@@ -253,119 +250,119 @@ mod test_utils {
 // much as we can.
 
 #[test]
-fn bt__badness() {
+fn bt_badness() {
   test_utils::bt("badness", 1, 0);
 }
 #[test]
-fn lsra__badness() {
+fn lsra_badness() {
   test_utils::lsra("badness", 1, 0);
 }
 
 #[test]
-fn bt__straight_line() {
+fn bt_straight_line() {
   test_utils::bt("straight_line", 1, 0);
 }
 #[test]
-fn lsra__straight_line() {
+fn lsra_straight_line() {
   test_utils::lsra("straight_line", 2, 0);
 }
 
 #[test]
-fn bt__fill_then_sum() {
+fn bt_fill_then_sum() {
   test_utils::bt("fill_then_sum", 8, 8);
 }
 #[test]
-fn lsra__fill_then_sum() {
+fn lsra_fill_then_sum() {
   test_utils::lsra("fill_then_sum", 8, 8);
 }
 
 #[test]
-fn bt__ssort() {
+fn bt_ssort() {
   test_utils::bt("ssort", 8, 8);
 }
 #[test]
-fn lsra__ssort() {
+fn lsra_ssort() {
   test_utils::lsra("ssort", 8, 8);
 }
 
 #[test]
-fn bt__3_loops() {
+fn bt_3_loops() {
   test_utils::bt("3_loops", 8, 8);
 }
 #[test]
-fn lsra__3_loops() {
+fn lsra_3_loops() {
   test_utils::lsra("3_loops", 8, 8);
 }
 
 #[test]
-fn bt__stmts() {
+fn bt_stmts() {
   test_utils::bt("stmts", 8, 8);
 }
 #[test]
-fn lsra__stmts() {
+fn lsra_stmts() {
   test_utils::lsra("stmts", 8, 8);
 }
 
 #[test]
-fn bt__needs_splitting() {
+fn bt_needs_splitting() {
   test_utils::bt("needs_splitting", 8, 8);
 }
 #[test]
-fn lsra__needs_splitting() {
+fn lsra_needs_splitting() {
   test_utils::lsra("needs_splitting", 8, 8);
 }
 
 #[test]
-fn bt__needs_splitting2() {
+fn bt_needs_splitting2() {
   test_utils::bt("needs_splitting2", 8, 8);
 }
 #[test]
-fn lsra__needs_splitting2() {
+fn lsra_needs_splitting2() {
   test_utils::lsra("needs_splitting2", 8, 8);
 }
 
 #[test]
-fn bt__qsort() {
+fn bt_qsort() {
   test_utils::bt("qsort", 8, 8);
 }
 #[test]
-fn lsra__qsort() {
+fn lsra_qsort() {
   test_utils::lsra("qsort", 8, 8);
 }
 
 #[test]
-fn bt__fill_then_sum_2a() {
+fn bt_fill_then_sum_2a() {
   test_utils::bt("fill_then_sum_2a", 8, 8);
 }
 #[test]
-fn lsra__2a_fill_then_sum_2a() {
+fn lsra_2a_fill_then_sum_2a() {
   test_utils::lsra("fill_then_sum_2a", 8, 8);
 }
 
 #[test]
-fn bt__ssort_2a() {
+fn bt_ssort_2a() {
   test_utils::bt("ssort_2a", 8, 8);
 }
 #[test]
-fn lsra__2a_ssort() {
+fn lsra_2a_ssort() {
   test_utils::lsra("ssort_2a", 8, 8);
 }
 
 #[test]
-fn bt__fp1() {
+fn bt_fp1() {
   test_utils::bt("fp1", 8, 8);
 }
 #[test]
-fn lsra__fp1() {
+fn lsra_fp1() {
   test_utils::lsra("fp1", 8, 8);
 }
 
 #[test]
-fn bt__fp2() {
+fn bt_fp2() {
   test_utils::bt("fp2", 8, 8);
 }
 #[test]
-fn lsra__fp2() {
+fn lsra_fp2() {
   test_utils::lsra("fp2", 8, 8);
 }
 

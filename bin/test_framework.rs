@@ -2,9 +2,6 @@
  * vim: set ts=8 sts=2 et sw=2 tw=80:
 */
 
-#![allow(non_snake_case)]
-#![allow(non_camel_case_types)]
-
 /// As part of this set of test cases, we define a mini IR and implement the
 /// `Function` trait for it so that we can use the regalloc public interface.
 use regalloc::{
@@ -34,10 +31,10 @@ impl fmt::Debug for Label {
   }
 }
 impl Label {
-  pub fn newUnresolved(name: String) -> Label {
+  pub fn new_unresolved(name: String) -> Label {
     Label::Unresolved { name }
   }
-  pub fn getBlockIx(&self) -> BlockIx {
+  pub fn get_block_ix(&self) -> BlockIx {
     match self {
       Label::Resolved { name: _, bix } => *bix,
       Label::Unresolved { .. } => {
@@ -52,13 +49,18 @@ pub enum RI {
   Reg { reg: Reg },
   Imm { imm: u32 },
 }
+
+#[allow(non_snake_case)]
 pub fn RI_R(reg: Reg) -> RI {
   debug_assert!(reg.get_class() == RegClass::I32);
   RI::Reg { reg }
 }
+
+#[allow(non_snake_case)]
 pub fn RI_I(imm: u32) -> RI {
   RI::Imm { imm }
 }
+
 impl fmt::Debug for RI {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     match self {
@@ -68,7 +70,7 @@ impl fmt::Debug for RI {
   }
 }
 impl RI {
-  fn addRegReadsTo(&self, uce: &mut Set<Reg>) {
+  fn add_reg_reads_to(&self, uce: &mut Set<Reg>) {
     match self {
       RI::Reg { reg } => uce.insert(*reg),
       RI::Imm { .. } => {}
@@ -89,19 +91,26 @@ pub enum AM {
   RI { base: Reg, offset: u32 },
   RR { base: Reg, offset: Reg },
 }
+
+#[allow(non_snake_case)]
 pub fn AM_R(base: Reg) -> AM {
   debug_assert!(base.get_class() == RegClass::I32);
   AM::RI { base, offset: 0 }
 }
+
+#[allow(non_snake_case)]
 pub fn AM_RI(base: Reg, offset: u32) -> AM {
   debug_assert!(base.get_class() == RegClass::I32);
   AM::RI { base, offset }
 }
+
+#[allow(non_snake_case)]
 pub fn AM_RR(base: Reg, offset: Reg) -> AM {
   debug_assert!(base.get_class() == RegClass::I32);
   debug_assert!(offset.get_class() == RegClass::I32);
   AM::RR { base, offset }
 }
+
 impl fmt::Debug for AM {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     match self {
@@ -111,7 +120,7 @@ impl fmt::Debug for AM {
   }
 }
 impl AM {
-  fn addRegReadsTo(&self, uce: &mut Set<Reg>) {
+  fn add_reg_reads_to(&self, uce: &mut Set<Reg>) {
     match self {
       AM::RI { base, .. } => uce.insert(*base),
       AM::RR { base, offset } => {
@@ -174,44 +183,44 @@ impl fmt::Display for BinOp {
   }
 }
 impl BinOp {
-  pub fn calc(self, argL: u32, argR: u32) -> u32 {
+  pub fn calc(self, arg_left: u32, arg_right: u32) -> u32 {
     match self {
-      BinOp::Add => u32::wrapping_add(argL, argR),
-      BinOp::Sub => u32::wrapping_sub(argL, argR),
-      BinOp::Mul => u32::wrapping_mul(argL, argR),
-      BinOp::Mod => argL % argR,
-      BinOp::Shr => argL >> (argR & 31),
-      BinOp::And => argL & argR,
+      BinOp::Add => u32::wrapping_add(arg_left, arg_right),
+      BinOp::Sub => u32::wrapping_sub(arg_left, arg_right),
+      BinOp::Mul => u32::wrapping_mul(arg_left, arg_right),
+      BinOp::Mod => arg_left % arg_right,
+      BinOp::Shr => arg_left >> (arg_right & 31),
+      BinOp::And => arg_left & arg_right,
       BinOp::CmpEQ => {
-        if argL == argR {
+        if arg_left == arg_right {
           1
         } else {
           0
         }
       }
       BinOp::CmpLT => {
-        if argL < argR {
+        if arg_left < arg_right {
           1
         } else {
           0
         }
       }
       BinOp::CmpLE => {
-        if argL <= argR {
+        if arg_left <= arg_right {
           1
         } else {
           0
         }
       }
       BinOp::CmpGE => {
-        if argL >= argR {
+        if arg_left >= arg_right {
           1
         } else {
           0
         }
       }
       BinOp::CmpGT => {
-        if argL > argR {
+        if arg_left > arg_right {
           1
         } else {
           0
@@ -248,12 +257,12 @@ impl fmt::Display for BinOpF {
   }
 }
 impl BinOpF {
-  pub fn calc(self, argL: f32, argR: f32) -> f32 {
+  pub fn calc(self, arg_left: f32, arg_right: f32) -> f32 {
     match self {
-      BinOpF::FAdd => argL + argR,
-      BinOpF::FSub => argL - argR,
-      BinOpF::FMul => argL * argR,
-      BinOpF::FDiv => argL / argR,
+      BinOpF::FAdd => arg_left + arg_right,
+      BinOpF::FSub => arg_left - arg_right,
+      BinOpF::FMul => arg_left * arg_right,
+      BinOpF::FDiv => arg_left / arg_right,
     }
   }
 }
@@ -264,9 +273,9 @@ pub enum Inst {
   ImmF { dst: Reg, imm: f32 },
   Copy { dst: Reg, src: Reg },
   CopyF { dst: Reg, src: Reg },
-  BinOp { op: BinOp, dst: Reg, srcL: Reg, srcR: RI },
-  BinOpM { op: BinOp, dst: Reg, srcR: RI }, // "mod" semantics for |dst|
-  BinOpF { op: BinOpF, dst: Reg, srcL: Reg, srcR: Reg },
+  BinOp { op: BinOp, dst: Reg, src_left: Reg, src_right: RI },
+  BinOpM { op: BinOp, dst: Reg, src_right: RI }, // "mod" semantics for |dst|
+  BinOpF { op: BinOpF, dst: Reg, src_left: Reg, src_right: Reg },
   Load { dst: Reg, addr: AM },
   LoadF { dst: Reg, addr: AM },
   Store { addr: AM, src: Reg },
@@ -276,7 +285,7 @@ pub enum Inst {
   Reload { dst: RealReg, src: SpillSlot },
   ReloadF { dst: RealReg, src: SpillSlot },
   Goto { target: Label },
-  GotoCTF { cond: Reg, targetT: Label, targetF: Label },
+  GotoCTF { cond: Reg, target_true: Label, target_false: Label },
   PrintS { str: String },
   PrintI { reg: Reg },
   PrintF { reg: Reg },
@@ -331,14 +340,16 @@ fn i_reloadf(dst: RealReg, src: SpillSlot) -> Inst {
   Inst::ReloadF { dst, src }
 }
 pub fn i_goto<'a>(target: &'a str) -> Inst {
-  Inst::Goto { target: Label::newUnresolved(target.to_string()) }
+  Inst::Goto { target: Label::new_unresolved(target.to_string()) }
 }
-pub fn i_goto_ctf<'a>(cond: Reg, targetT: &'a str, targetF: &'a str) -> Inst {
+pub fn i_goto_ctf<'a>(
+  cond: Reg, target_true: &'a str, target_false: &'a str,
+) -> Inst {
   debug_assert!(cond.get_class() == RegClass::I32);
   Inst::GotoCTF {
     cond,
-    targetT: Label::newUnresolved(targetT.to_string()),
-    targetF: Label::newUnresolved(targetF.to_string()),
+    target_true: Label::new_unresolved(target_true.to_string()),
+    target_false: Label::new_unresolved(target_false.to_string()),
   }
 }
 pub fn i_print_s<'a>(str: &'a str) -> Inst {
@@ -356,95 +367,95 @@ pub fn i_finish(reg: Option<Reg>) -> Inst {
   Inst::Finish { reg }
 }
 
-pub fn i_add(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+pub fn i_add(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  debug_assert!(srcL.get_class() == RegClass::I32);
-  Inst::BinOp { op: BinOp::Add, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::Add, dst, src_left, src_right }
 }
-pub fn i_sub(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+pub fn i_sub(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  debug_assert!(srcL.get_class() == RegClass::I32);
-  Inst::BinOp { op: BinOp::Sub, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::Sub, dst, src_left, src_right }
 }
-pub fn i_mul(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+pub fn i_mul(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  debug_assert!(srcL.get_class() == RegClass::I32);
-  Inst::BinOp { op: BinOp::Mul, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::Mul, dst, src_left, src_right }
 }
-pub fn i_mod(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+pub fn i_mod(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  debug_assert!(srcL.get_class() == RegClass::I32);
-  Inst::BinOp { op: BinOp::Mod, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::Mod, dst, src_left, src_right }
 }
-pub fn i_shr(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+pub fn i_shr(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  debug_assert!(srcL.get_class() == RegClass::I32);
-  Inst::BinOp { op: BinOp::Shr, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::Shr, dst, src_left, src_right }
 }
-pub fn i_and(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+pub fn i_and(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  debug_assert!(srcL.get_class() == RegClass::I32);
-  Inst::BinOp { op: BinOp::And, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::And, dst, src_left, src_right }
 }
-pub fn i_cmp_eq(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+pub fn i_cmp_eq(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  debug_assert!(srcL.get_class() == RegClass::I32);
-  Inst::BinOp { op: BinOp::CmpEQ, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::CmpEQ, dst, src_left, src_right }
 }
-pub fn i_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+pub fn i_cmp_lt(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  debug_assert!(srcL.get_class() == RegClass::I32);
-  Inst::BinOp { op: BinOp::CmpLT, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::CmpLT, dst, src_left, src_right }
 }
-pub fn i_cmp_le(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+pub fn i_cmp_le(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  debug_assert!(srcL.get_class() == RegClass::I32);
-  Inst::BinOp { op: BinOp::CmpLE, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::CmpLE, dst, src_left, src_right }
 }
-pub fn i_cmp_ge(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+pub fn i_cmp_ge(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  debug_assert!(srcL.get_class() == RegClass::I32);
-  Inst::BinOp { op: BinOp::CmpGE, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::CmpGE, dst, src_left, src_right }
 }
-pub fn i_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Inst {
+pub fn i_cmp_gt(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  debug_assert!(srcL.get_class() == RegClass::I32);
-  Inst::BinOp { op: BinOp::CmpGT, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::I32);
+  Inst::BinOp { op: BinOp::CmpGT, dst, src_left, src_right }
 }
 
 // 2-operand versions of i_add and i_sub, for experimentation
-pub fn i_addm(dst: Reg, srcR: RI) -> Inst {
+pub fn i_addm(dst: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  Inst::BinOpM { op: BinOp::Add, dst, srcR }
+  Inst::BinOpM { op: BinOp::Add, dst, src_right }
 }
-pub fn i_subm(dst: Reg, srcR: RI) -> Inst {
+pub fn i_subm(dst: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
-  Inst::BinOpM { op: BinOp::Sub, dst, srcR }
+  Inst::BinOpM { op: BinOp::Sub, dst, src_right }
 }
 
-pub fn i_fadd(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
+pub fn i_fadd(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
   debug_assert!(dst.get_class() == RegClass::F32);
-  debug_assert!(srcL.get_class() == RegClass::F32);
-  debug_assert!(srcR.get_class() == RegClass::F32);
-  Inst::BinOpF { op: BinOpF::FAdd, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::F32);
+  debug_assert!(src_right.get_class() == RegClass::F32);
+  Inst::BinOpF { op: BinOpF::FAdd, dst, src_left, src_right }
 }
-pub fn i_fsub(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
+pub fn i_fsub(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
   debug_assert!(dst.get_class() == RegClass::F32);
-  debug_assert!(srcL.get_class() == RegClass::F32);
-  debug_assert!(srcR.get_class() == RegClass::F32);
-  Inst::BinOpF { op: BinOpF::FSub, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::F32);
+  debug_assert!(src_right.get_class() == RegClass::F32);
+  Inst::BinOpF { op: BinOpF::FSub, dst, src_left, src_right }
 }
-pub fn i_fmul(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
+pub fn i_fmul(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
   debug_assert!(dst.get_class() == RegClass::F32);
-  debug_assert!(srcL.get_class() == RegClass::F32);
-  debug_assert!(srcR.get_class() == RegClass::F32);
-  Inst::BinOpF { op: BinOpF::FMul, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::F32);
+  debug_assert!(src_right.get_class() == RegClass::F32);
+  Inst::BinOpF { op: BinOpF::FMul, dst, src_left, src_right }
 }
-pub fn i_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Inst {
+pub fn i_fdiv(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
   debug_assert!(dst.get_class() == RegClass::F32);
-  debug_assert!(srcL.get_class() == RegClass::F32);
-  debug_assert!(srcR.get_class() == RegClass::F32);
-  Inst::BinOpF { op: BinOpF::FDiv, dst, srcL, srcR }
+  debug_assert!(src_left.get_class() == RegClass::F32);
+  debug_assert!(src_right.get_class() == RegClass::F32);
+  Inst::BinOpF { op: BinOpF::FDiv, dst, src_left, src_right }
 }
 
 impl fmt::Debug for Inst {
@@ -469,28 +480,28 @@ impl fmt::Debug for Inst {
       Inst::ImmF { dst, imm } => write!(fmt, "immf    {:?}, {:?}", dst, imm),
       Inst::Copy { dst, src } => write!(fmt, "copy    {:?}, {:?}", dst, src),
       Inst::CopyF { dst, src } => write!(fmt, "copyf   {:?}, {:?}", dst, src),
-      Inst::BinOp { op, dst, srcL, srcR } => write!(
+      Inst::BinOp { op, dst, src_left, src_right } => write!(
         fmt,
         "{} {:?}, {:?}, {:?}",
         ljustify(op.to_string(), 7),
         dst,
-        srcL,
-        srcR
+        src_left,
+        src_right
       ),
-      Inst::BinOpM { op, dst, srcR } => write!(
+      Inst::BinOpM { op, dst, src_right } => write!(
         fmt,
         "{} {:?}, {:?}",
         ljustify(op.to_string() + &"m".to_string(), 7),
         dst,
-        srcR
+        src_right
       ),
-      Inst::BinOpF { op, dst, srcL, srcR } => write!(
+      Inst::BinOpF { op, dst, src_left, src_right } => write!(
         fmt,
         "{} {:?}, {:?}, {:?}",
         ljustify(op.to_string(), 7),
         dst,
-        srcL,
-        srcR
+        src_left,
+        src_right
       ),
       Inst::Load { dst, addr } => write!(fmt, "load    {:?}, {:?}", dst, addr),
       Inst::LoadF { dst, addr } => write!(fmt, "loadf   {:?}, {:?}", dst, addr),
@@ -503,10 +514,10 @@ impl fmt::Debug for Inst {
       Inst::Reload { dst, src } => write!(fmt, "RELOAD  {:?}, {:?}", dst, src),
       Inst::ReloadF { dst, src } => write!(fmt, "RELOAD  {:?}, {:?}", dst, src),
       Inst::Goto { target } => write!(fmt, "goto    {:?}", target),
-      Inst::GotoCTF { cond, targetT, targetF } => write!(
+      Inst::GotoCTF { cond, target_true, target_false } => write!(
         fmt,
         "goto    if {:?} then {:?} else {:?}",
-        cond, targetT, targetF
+        cond, target_true, target_false
       ),
       Inst::PrintS { str } => {
         let mut res = "prints  '".to_string();
@@ -527,11 +538,11 @@ impl Inst {
   // This might contain duplicates (although it would be pretty strange if
   // it did). This function should not be applied to non-control-flow
   // instructions.  The labels are assumed all to be "resolved".
-  pub fn getTargets(&self) -> Vec<BlockIx> {
+  pub fn get_targets(&self) -> Vec<BlockIx> {
     match self {
-      Inst::Goto { target } => vec![target.getBlockIx()],
-      Inst::GotoCTF { cond: _, targetT, targetF } => {
-        vec![targetT.getBlockIx(), targetF.getBlockIx()]
+      Inst::Goto { target } => vec![target.get_block_ix()],
+      Inst::GotoCTF { cond: _, target_true, target_false } => {
+        vec![target_true.get_block_ix(), target_false.get_block_ix()]
       }
       Inst::Finish { reg: _ } => vec![],
       _other => panic!("Inst::getTargets: incorrectly applied to: {:?}", self),
@@ -572,38 +583,38 @@ impl Inst {
         def.insert(Writable::from_reg(*dst));
         uce.insert(*src);
       }
-      Inst::BinOp { op: _, dst, srcL, srcR } => {
+      Inst::BinOp { op: _, dst, src_left, src_right } => {
         def.insert(Writable::from_reg(*dst));
-        uce.insert(*srcL);
-        srcR.addRegReadsTo(&mut uce);
+        uce.insert(*src_left);
+        src_right.add_reg_reads_to(&mut uce);
       }
-      Inst::BinOpM { op: _, dst, srcR } => {
+      Inst::BinOpM { op: _, dst, src_right } => {
         m0d.insert(Writable::from_reg(*dst));
-        srcR.addRegReadsTo(&mut uce);
+        src_right.add_reg_reads_to(&mut uce);
       }
-      Inst::BinOpF { op: _, dst, srcL, srcR } => {
+      Inst::BinOpF { op: _, dst, src_left, src_right } => {
         def.insert(Writable::from_reg(*dst));
-        uce.insert(*srcL);
-        uce.insert(*srcR);
+        uce.insert(*src_left);
+        uce.insert(*src_right);
       }
       Inst::Store { addr, src } => {
-        addr.addRegReadsTo(&mut uce);
+        addr.add_reg_reads_to(&mut uce);
         uce.insert(*src);
       }
       Inst::StoreF { addr, src } => {
-        addr.addRegReadsTo(&mut uce);
+        addr.add_reg_reads_to(&mut uce);
         uce.insert(*src);
       }
       Inst::Load { dst, addr } => {
         def.insert(Writable::from_reg(*dst));
-        addr.addRegReadsTo(&mut uce);
+        addr.add_reg_reads_to(&mut uce);
       }
       Inst::LoadF { dst, addr } => {
         def.insert(Writable::from_reg(*dst));
-        addr.addRegReadsTo(&mut uce);
+        addr.add_reg_reads_to(&mut uce);
       }
       Inst::Goto { .. } => {}
-      Inst::GotoCTF { cond, targetT: _, targetF: _ } => {
+      Inst::GotoCTF { cond, target_true: _, target_false: _ } => {
         uce.insert(*cond);
       }
       Inst::PrintS { .. } => {}
@@ -639,7 +650,7 @@ impl Inst {
   // * For registers mentioned in a write role, apply map_defs.
   // * For registers mentioned in a modify role, map_uses and map_defs *must* agree
   //   (if not, our caller is buggy).  So apply either map to that register.
-  pub fn mapRegs_D_U(
+  pub fn map_regs_d_u(
     &mut self, map_defs: &Map<VirtualReg, RealReg>,
     map_uses: &Map<VirtualReg, RealReg>,
   ) {
@@ -655,19 +666,19 @@ impl Inst {
         dst.apply_defs_or_uses(map_defs);
         src.apply_defs_or_uses(map_uses);
       }
-      Inst::BinOp { op: _, dst, srcL, srcR } => {
+      Inst::BinOp { op: _, dst, src_left, src_right } => {
         dst.apply_defs_or_uses(map_defs);
-        srcL.apply_defs_or_uses(map_uses);
-        srcR.apply_defs_or_uses(map_uses);
+        src_left.apply_defs_or_uses(map_uses);
+        src_right.apply_defs_or_uses(map_uses);
       }
-      Inst::BinOpM { op: _, dst, srcR } => {
+      Inst::BinOpM { op: _, dst, src_right } => {
         dst.apply_mods(map_defs, map_uses);
-        srcR.apply_defs_or_uses(map_uses);
+        src_right.apply_defs_or_uses(map_uses);
       }
-      Inst::BinOpF { op: _, dst, srcL, srcR } => {
+      Inst::BinOpF { op: _, dst, src_left, src_right } => {
         dst.apply_defs_or_uses(map_defs);
-        srcL.apply_defs_or_uses(map_uses);
-        srcR.apply_defs_or_uses(map_uses);
+        src_left.apply_defs_or_uses(map_uses);
+        src_right.apply_defs_or_uses(map_uses);
       }
       Inst::Store { addr, src } => {
         addr.apply_defs_or_uses(map_uses);
@@ -686,7 +697,7 @@ impl Inst {
         addr.apply_defs_or_uses(map_uses);
       }
       Inst::Goto { .. } => {}
-      Inst::GotoCTF { cond, targetT: _, targetF: _ } => {
+      Inst::GotoCTF { cond, target_true: _, target_false: _ } => {
         cond.apply_defs_or_uses(map_uses);
       }
       Inst::PrintS { .. } => {}
@@ -727,13 +738,13 @@ pub enum Value {
   F32(f32),
 }
 impl Value {
-  fn toU32(self) -> u32 {
+  fn to_u32(self) -> u32 {
     match self {
       Value::U32(n) => n,
       Value::F32(_) => panic!("Value::toU32: this is a F32"),
     }
   }
-  fn toF32(self) -> f32 {
+  fn to_f32(self) -> f32 {
     match self {
       Value::U32(_) => panic!("Value::toF32: this is a U32"),
       Value::F32(n) => n,
@@ -771,12 +782,12 @@ struct IState<'a> {
 
 impl<'a> IState<'a> {
   fn new(
-    func: &'a Func, maxRealRegs: usize, maxMem: usize, run_stage: RunStage,
+    func: &'a Func, max_real_regs: usize, max_mem: usize, run_stage: RunStage,
   ) -> Self {
     let mut state = IState {
       func,
       nia: func.blocks
-        [func.entry.as_ref().expect("missing entry block").getBlockIx()]
+        [func.entry.as_ref().expect("missing entry block").get_block_ix()]
       .start,
       vregs: Vec::new(),
       rregs: Vec::new(),
@@ -788,8 +799,8 @@ impl<'a> IState<'a> {
       run_stage,
       ret_value: None,
     };
-    state.rregs.resize(maxRealRegs, None);
-    state.mem.resize(maxMem, None);
+    state.rregs.resize(max_real_regs, None);
+    state.mem.resize(max_mem, None);
     state
   }
 
@@ -809,7 +820,7 @@ impl<'a> IState<'a> {
     // No automatic resizing.  If the rreg doesn't exist, just fail.
     match self.rregs.get_mut(rreg.get_index()) {
       None => panic!("IState::setRealReg: invalid rreg {:?}", rreg),
-      Some(valP) => *valP = Some(val),
+      Some(val_p) => *val_p = Some(val),
     }
   }
 
@@ -916,7 +927,7 @@ impl<'a> IState<'a> {
     // No auto resizing of the memory
     match self.mem.get_mut(addr as usize) {
       None => panic!("IState::setMemU32: invalid addr {}", addr),
-      Some(valP) => *valP = Some(Value::U32(val)),
+      Some(val_p) => *val_p = Some(Value::U32(val)),
     }
   }
 
@@ -924,22 +935,24 @@ impl<'a> IState<'a> {
     // No auto resizing of the memory
     match self.mem.get_mut(addr as usize) {
       None => panic!("IState::setMemF32: invalid addr {}", addr),
-      Some(valP) => *valP = Some(Value::F32(val)),
+      Some(val_p) => *val_p = Some(Value::F32(val)),
     }
   }
 
+  #[allow(non_snake_case)]
   fn get_RI(&self, ri: &RI) -> u32 {
     match ri {
-      RI::Reg { reg } => self.get_reg(*reg).toU32(),
+      RI::Reg { reg } => self.get_reg(*reg).to_u32(),
       RI::Imm { imm } => *imm,
     }
   }
 
+  #[allow(non_snake_case)]
   fn get_AM(&self, am: &AM) -> u32 {
     match am {
-      AM::RI { base, offset } => self.get_reg(*base).toU32() + offset,
+      AM::RI { base, offset } => self.get_reg(*base).to_u32() + offset,
       AM::RR { base, offset } => {
-        self.get_reg(*base).toU32() + self.get_reg(*offset).toU32()
+        self.get_reg(*base).to_u32() + self.get_reg(*offset).to_u32()
       }
     }
   }
@@ -957,80 +970,83 @@ impl<'a> IState<'a> {
       Inst::Imm { dst, imm } => self.set_reg_u32(*dst, *imm),
       Inst::ImmF { dst, imm } => self.set_reg_f32(*dst, *imm),
       Inst::Copy { dst, src } => {
-        self.set_reg_u32(*dst, self.get_reg(*src).toU32())
+        self.set_reg_u32(*dst, self.get_reg(*src).to_u32())
       }
       Inst::CopyF { dst, src } => {
-        self.set_reg_f32(*dst, self.get_reg(*src).toF32())
+        self.set_reg_f32(*dst, self.get_reg(*src).to_f32())
       }
-      Inst::BinOp { op, dst, srcL, srcR } => {
-        let srcL_v = self.get_reg(*srcL).toU32();
-        let srcR_v = self.get_RI(srcR);
-        let dst_v = op.calc(srcL_v, srcR_v);
+      Inst::BinOp { op, dst, src_left, src_right } => {
+        let src_left_v = self.get_reg(*src_left).to_u32();
+        let src_right_v = self.get_RI(src_right);
+        let dst_v = op.calc(src_left_v, src_right_v);
         self.set_reg_u32(*dst, dst_v);
       }
-      Inst::BinOpM { op, dst, srcR } => {
-        let mut dst_v = self.get_reg(*dst).toU32();
-        let srcR_v = self.get_RI(srcR);
-        dst_v = op.calc(dst_v, srcR_v);
+      Inst::BinOpM { op, dst, src_right } => {
+        let mut dst_v = self.get_reg(*dst).to_u32();
+        let src_right_v = self.get_RI(src_right);
+        dst_v = op.calc(dst_v, src_right_v);
         self.set_reg_u32(*dst, dst_v);
       }
-      Inst::BinOpF { op, dst, srcL, srcR } => {
-        let srcL_v = self.get_reg(*srcL).toF32();
-        let srcR_v = self.get_reg(*srcR).toF32();
-        let dst_v = op.calc(srcL_v, srcR_v);
+      Inst::BinOpF { op, dst, src_left, src_right } => {
+        let src_left_v = self.get_reg(*src_left).to_f32();
+        let src_right_v = self.get_reg(*src_right).to_f32();
+        let dst_v = op.calc(src_left_v, src_right_v);
         self.set_reg_f32(*dst, dst_v);
       }
       Inst::Load { dst, addr } => {
         let addr_v = self.get_AM(addr);
-        let dst_v = self.get_mem(addr_v).toU32();
+        let dst_v = self.get_mem(addr_v).to_u32();
         self.set_reg_u32(*dst, dst_v);
       }
       Inst::LoadF { dst, addr } => {
         let addr_v = self.get_AM(addr);
-        let dst_v = self.get_mem(addr_v).toF32();
+        let dst_v = self.get_mem(addr_v).to_f32();
         self.set_reg_f32(*dst, dst_v);
       }
       Inst::Store { addr, src } => {
         let addr_v = self.get_AM(addr);
-        let src_v = self.get_reg(*src).toU32();
+        let src_v = self.get_reg(*src).to_u32();
         self.set_mem_u32(addr_v, src_v);
       }
       Inst::StoreF { addr, src } => {
         let addr_v = self.get_AM(addr);
-        let src_v = self.get_reg(*src).toF32();
+        let src_v = self.get_reg(*src).to_f32();
         self.set_mem_f32(addr_v, src_v);
       }
       Inst::Spill { dst, src } => {
-        let src_v = self.get_real_reg(*src).toU32();
+        let src_v = self.get_real_reg(*src).to_u32();
         self.set_spill_slot_u32(*dst, src_v);
         self.n_spills += 1;
       }
       Inst::SpillF { dst, src } => {
-        let src_v = self.get_real_reg(*src).toF32();
+        let src_v = self.get_real_reg(*src).to_f32();
         self.set_spill_slot_f32(*dst, src_v);
         self.n_spills += 1;
       }
       Inst::Reload { dst, src } => {
-        let src_v = self.get_spill_slot(*src).toU32();
+        let src_v = self.get_spill_slot(*src).to_u32();
         self.set_reg_u32(dst.to_reg(), src_v);
         self.n_reloads += 1;
       }
       Inst::ReloadF { dst, src } => {
-        let src_v = self.get_spill_slot(*src).toF32();
+        let src_v = self.get_spill_slot(*src).to_f32();
         self.set_reg_f32(dst.to_reg(), src_v);
         self.n_reloads += 1;
       }
       Inst::Goto { target } => {
-        self.nia = self.func.blocks[target.getBlockIx()].start
+        self.nia = self.func.blocks[target.get_block_ix()].start
       }
-      Inst::GotoCTF { cond, targetT, targetF } => {
-        let target =
-          if self.get_reg(*cond).toU32() != 0 { targetT } else { targetF };
-        self.nia = self.func.blocks[target.getBlockIx()].start;
+      Inst::GotoCTF { cond, target_true, target_false } => {
+        let target = if self.get_reg(*cond).to_u32() != 0 {
+          target_true
+        } else {
+          target_false
+        };
+        self.nia = self.func.blocks[target.get_block_ix()].start;
       }
       Inst::PrintS { str } => print!("{}", str),
-      Inst::PrintI { reg } => print!("{:?}", self.get_reg(*reg).toU32()),
-      Inst::PrintF { reg } => print!("{:?}", self.get_reg(*reg).toF32()),
+      Inst::PrintI { reg } => print!("{:?}", self.get_reg(*reg).to_u32()),
+      Inst::PrintF { reg } => print!("{:?}", self.get_reg(*reg).to_f32()),
       Inst::Finish { reg } => {
         self.ret_value = reg.map(|reg| self.get_reg(reg));
         done = true;
@@ -1082,11 +1098,11 @@ pub struct Block {
   pub name: String,
   pub start: InstIx,
   pub len: u32,
-  pub estFreq: u16, // Estimated execution frequency
+  pub estimated_execution_frequency: u16,
 }
 impl Block {
   pub fn new(name: String, start: InstIx, len: u32) -> Self {
-    Self { name, start, len, estFreq: 1 }
+    Self { name, start, len, estimated_execution_frequency: 1 }
   }
 }
 impl Clone for Block {
@@ -1096,7 +1112,7 @@ impl Clone for Block {
       name: self.name.clone(),
       start: self.start,
       len: self.len,
-      estFreq: self.estFreq,
+      estimated_execution_frequency: self.estimated_execution_frequency,
     }
   }
 }
@@ -1105,7 +1121,7 @@ impl Clone for Block {
 pub struct Func {
   pub name: String,
   pub entry: Option<Label>,
-  pub nVirtualRegs: u32,
+  pub num_virtual_regs: u32,
   pub insns: TypedIxVec<InstIx, Inst>, // indexed by InstIx
 
   // Note that |blocks| must be in order of increasing |Block::start|
@@ -1120,7 +1136,7 @@ impl Clone for Func {
     Func {
       name: self.name.clone(),
       entry: self.entry.clone(),
-      nVirtualRegs: self.nVirtualRegs,
+      num_virtual_regs: self.num_virtual_regs,
       insns: self.insns.clone(),
       blocks: self.blocks.clone(),
     }
@@ -1144,7 +1160,7 @@ impl Func {
     Func {
       name: name.to_string(),
       entry: None,
-      nVirtualRegs: 0,
+      num_virtual_regs: 0,
       insns: TypedIxVec::<InstIx, Inst>::new(),
       blocks: TypedIxVec::<BlockIx, Block>::new(),
     }
@@ -1164,8 +1180,8 @@ impl Func {
       }
       println!("  {:?}:{}", BlockIx::new(ix), b.name);
       for i in b.start.get()..b.start.get() + b.len {
-        let ixI = InstIx::new(i);
-        println!("      {:<3?}   {:?}", ixI, self.insns[ixI]);
+        let ix = InstIx::new(i);
+        println!("      {:<3?}   {:?}", ix, self.insns[ix]);
       }
       ix += 1;
     }
@@ -1174,8 +1190,8 @@ impl Func {
 
   // Get a new VirtualReg name
   pub fn new_virtual_reg(&mut self, rc: RegClass) -> Reg {
-    let v = Reg::new_virtual(rc, self.nVirtualRegs);
-    self.nVirtualRegs += 1;
+    let v = Reg::new_virtual(rc, self.num_virtual_regs);
+    self.num_virtual_regs += 1;
     v
   }
 
@@ -1223,9 +1239,9 @@ impl Func {
     // Resolve all labels
     let blocks = &self.blocks;
     for i in self.insns.iter_mut() {
-      resolveInst(i, |name| lookup(blocks, name));
+      resolve_inst(i, |name| lookup(blocks, name));
     }
-    resolveLabel(self.entry.as_mut().unwrap(), |name| lookup(blocks, name));
+    resolve_label(self.entry.as_mut().unwrap(), |name| lookup(blocks, name));
   }
 
   pub fn update_from_alloc(&mut self, result: regalloc::RegAllocResult<Func>) {
@@ -1245,7 +1261,7 @@ impl Func {
   }
 }
 
-fn resolveLabel<F>(label: &mut Label, lookup: F)
+fn resolve_label<F>(label: &mut Label, lookup: F)
 where
   F: Fn(String) -> BlockIx,
 {
@@ -1258,15 +1274,15 @@ where
   *label = resolved;
 }
 
-fn resolveInst<F>(insn: &mut Inst, lookup: F)
+fn resolve_inst<F>(insn: &mut Inst, lookup: F)
 where
   F: Copy + Fn(String) -> BlockIx,
 {
   match insn {
-    Inst::Goto { ref mut target } => resolveLabel(target, lookup),
-    Inst::GotoCTF { cond: _, ref mut targetT, ref mut targetF } => {
-      resolveLabel(targetT, lookup);
-      resolveLabel(targetF, lookup);
+    Inst::Goto { ref mut target } => resolve_label(target, lookup),
+    Inst::GotoCTF { cond: _, ref mut target_true, ref mut target_false } => {
+      resolve_label(target_true, lookup);
+      resolve_label(target_false, lookup);
     }
     _ => (),
   }
@@ -1330,58 +1346,58 @@ pub fn s_print_f(reg: Reg) -> Stmt {
   s_vanilla(i_print_f(reg))
 }
 
-pub fn s_add(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_add(dst, srcL, srcR))
+pub fn s_add(dst: Reg, src_left: Reg, src_right: RI) -> Stmt {
+  s_vanilla(i_add(dst, src_left, src_right))
 }
-pub fn s_sub(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_sub(dst, srcL, srcR))
+pub fn s_sub(dst: Reg, src_left: Reg, src_right: RI) -> Stmt {
+  s_vanilla(i_sub(dst, src_left, src_right))
 }
-pub fn s_mul(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_mul(dst, srcL, srcR))
+pub fn s_mul(dst: Reg, src_left: Reg, src_right: RI) -> Stmt {
+  s_vanilla(i_mul(dst, src_left, src_right))
 }
-pub fn s_mod(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_mod(dst, srcL, srcR))
+pub fn s_mod(dst: Reg, src_left: Reg, src_right: RI) -> Stmt {
+  s_vanilla(i_mod(dst, src_left, src_right))
 }
-pub fn s_shr(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_shr(dst, srcL, srcR))
+pub fn s_shr(dst: Reg, src_left: Reg, src_right: RI) -> Stmt {
+  s_vanilla(i_shr(dst, src_left, src_right))
 }
-pub fn s_and(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_and(dst, srcL, srcR))
+pub fn s_and(dst: Reg, src_left: Reg, src_right: RI) -> Stmt {
+  s_vanilla(i_and(dst, src_left, src_right))
 }
-pub fn s_cmp_eq(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_cmp_eq(dst, srcL, srcR))
+pub fn s_cmp_eq(dst: Reg, src_left: Reg, src_right: RI) -> Stmt {
+  s_vanilla(i_cmp_eq(dst, src_left, src_right))
 }
-pub fn s_cmp_lt(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_cmp_lt(dst, srcL, srcR))
+pub fn s_cmp_lt(dst: Reg, src_left: Reg, src_right: RI) -> Stmt {
+  s_vanilla(i_cmp_lt(dst, src_left, src_right))
 }
-pub fn s_cmp_le(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_cmp_le(dst, srcL, srcR))
+pub fn s_cmp_le(dst: Reg, src_left: Reg, src_right: RI) -> Stmt {
+  s_vanilla(i_cmp_le(dst, src_left, src_right))
 }
-pub fn s_cmp_ge(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_cmp_ge(dst, srcL, srcR))
+pub fn s_cmp_ge(dst: Reg, src_left: Reg, src_right: RI) -> Stmt {
+  s_vanilla(i_cmp_ge(dst, src_left, src_right))
 }
-pub fn s_cmp_gt(dst: Reg, srcL: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_cmp_gt(dst, srcL, srcR))
+pub fn s_cmp_gt(dst: Reg, src_left: Reg, src_right: RI) -> Stmt {
+  s_vanilla(i_cmp_gt(dst, src_left, src_right))
 }
 
-pub fn s_addm(dst: Reg, srcR: RI) -> Stmt {
-  s_vanilla(i_addm(dst, srcR))
+pub fn s_addm(dst: Reg, src_right: RI) -> Stmt {
+  s_vanilla(i_addm(dst, src_right))
 }
-//fn s_subm(dst: Reg, srcR: RI) -> Stmt {
-//  s_vanilla(i_subm(dst, srcR))
+//fn s_subm(dst: Reg, src_right: RI) -> Stmt {
+//  s_vanilla(i_subm(dst, src_right))
 //}
 
-pub fn s_fadd(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
-  s_vanilla(i_fadd(dst, srcL, srcR))
+pub fn s_fadd(dst: Reg, src_left: Reg, src_right: Reg) -> Stmt {
+  s_vanilla(i_fadd(dst, src_left, src_right))
 }
-pub fn s_fsub(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
-  s_vanilla(i_fsub(dst, srcL, srcR))
+pub fn s_fsub(dst: Reg, src_left: Reg, src_right: Reg) -> Stmt {
+  s_vanilla(i_fsub(dst, src_left, src_right))
 }
-pub fn s_fmul(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
-  s_vanilla(i_fmul(dst, srcL, srcR))
+pub fn s_fmul(dst: Reg, src_left: Reg, src_right: Reg) -> Stmt {
+  s_vanilla(i_fmul(dst, src_left, src_right))
 }
-pub fn s_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
-  s_vanilla(i_fdiv(dst, srcL, srcR))
+pub fn s_fdiv(dst: Reg, src_left: Reg, src_right: Reg) -> Stmt {
+  s_vanilla(i_fdiv(dst, src_left, src_right))
 }
 
 //=============================================================================
@@ -1392,7 +1408,7 @@ pub fn s_fdiv(dst: Reg, srcL: Reg, srcR: Reg) -> Stmt {
 pub struct Blockifier {
   name: String,
   blocks: Vec<Vec<Inst>>,
-  nVirtualRegs: u32,
+  num_virtual_regs: u32,
 }
 
 fn make_text_label_str(n: usize) -> String {
@@ -1401,26 +1417,26 @@ fn make_text_label_str(n: usize) -> String {
 
 impl Blockifier {
   pub fn new<'a>(name: &'a str) -> Self {
-    Self { name: name.to_string(), blocks: vec![], nVirtualRegs: 0 }
+    Self { name: name.to_string(), blocks: vec![], num_virtual_regs: 0 }
   }
 
   // Get a new VirtualReg name
   pub fn new_virtual_reg(&mut self, rc: RegClass) -> Reg {
-    let v = Reg::new_virtual(rc, self.nVirtualRegs);
-    self.nVirtualRegs += 1;
+    let v = Reg::new_virtual(rc, self.num_virtual_regs);
+    self.num_virtual_regs += 1;
     v
   }
 
   /// Recursive worker function, which flattens out the control flow, producing
   /// a set of blocks.
   fn blockify(&mut self, stmts: Vec<Stmt>) -> (usize, usize) {
-    let entryBNo = self.blocks.len();
-    let mut currBNo = entryBNo;
+    let entry_block = self.blocks.len();
+    let mut cur_block = entry_block;
     self.blocks.push(Vec::new());
     for s in stmts {
       match s {
         Stmt::Vanilla { insn } => {
-          self.blocks[currBNo].push(insn);
+          self.blocks[cur_block].push(insn);
         }
         Stmt::IfThenElse { cond, stmts_t, stmts_e } => {
           let (t_ent, t_exit) = self.blockify(stmts_t);
@@ -1429,12 +1445,12 @@ impl Blockifier {
           self.blocks.push(Vec::new());
           self.blocks[t_exit].push(i_goto(&make_text_label_str(cont)));
           self.blocks[e_exit].push(i_goto(&make_text_label_str(cont)));
-          self.blocks[currBNo].push(i_goto_ctf(
+          self.blocks[cur_block].push(i_goto_ctf(
             cond,
             &make_text_label_str(t_ent),
             &make_text_label_str(e_ent),
           ));
-          currBNo = cont;
+          cur_block = cont;
         }
         Stmt::RepeatUntil { stmts, cond } => {
           let (s_ent, s_exit) = self.blockify(stmts);
@@ -1449,7 +1465,8 @@ impl Blockifier {
           let loop_header = self.blocks.len();
           self.blocks.push(vec![i_goto(&make_text_label_str(s_ent))]);
 
-          self.blocks[currBNo].push(i_goto(&make_text_label_str(loop_header)));
+          self.blocks[cur_block]
+            .push(i_goto(&make_text_label_str(loop_header)));
 
           let loop_continue = self.blocks.len();
           self.blocks.push(vec![i_goto(&make_text_label_str(loop_header))]);
@@ -1463,12 +1480,12 @@ impl Blockifier {
             &make_text_label_str(loop_continue),
           ));
 
-          currBNo = after_loop;
+          cur_block = after_loop;
         }
         Stmt::WhileDo { cond, stmts } => {
           let condblock = self.blocks.len();
           self.blocks.push(Vec::new());
-          self.blocks[currBNo].push(i_goto(&make_text_label_str(condblock)));
+          self.blocks[cur_block].push(i_goto(&make_text_label_str(condblock)));
           let (s_ent, s_exit) = self.blockify(stmts);
           self.blocks[s_exit].push(i_goto(&make_text_label_str(condblock)));
           let cont = self.blocks.len();
@@ -1478,11 +1495,11 @@ impl Blockifier {
             &make_text_label_str(s_ent),
             &make_text_label_str(cont),
           ));
-          currBNo = cont;
+          cur_block = cont;
         }
       }
     }
-    (entryBNo, currBNo)
+    (entry_block, cur_block)
   }
 
   // The main external function.  Convert the given statements, into a Func.
@@ -1493,7 +1510,7 @@ impl Blockifier {
     // Convert (ent_bno, exit_bno, cleanedUp) into a Func
     let mut func = Func::new(&self.name);
     func.set_entry(&make_text_label_str(ent_bno));
-    func.nVirtualRegs = 3; // or whatever
+    func.num_virtual_regs = 3; // or whatever
     let mut n = 0;
     for ivec in self.blocks {
       func.block(&make_text_label_str(n), ivec);
@@ -1543,7 +1560,7 @@ impl regalloc::Function for Func {
   /// Get CFG successors: indexed by block, provide a list of successor blocks.
   fn block_succs(&self, block: BlockIx) -> Vec<BlockIx> {
     let last_insn = self.blocks[block].start.plus(self.blocks[block].len - 1);
-    self.insns[last_insn].getTargets()
+    self.insns[last_insn].get_targets()
   }
 
   fn is_ret(&self, insn: InstIx) -> bool {
@@ -1569,7 +1586,7 @@ impl regalloc::Function for Func {
     insn: &mut Self::Inst, pre_map: &Map<VirtualReg, RealReg>,
     post_map: &Map<VirtualReg, RealReg>,
   ) {
-    insn.mapRegs_D_U(
+    insn.map_regs_d_u(
       /* define-map = */ post_map, /* use-map = */ pre_map,
     );
   }
@@ -1656,11 +1673,10 @@ impl regalloc::Function for Func {
   }
 }
 
-// Create a universe for testing, with nI32 |I32| class regs and nF32 |F32|
-// class regs.
-
-pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
-  let total_regs = nI32 + nF32;
+/// Create a universe for testing, with nI32 |I32| class regs and nF32 |F32|
+/// class regs.
+pub fn make_universe(num_i32: usize, num_f32: usize) -> RealRegUniverse {
+  let total_regs = num_i32 + num_f32;
   if total_regs >= 256 {
     panic!("make_universe: too many regs, cannot represent");
   }
@@ -1669,9 +1685,9 @@ pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
   let mut allocable_by_class = [None; NUM_REG_CLASSES];
   let mut index = 0u8;
 
-  if nI32 > 0 {
+  if num_i32 > 0 {
     let first = index as usize;
-    for i in 0..nI32 {
+    for i in 0..num_i32 {
       let name = format!("R{}", i).to_string();
       let reg = Reg::new_real(RegClass::I32, /*enc=*/ 0, index).to_real_reg();
       regs.push((reg, name));
@@ -1682,9 +1698,9 @@ pub fn make_universe(nI32: usize, nF32: usize) -> RealRegUniverse {
       Some(RegClassInfo { first, last, suggested_scratch: Some(last) });
   }
 
-  if nF32 > 0 {
+  if num_f32 > 0 {
     let first = index as usize;
-    for i in 0..nF32 {
+    for i in 0..num_f32 {
       let name = format!("F{}", i).to_string();
       let reg = Reg::new_real(RegClass::F32, /*enc=*/ 0, index).to_real_reg();
       regs.push((reg, name));
