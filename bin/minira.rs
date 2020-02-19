@@ -51,62 +51,78 @@ Performance:
   have to repeatedly re-scan the groups looking for particular LR kinds?
 */
 
-use std::env;
-
 mod test_cases;
 mod test_framework;
 
 use regalloc::{allocate_registers, RegAllocAlgorithm};
 use test_framework::{make_universe, run_func, RunStage};
 
+use clap;
 use log::{self, error, info};
 use pretty_env_logger;
 
 //=============================================================================
 // Top level
 
-fn usage(argv0: &String) {
-  println!(
-    "usage: {} <name_of_algorithm> <name_of_Func> \
-     <num_regs::I32> <num_regs::F32>",
-    argv0
-  );
-  println!("usage: available algorithms:  bt  lsra");
-  println!("usage: to get a list of available Funcs to try, run with args:");
-  println!("usage:    bt bogus 0 0");
-}
-
 fn main() {
   pretty_env_logger::init();
 
-  let args: Vec<String> = env::args().collect();
-  if args.len() != 5 {
-    usage(&args[0]);
-    return;
-  }
+  let app = clap::App::new("minira")
+    .about("a simple program to allow separate testing of regalloc.rs")
+    .arg(
+      clap::Arg::with_name("iregs")
+        .short("i")
+        .takes_value(true)
+        .help("number of integer registers available (0 if not set)"),
+    )
+    .arg(
+      clap::Arg::with_name("fregs")
+        .short("f")
+        .takes_value(true)
+        .help("number of floating-point registers available (0 if not set)"),
+    )
+    .arg(
+      clap::Arg::with_name("test")
+        .short("t")
+        .takes_value(true)
+        .required(true)
+        .help("test case name"),
+    )
+    .arg(
+      clap::Arg::with_name("algorithm")
+        .short("a")
+        .takes_value(true)
+        .required(true)
+        .possible_values(&["bt", "lsra"])
+        .help("algorithm name"),
+    );
+  let matches = app.get_matches();
 
-  let mut func = match crate::test_cases::find_Func(&args[2]) {
+  let func_name = matches.value_of("test").unwrap();
+  let mut func = match crate::test_cases::find_Func(func_name) {
     Ok(func) => func,
     Err(available_func_names) => {
-      error!("can't find Func with name '{}'", args[2]);
-      println!("{}: available Func names are:", args[0]);
+      error!("can't find Func with name '{}'", func_name);
+      println!("available func names are:");
       for name in available_func_names {
-        println!("{}:     {}", args[0], name);
+        println!("     {}", name);
       }
       return;
     }
   };
 
-  let (nRegsI32, nRegsF32) =
-    match (args[3].parse::<usize>(), args[4].parse::<usize>()) {
-      (Ok(nI32), Ok(nF32)) => (nI32, nF32),
-      _other => {
-        usage(&args[0]);
-        return;
-      }
-    };
+  let (num_regs_i32, num_regs_f32) = match (
+    matches.value_of("iregs").unwrap_or("0").parse::<usize>(),
+    matches.value_of("fregs").unwrap_or("0").parse::<usize>(),
+  ) {
+    (Ok(num_i32), Ok(num_f32)) => (num_i32, num_f32),
+    _other => {
+      println!("invalid iregs/fregs values: {}", matches.usage());
+      return;
+    }
+  };
 
-  let reg_alloc_kind = match args[1].as_str() {
+  let reg_alloc_kind = match matches.value_of("algorithm").unwrap() {
     "bt" => {
       info!("Using the backtracking allocator");
       RegAllocAlgorithm::Backtracking
@@ -115,13 +131,11 @@ fn main() {
       info!("Using the linear scan allocator.");
       RegAllocAlgorithm::LinearScan
     }
-    _ => {
-      usage(&args[0]);
-      return;
-    }
+    // Unreachable because of defined "possible_values".
+    _ => unreachable!(),
   };
 
-  let reg_universe = make_universe(nRegsI32, nRegsF32);
+  let reg_universe = make_universe(num_regs_i32, num_regs_f32);
 
   func.print("before allocation");
 
@@ -131,7 +145,7 @@ fn main() {
   let result =
     match allocate_registers(&mut func, reg_alloc_kind, &reg_universe) {
       Err(e) => {
-        error!("{}: allocation failed: {}", args[0], e);
+        println!("allocation failed: {}", e);
         return;
       }
       Ok(r) => r,
