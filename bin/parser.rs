@@ -414,6 +414,13 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_add(dst, src, op));
         }
 
+        "addm" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src = parser.read_ri()?;
+          insts.push(i_addm(dst, src));
+        }
+
         "cmp_lt" => {
           let dst = parser.read_var()?;
           parser.expect_char(',')?;
