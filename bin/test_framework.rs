@@ -2,6 +2,7 @@
  * vim: set ts=8 sts=2 et sw=2 tw=80:
 */
 
+use arbitrary::Arbitrary;
 /// As part of this set of test cases, we define a mini IR and implement the
 /// `Function` trait for it so that we can use the regalloc public interface.
 use regalloc::{
@@ -9,27 +10,21 @@ use regalloc::{
   RegClassInfo, Set, SpillSlot, TypedIxVec, VirtualReg, Writable,
   NUM_REG_CLASSES,
 };
-
 use std::fmt;
+
+use crate::validator::{validate, Context as ValidatorContext};
 
 //=============================================================================
 // Definition of: Label, RI (reg-or-immediate operands), AM (address modes),
 // and Inst (instructions).  Also the get-regs and map-regs operations for
 // them.  Destinations are on the left.
 
-#[derive(Clone)]
+#[derive(Clone, Arbitrary)]
 pub enum Label {
   Unresolved { name: String },
   Resolved { name: String, bix: BlockIx },
 }
-impl fmt::Debug for Label {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    match self {
-      Label::Unresolved { name } => write!(fmt, "??:{}", &name),
-      Label::Resolved { name, bix } => write!(fmt, "{:?}:{}", bix, name),
-    }
-  }
-}
+
 impl Label {
   pub fn new_unresolved(name: String) -> Label {
     Label::Unresolved { name }
@@ -42,9 +37,27 @@ impl Label {
       }
     }
   }
+  pub fn type_checks(&self, cx: &ValidatorContext) -> bool {
+    match self {
+      Label::Unresolved { .. } => false,
+      Label::Resolved { bix, .. } => {
+        let bix_u32: u32 = (*bix).into();
+        bix_u32 < cx.num_blocks
+      }
+    }
+  }
 }
 
-#[derive(Copy, Clone)]
+impl fmt::Debug for Label {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      Label::Unresolved { name } => write!(fmt, "??:{}", &name),
+      Label::Resolved { name, bix } => write!(fmt, "{:?}:{}", bix, name),
+    }
+  }
+}
+
+#[derive(Copy, Clone, Arbitrary)]
 pub enum RI {
   Reg { reg: Reg },
   Imm { imm: u32 },
@@ -84,9 +97,15 @@ impl RI {
       RI::Imm { .. } => {}
     }
   }
+  fn type_checks(&self, cx: &mut ValidatorContext) -> bool {
+    match self {
+      RI::Reg { reg } => reg_type_checks(reg, RegClass::I32, cx),
+      RI::Imm { .. } => true,
+    }
+  }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Arbitrary)]
 pub enum AM {
   RI { base: Reg, offset: u32 },
   RR { base: Reg, offset: Reg },
@@ -119,6 +138,7 @@ impl fmt::Debug for AM {
     }
   }
 }
+
 impl AM {
   fn add_reg_reads_to(&self, uce: &mut Set<Reg>) {
     match self {
@@ -129,6 +149,7 @@ impl AM {
       }
     }
   }
+
   fn apply_defs_or_uses(&mut self, map: &Map<VirtualReg, RealReg>) {
     match self {
       AM::RI { ref mut base, .. } => {
@@ -140,9 +161,19 @@ impl AM {
       }
     }
   }
+
+  fn type_checks(&self, cx: &mut ValidatorContext) -> bool {
+    use RegClass::*;
+    match self {
+      AM::RI { base, .. } => reg_type_checks(base, I32, cx),
+      AM::RR { base, offset } => {
+        reg_type_checks(base, I32, cx) && reg_type_checks(offset, I32, cx)
+      }
+    }
+  }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Arbitrary)]
 pub enum BinOp {
   Add,
   Sub,
@@ -156,6 +187,7 @@ pub enum BinOp {
   CmpGE,
   CmpGT,
 }
+
 impl fmt::Debug for BinOp {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     write!(
@@ -177,18 +209,25 @@ impl fmt::Debug for BinOp {
     )
   }
 }
+
 impl fmt::Display for BinOp {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     (self as &dyn fmt::Debug).fmt(fmt)
   }
 }
+
 impl BinOp {
-  pub fn calc(self, arg_left: u32, arg_right: u32) -> u32 {
-    match self {
+  pub fn calc(self, arg_left: u32, arg_right: u32) -> IResult<u32> {
+    Ok(match self {
       BinOp::Add => u32::wrapping_add(arg_left, arg_right),
       BinOp::Sub => u32::wrapping_sub(arg_left, arg_right),
       BinOp::Mul => u32::wrapping_mul(arg_left, arg_right),
-      BinOp::Mod => arg_left % arg_right,
+      BinOp::Mod => {
+        if arg_right == 0 {
+          return Err("modulo by 0".into());
+        }
+        arg_left % arg_right
+      }
       BinOp::Shr => arg_left >> (arg_right & 31),
       BinOp::And => arg_left & arg_right,
       BinOp::CmpEQ => {
@@ -226,17 +265,18 @@ impl BinOp {
           0
         }
       }
-    }
+    })
   }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Arbitrary)]
 pub enum BinOpF {
   FAdd,
   FSub,
   FMul,
   FDiv,
 }
+
 impl fmt::Debug for BinOpF {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     write!(
@@ -251,23 +291,30 @@ impl fmt::Debug for BinOpF {
     )
   }
 }
+
 impl fmt::Display for BinOpF {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     (self as &dyn fmt::Debug).fmt(fmt)
   }
 }
+
 impl BinOpF {
-  pub fn calc(self, arg_left: f32, arg_right: f32) -> f32 {
-    match self {
+  pub fn calc(self, arg_left: f32, arg_right: f32) -> IResult<f32> {
+    Ok(match self {
       BinOpF::FAdd => arg_left + arg_right,
       BinOpF::FSub => arg_left - arg_right,
       BinOpF::FMul => arg_left * arg_right,
-      BinOpF::FDiv => arg_left / arg_right,
-    }
+      BinOpF::FDiv => {
+        if arg_right == 0.0 {
+          return Err("division by zero".into());
+        }
+        arg_left / arg_right
+      }
+    })
   }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Arbitrary)]
 pub enum Inst {
   Imm { dst: Reg, imm: u32 },
   ImmF { dst: Reg, imm: f32 },
@@ -720,13 +767,89 @@ impl Inst {
       panic!("Inst::mapRegs_D_U: unhandled: {:?}", self);
     }
   }
+
+  pub fn is_control_flow(&self) -> bool {
+    match self {
+      Inst::Goto { .. } | Inst::GotoCTF { .. } | Inst::Finish { reg: _ } => {
+        true
+      }
+      _ => false,
+    }
+  }
+
+  /// Is this instruction a user instruction, or is it internal to regalloc?
+  pub fn is_user(&self) -> bool {
+    match self {
+      Inst::Spill { .. }
+      | Inst::SpillF { .. }
+      | Inst::Reload { .. }
+      | Inst::ReloadF { .. } => false,
+      _ => true,
+    }
+  }
+
+  pub fn type_checks(&self, cx: &mut ValidatorContext) -> bool {
+    use RegClass::*;
+    match self {
+      Inst::Imm { dst, imm: _ } => reg_type_checks(dst, I32, cx),
+      Inst::ImmF { dst, imm: _ } => reg_type_checks(dst, F32, cx),
+      Inst::Copy { dst, src } => {
+        reg_type_checks(dst, I32, cx) && reg_type_checks(src, I32, cx)
+      }
+      Inst::CopyF { dst, src } => {
+        reg_type_checks(dst, F32, cx) && reg_type_checks(src, F32, cx)
+      }
+      Inst::Load { dst, addr } => {
+        reg_type_checks(dst, I32, cx) && addr.type_checks(cx)
+      }
+      Inst::LoadF { dst, addr } => {
+        reg_type_checks(dst, F32, cx) && addr.type_checks(cx)
+      }
+      Inst::Store { addr, src } => {
+        reg_type_checks(src, I32, cx) && addr.type_checks(cx)
+      }
+      Inst::StoreF { addr, src } => {
+        reg_type_checks(src, F32, cx) && addr.type_checks(cx)
+      }
+      Inst::Goto { target } => target.type_checks(cx),
+      Inst::GotoCTF { cond, target_true, target_false } => {
+        reg_type_checks(cond, I32, cx)
+          && target_true.type_checks(cx)
+          && target_false.type_checks(cx)
+      }
+      Inst::PrintS { .. } => true,
+      Inst::PrintI { reg } => reg_type_checks(reg, I32, cx),
+      Inst::PrintF { reg } => reg_type_checks(reg, F32, cx),
+      Inst::Finish { reg } => reg.map_or(true, |reg| cx.check_reg(reg)),
+      Inst::BinOp { op: _, dst, src_left, src_right } => {
+        reg_type_checks(dst, I32, cx)
+          && reg_type_checks(src_left, I32, cx)
+          && src_right.type_checks(cx)
+      }
+      Inst::BinOpM { op: _, dst, src_right } => {
+        reg_type_checks(dst, I32, cx) && src_right.type_checks(cx)
+      }
+      Inst::BinOpF { op: _, dst, src_left, src_right } => {
+        reg_type_checks(dst, F32, cx)
+          && reg_type_checks(src_left, F32, cx)
+          && reg_type_checks(src_right, F32, cx)
+      }
+
+      // These are not user instructions.
+      Inst::Spill { .. }
+      | Inst::SpillF { .. }
+      | Inst::Reload { .. }
+      | Inst::ReloadF { .. } => {
+        panic!("unexpected spill/spillf/reload/reloadf in type_checks")
+      }
+    }
+  }
 }
 
-fn is_control_flow_insn(insn: &Inst) -> bool {
-  match insn {
-    Inst::Goto { .. } | Inst::GotoCTF { .. } | Inst::Finish { reg: _ } => true,
-    _ => false,
-  }
+fn reg_type_checks(
+  reg: &Reg, expected_class: RegClass, cx: &mut ValidatorContext,
+) -> bool {
+  cx.check_reg(*reg) && reg.get_class() == expected_class
 }
 
 //=============================================================================
@@ -780,6 +903,8 @@ struct IState<'a> {
   ret_value: Option<Value>,
 }
 
+type IResult<T> = Result<T, String>;
+
 impl<'a> IState<'a> {
   fn new(
     func: &'a Func, max_real_regs: usize, max_mem: usize, run_stage: RunStage,
@@ -804,15 +929,29 @@ impl<'a> IState<'a> {
     state
   }
 
-  fn get_real_reg(&self, rreg: RealReg) -> Value {
+  /// Helper function that returns errors in case we're interpreting, but not
+  /// after register allocation.
+  /// This is very useful for fuzzing, which runs both the interpreter and the
+  /// code after register allocation. Fuzzing may generate runtime errors that
+  /// we need to catch, during interpretation. After register allocation, since
+  /// the program ran properly in the interpreter, if there's an error, it
+  /// wasn't there in the first place and is thus a new correctness error.
+  fn interp_error<T>(&self, msg: String) -> IResult<T> {
+    if self.run_stage == RunStage::BeforeRegalloc {
+      return Err(msg);
+    }
+    panic!(msg);
+  }
+
+  fn get_real_reg(&self, rreg: RealReg) -> IResult<Value> {
     // No automatic resizing.  If the rreg doesn't exist, just fail.
     match self.rregs.get(rreg.get_index()) {
       None => panic!("IState::get_real_reg: invalid rreg {:?}", rreg),
-      Some(None) => panic!(
+      Some(None) => self.interp_error(format!(
         "IState::get_real_reg: read of uninit rreg {:?} at nia {:?}",
         rreg, self.nia
-      ),
-      Some(Some(val)) => *val,
+      ))?,
+      Some(Some(val)) => Ok(*val),
     }
   }
 
@@ -824,7 +963,7 @@ impl<'a> IState<'a> {
     }
   }
 
-  fn get_virtual_reg(&self, vreg: VirtualReg) -> Value {
+  fn get_virtual_reg(&self, vreg: VirtualReg) -> IResult<Value> {
     debug_assert!(
       self.run_stage != RunStage::AfterRegalloc,
       "trying to get a vreg after regalloc"
@@ -832,13 +971,16 @@ impl<'a> IState<'a> {
     // The vector might be too small.  But in that case we'd be
     // reading the vreg uninitialised anyway, so just complain.
     match self.vregs.get(vreg.get_index()) {
-            None |          // indexing error
-            Some(None) =>   // entry present, but has never been written
-                panic!("IState::get_virtual_reg: read of uninit vreg {:?}",
-                       vreg),
-            Some(Some(val))
-                => *val
-        }
+      None | Some(None) => {
+        // entry either present or absent, but has never been written in both
+        // cases.
+        self.interp_error(format!(
+          "IState::get_virtual_reg: read of uninit vreg {:?}",
+          vreg
+        ))?
+      }
+      Some(Some(val)) => Ok(*val),
+    }
   }
 
   fn set_virtual_reg(&mut self, vreg: VirtualReg, val: Value) {
@@ -888,7 +1030,7 @@ impl<'a> IState<'a> {
     self.slots[ix] = Some(Value::F32(val));
   }
 
-  fn get_reg(&self, reg: Reg) -> Value {
+  fn get_reg(&self, reg: Reg) -> IResult<Value> {
     if reg.is_virtual() {
       self.get_virtual_reg(reg.to_virtual_reg())
     } else {
@@ -912,53 +1054,64 @@ impl<'a> IState<'a> {
     }
   }
 
-  fn get_mem(&self, addr: u32) -> Value {
-    // No auto resizing of the memory
-    match self.mem.get(addr as usize) {
-      None => panic!("IState::getMem: invalid addr {}", addr),
-      Some(None) => {
-        panic!("IState::getMem: read of uninit mem at addr {}", addr)
+  fn get_mem(&self, addr: u32) -> IResult<Value> {
+    // No auto resizing of the memory.
+    Ok(match self.mem.get(addr as usize) {
+      None => {
+        self.interp_error(format!("IState::getMem: invalid addr {}", addr))?
       }
+      Some(None) => self.interp_error(format!(
+        "IState::getMem: read of uninit mem at addr {}",
+        addr
+      ))?,
       Some(Some(val)) => *val,
-    }
+    })
   }
 
-  fn set_mem_u32(&mut self, addr: u32, val: u32) {
+  fn set_mem_u32(&mut self, addr: u32, val: u32) -> IResult<()> {
     // No auto resizing of the memory
     match self.mem.get_mut(addr as usize) {
-      None => panic!("IState::setMemU32: invalid addr {}", addr),
+      None => self
+        .interp_error(format!("IState::set_mem_u32: invalid addr {}", addr))?,
       Some(val_p) => *val_p = Some(Value::U32(val)),
     }
+    Ok(())
   }
 
-  fn set_mem_f32(&mut self, addr: u32, val: f32) {
+  fn set_mem_f32(&mut self, addr: u32, val: f32) -> IResult<()> {
     // No auto resizing of the memory
     match self.mem.get_mut(addr as usize) {
-      None => panic!("IState::setMemF32: invalid addr {}", addr),
+      None => self
+        .interp_error(format!("IState::set_mem_f32: invalid addr {}", addr))?,
       Some(val_p) => *val_p = Some(Value::F32(val)),
     }
+    Ok(())
   }
 
   #[allow(non_snake_case)]
-  fn get_RI(&self, ri: &RI) -> u32 {
-    match ri {
-      RI::Reg { reg } => self.get_reg(*reg).to_u32(),
+  fn get_RI(&self, ri: &RI) -> IResult<u32> {
+    Ok(match ri {
+      RI::Reg { reg } => self.get_reg(*reg)?.to_u32(),
       RI::Imm { imm } => *imm,
-    }
+    })
   }
 
   #[allow(non_snake_case)]
-  fn get_AM(&self, am: &AM) -> u32 {
-    match am {
-      AM::RI { base, offset } => self.get_reg(*base).to_u32() + offset,
-      AM::RR { base, offset } => {
-        self.get_reg(*base).to_u32() + self.get_reg(*offset).to_u32()
+  fn get_AM(&self, am: &AM) -> IResult<u32> {
+    // Base + offset can overflow and wraparound, because why not?
+    Ok(match am {
+      AM::RI { base, offset } => {
+        self.get_reg(*base)?.to_u32().wrapping_add(*offset)
       }
-    }
+      AM::RR { base, offset } => self
+        .get_reg(*base)?
+        .to_u32()
+        .wrapping_add(self.get_reg(*offset)?.to_u32()),
+    })
   }
 
   // Move the interpreter one step forward
-  fn step(&mut self) -> bool {
+  fn step(&mut self) -> IResult<bool> {
     let mut done = false;
 
     let iix = self.nia;
@@ -970,56 +1123,61 @@ impl<'a> IState<'a> {
       Inst::Imm { dst, imm } => self.set_reg_u32(*dst, *imm),
       Inst::ImmF { dst, imm } => self.set_reg_f32(*dst, *imm),
       Inst::Copy { dst, src } => {
-        self.set_reg_u32(*dst, self.get_reg(*src).to_u32())
+        self.set_reg_u32(*dst, self.get_reg(*src)?.to_u32())
       }
       Inst::CopyF { dst, src } => {
-        self.set_reg_f32(*dst, self.get_reg(*src).to_f32())
+        self.set_reg_f32(*dst, self.get_reg(*src)?.to_f32())
       }
       Inst::BinOp { op, dst, src_left, src_right } => {
-        let src_left_v = self.get_reg(*src_left).to_u32();
-        let src_right_v = self.get_RI(src_right);
-        let dst_v = op.calc(src_left_v, src_right_v);
+        let src_left_v = self.get_reg(*src_left)?.to_u32();
+        let src_right_v = self.get_RI(src_right)?;
+        let dst_v = op
+          .calc(src_left_v, src_right_v)
+          .or_else(|err| self.interp_error(err))?;
         self.set_reg_u32(*dst, dst_v);
       }
       Inst::BinOpM { op, dst, src_right } => {
-        let mut dst_v = self.get_reg(*dst).to_u32();
-        let src_right_v = self.get_RI(src_right);
-        dst_v = op.calc(dst_v, src_right_v);
+        let mut dst_v = self.get_reg(*dst)?.to_u32();
+        let src_right_v = self.get_RI(src_right)?;
+        dst_v =
+          op.calc(dst_v, src_right_v).or_else(|err| self.interp_error(err))?;
         self.set_reg_u32(*dst, dst_v);
       }
       Inst::BinOpF { op, dst, src_left, src_right } => {
-        let src_left_v = self.get_reg(*src_left).to_f32();
-        let src_right_v = self.get_reg(*src_right).to_f32();
-        let dst_v = op.calc(src_left_v, src_right_v);
+        let src_left_v = self.get_reg(*src_left)?.to_f32();
+        let src_right_v = self.get_reg(*src_right)?.to_f32();
+        let dst_v = op
+          .calc(src_left_v, src_right_v)
+          .or_else(|err| self.interp_error(err))?;
         self.set_reg_f32(*dst, dst_v);
       }
       Inst::Load { dst, addr } => {
-        let addr_v = self.get_AM(addr);
-        let dst_v = self.get_mem(addr_v).to_u32();
+        let addr_v = self.get_AM(addr)?;
+        let dst_v = self.get_mem(addr_v)?.to_u32();
         self.set_reg_u32(*dst, dst_v);
       }
       Inst::LoadF { dst, addr } => {
-        let addr_v = self.get_AM(addr);
-        let dst_v = self.get_mem(addr_v).to_f32();
+        let addr_v = self.get_AM(addr)?;
+        let dst_v = self.get_mem(addr_v)?.to_f32();
         self.set_reg_f32(*dst, dst_v);
       }
       Inst::Store { addr, src } => {
-        let addr_v = self.get_AM(addr);
-        let src_v = self.get_reg(*src).to_u32();
-        self.set_mem_u32(addr_v, src_v);
+        let addr_v = self.get_AM(addr)?;
+        let src_v = self.get_reg(*src)?.to_u32();
+        self.set_mem_u32(addr_v, src_v)?;
       }
       Inst::StoreF { addr, src } => {
-        let addr_v = self.get_AM(addr);
-        let src_v = self.get_reg(*src).to_f32();
-        self.set_mem_f32(addr_v, src_v);
+        let addr_v = self.get_AM(addr)?;
+        let src_v = self.get_reg(*src)?.to_f32();
+        self.set_mem_f32(addr_v, src_v)?;
       }
       Inst::Spill { dst, src } => {
-        let src_v = self.get_real_reg(*src).to_u32();
+        let src_v = self.get_real_reg(*src)?.to_u32();
         self.set_spill_slot_u32(*dst, src_v);
         self.n_spills += 1;
       }
       Inst::SpillF { dst, src } => {
-        let src_v = self.get_real_reg(*src).to_f32();
+        let src_v = self.get_real_reg(*src)?.to_f32();
         self.set_spill_slot_f32(*dst, src_v);
         self.n_spills += 1;
       }
@@ -1037,7 +1195,7 @@ impl<'a> IState<'a> {
         self.nia = self.func.blocks[target.get_block_ix()].start
       }
       Inst::GotoCTF { cond, target_true, target_false } => {
-        let target = if self.get_reg(*cond).to_u32() != 0 {
+        let target = if self.get_reg(*cond)?.to_u32() != 0 {
           target_true
         } else {
           target_false
@@ -1045,14 +1203,15 @@ impl<'a> IState<'a> {
         self.nia = self.func.blocks[target.get_block_ix()].start;
       }
       Inst::PrintS { str } => print!("{}", str),
-      Inst::PrintI { reg } => print!("{:?}", self.get_reg(*reg).to_u32()),
-      Inst::PrintF { reg } => print!("{:?}", self.get_reg(*reg).to_f32()),
+      Inst::PrintI { reg } => print!("{:?}", self.get_reg(*reg)?.to_u32()),
+      Inst::PrintF { reg } => print!("{:?}", self.get_reg(*reg)?.to_f32()),
       Inst::Finish { reg } => {
-        self.ret_value = reg.map(|reg| self.get_reg(reg));
+        self.ret_value =
+          if let Some(reg) = *reg { Some(self.get_reg(reg)?) } else { None };
         done = true;
       }
     }
-    done
+    Ok(done)
   }
 }
 
@@ -1062,24 +1221,32 @@ const MAX_NUM_STEPS: u32 = 1000000;
 
 pub fn run_func(
   f: &Func, who: &str, reg_universe: &RealRegUniverse, run_stage: RunStage,
-) -> Option<Value> {
+) -> Result<Option<Value>, String> {
   println!("");
   println!(
     "Running stage '{}': Func: name='{}' entry='{:?}'",
     who, f.name, f.entry
   );
 
+  if run_stage == RunStage::BeforeRegalloc {
+    if let Err(err) = validate(f, reg_universe) {
+      return Err(format!("validation error: {}", err));
+    }
+  }
+
   let mut istate =
     IState::new(f, reg_universe.regs.len(), /*maxMem=*/ 1000, run_stage);
   let mut done = false;
   let mut allowed_steps = MAX_NUM_STEPS;
   while allowed_steps > 0 && !done {
-    done = istate.step();
+    done = istate.step()?;
     allowed_steps -= 1;
   }
 
   if allowed_steps == 0 {
-    panic!("too many dynamic steps. Maybe running an infinite loop?")
+    return Err(
+      "too many dynamic steps. Maybe running an infinite loop?".into(),
+    );
   }
 
   println!(
@@ -1087,13 +1254,13 @@ pub fn run_func(
     who, istate.n_insns, istate.n_spills, istate.n_reloads
   );
 
-  istate.ret_value
+  Ok(istate.ret_value)
 }
 
 //=============================================================================
 // Definition of Block and Func, and printing thereof.
 
-#[derive(Debug)]
+#[derive(Debug, Arbitrary)]
 pub struct Block {
   pub name: String,
   pub start: InstIx,
@@ -1117,7 +1284,7 @@ impl Clone for Block {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Arbitrary)]
 pub struct Func {
   pub name: String,
   pub entry: Option<Label>,
@@ -1227,10 +1394,10 @@ impl Func {
       }
       for i in 0..b.len {
         let iix = b.start.plus(i);
-        if i == b.len - 1 && !is_control_flow_insn(&self.insns[iix]) {
+        if i == b.len - 1 && !self.insns[iix].is_control_flow() {
           panic!("Func: block must end in control flow insn");
         }
-        if i != b.len - 1 && is_control_flow_insn(&self.insns[iix]) {
+        if i != b.len - 1 && self.insns[iix].is_control_flow() {
           panic!("Func: block contains control flow insn not at end");
         }
       }
@@ -1510,7 +1677,7 @@ impl Blockifier {
     // Convert (ent_bno, exit_bno, cleanedUp) into a Func
     let mut func = Func::new(&self.name);
     func.set_entry(&make_text_label_str(ent_bno));
-    func.num_virtual_regs = 3; // or whatever
+    func.num_virtual_regs = self.num_virtual_regs;
     let mut n = 0;
     for ivec in self.blocks {
       func.block(&make_text_label_str(n), ivec);

@@ -883,8 +883,7 @@ fn test_fill_then_sum_2a() -> Func {
   let v_i = func.new_virtual_reg(RegClass::I32);
   let v_sum = func.new_virtual_reg(RegClass::I32);
   // "index=2" is arbitrary.
-  let r_tmp =
-    Reg::new_real(RegClass::I32, /*enc=*/ 0x42, /*index=*/ 2);
+  let r_tmp = Reg::new_real(RegClass::I32, 0x0, /*index=*/ 2);
   let v_tmp2 = func.new_virtual_reg(RegClass::I32);
 
   // Loop pre-header for filling array with numbers.

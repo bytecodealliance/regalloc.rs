@@ -51,6 +51,7 @@ Performance:
 mod parser;
 mod test_cases;
 mod test_framework;
+mod validator;
 
 use regalloc::{allocate_registers, RegAllocAlgorithm};
 use test_framework::{make_universe, run_func, RunStage};

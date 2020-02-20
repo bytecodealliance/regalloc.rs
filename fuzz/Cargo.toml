@@ -1,0 +1,30 @@
+[package]
+name = "minira-util-fuzz"
+version = "0.0.0"
+authors = ["Automatically generated"]
+publish = false
+edition = "2018"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.3"
+minira-util = { path = ".." }
+regalloc = { path = "../lib"}
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "binary_bt"
+path = "fuzz_binary_bt.rs"
+
+[[bin]]
+name = "validator"
+path = "fuzz_validator.rs"
+
+[profile.release]
+debug-assertions = true
+overflow-checks = true

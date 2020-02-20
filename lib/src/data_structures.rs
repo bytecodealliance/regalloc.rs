@@ -4,8 +4,10 @@
 
 //! Data structures for the whole crate.
 
+use arbitrary::{self, Arbitrary};
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
+
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt;
@@ -261,10 +263,12 @@ impl<T: Copy + PartialOrd + PlusOne> Iterator for MyIterator<T> {
 // Vectors where both the index and element types can be specified (and at
 // most 2^32-1 elems can be stored.  What if this overflows?)
 
+#[derive(Arbitrary)]
 pub struct TypedIxVec<TyIx, Ty> {
   vek: Vec<Ty>,
   ty_ix: PhantomData<TyIx>,
 }
+
 impl<TyIx, Ty> TypedIxVec<TyIx, Ty>
 where
   Ty: Clone,
@@ -341,7 +345,7 @@ where
 
 macro_rules! generate_boilerplate {
   ($TypeIx:ident, $Type:ident, $PrintingPrefix:expr) => {
-    #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
     // Firstly, the indexing type (TypeIx)
     pub enum $TypeIx {
       $TypeIx(u32),
@@ -518,6 +522,7 @@ impl RegClass {
 pub struct Reg {
   do_not_access_this_directly: u32,
 }
+
 impl Reg {
   pub fn is_virtual(self) -> bool {
     (self.do_not_access_this_directly & 0x8000_0000) != 0
@@ -573,6 +578,7 @@ impl Reg {
     }
   }
 }
+
 impl fmt::Debug for Reg {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     write!(
@@ -585,11 +591,26 @@ impl fmt::Debug for Reg {
   }
 }
 
+impl Arbitrary for Reg {
+  fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
+    let rc = RegClass::rc_from_u32(u.arbitrary::<u8>()? as u32 % 5);
+    // Up to 255 registers should be good for fuzzing.
+    let index = u.arbitrary::<u8>()?;
+    if u.arbitrary::<bool>()? {
+      // virtual.
+      Ok(Reg::new_virtual(rc, index as u32))
+    } else {
+      // real.
+      Ok(Reg::new_real(rc, 0x0, index))
+    }
+  }
+}
+
 // RealReg and VirtualReg are merely wrappers around Reg, which try to
 // dynamically ensure that they are really wrapping the correct flavour of
 // register.
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Arbitrary)]
 pub struct RealReg {
   reg: Reg,
 }
@@ -741,7 +762,7 @@ impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug>
   }
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Arbitrary)]
 pub enum SpillSlot {
   SpillSlot(u32),
 }
