@@ -80,6 +80,10 @@ pub fn validate(
     }
   }
 
+  if func.blocks[BlockIx::new(0)].start.get() != 0 {
+    return Err(format!("first block must start at first instruction"));
+  }
+
   let last_block = &func.blocks[BlockIx::new(func.blocks.len() - 1)];
   if func.insns.len() != last_block.start.get() + last_block.len {
     return Err(format!("unused instructions"));
