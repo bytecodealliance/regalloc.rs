@@ -26,5 +26,6 @@ name = "validator"
 path = "fuzz_validator.rs"
 
 [profile.release]
+debug = true
 debug-assertions = true
 overflow-checks = true
