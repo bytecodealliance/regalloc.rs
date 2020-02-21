@@ -855,11 +855,28 @@ fn reg_type_checks(
 //=============================================================================
 // The interpreter
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone)]
 pub enum Value {
   U32(u32),
   F32(f32),
 }
+
+impl PartialEq for Value {
+  fn eq(&self, other: &Self) -> bool {
+    match self {
+      Value::U32(x) => match other {
+        Value::U32(y) => x == y,
+        Value::F32(_) => false,
+      },
+
+      Value::F32(x) => match other {
+        Value::U32(_) => false,
+        Value::F32(y) => (x != x && y != y) || x == y,
+      },
+    }
+  }
+}
+
 impl Value {
   fn to_u32(self) -> u32 {
     match self {
