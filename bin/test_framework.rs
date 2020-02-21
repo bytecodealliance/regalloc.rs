@@ -691,17 +691,16 @@ impl Inst {
     (def, m0d, uce)
   }
 
-  // Apply the specified VirtualReg->RealReg mappings to the instruction,
-  // thusly:
-  // * For registers mentioned in a read role, apply map_uses.
-  // * For registers mentioned in a write role, apply map_defs.
-  // * For registers mentioned in a modify role, map_uses and map_defs *must* agree
-  //   (if not, our caller is buggy).  So apply either map to that register.
+  /// Apply the specified VirtualReg->RealReg mappings to the instruction,
+  /// thusly:
+  /// * For registers mentioned in a read role, apply map_uses.
+  /// * For registers mentioned in a write role, apply map_defs.
+  /// * For registers mentioned in a modify role, map_uses and map_defs *must* agree
+  ///   (if not, our caller is buggy).  So apply either map to that register.
   pub fn map_regs_d_u(
     &mut self, map_defs: &Map<VirtualReg, RealReg>,
     map_uses: &Map<VirtualReg, RealReg>,
   ) {
-    let mut ok = true;
     match self {
       Inst::Imm { dst, imm: _ } => {
         dst.apply_defs_or_uses(map_defs);
@@ -710,6 +709,10 @@ impl Inst {
         dst.apply_defs_or_uses(map_defs);
       }
       Inst::Copy { dst, src } => {
+        dst.apply_defs_or_uses(map_defs);
+        src.apply_defs_or_uses(map_uses);
+      }
+      Inst::CopyF { dst, src } => {
         dst.apply_defs_or_uses(map_defs);
         src.apply_defs_or_uses(map_uses);
       }
@@ -759,12 +762,12 @@ impl Inst {
           reg.apply_defs_or_uses(map_uses);
         }
       }
-      _ => {
-        ok = false;
+      Inst::Spill { .. }
+      | Inst::SpillF { .. }
+      | Inst::Reload { .. }
+      | Inst::ReloadF { .. } => {
+        unreachable!("no need to fill in instructions inserted by regalloc")
       }
-    }
-    if !ok {
-      panic!("Inst::mapRegs_D_U: unhandled: {:?}", self);
     }
   }
 
