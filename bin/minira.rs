@@ -48,6 +48,7 @@ Performance:
   have to repeatedly re-scan the groups looking for particular LR kinds?
 */
 
+mod fuzzing;
 mod parser;
 mod test_cases;
 mod test_framework;

@@ -20,17 +20,18 @@ impl<'rru> Context<'rru> {
   }
 
   pub fn check_reg(&mut self, reg: Reg) -> bool {
-    // If the register has been mentioned earlier, check that it didn't change type in the
-    // meanwhile.
     let rc = reg.get_class();
     let index = reg.get_index();
-    if let Some(prev_rc) = self.vreg_types.insert(index, rc) {
-      if prev_rc != rc {
-        return false;
-      }
-    }
 
     if reg.is_virtual() {
+      // If the register has been mentioned earlier, check that it didn't change type in the
+      // meanwhile.
+      if let Some(prev_rc) = self.vreg_types.insert(index, rc) {
+        if prev_rc != rc {
+          return false;
+        }
+      }
+
       // If it's virtual, it must be in range.
       index < self.num_vregs
     } else {

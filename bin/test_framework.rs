@@ -2,9 +2,11 @@
  * vim: set ts=8 sts=2 et sw=2 tw=80:
 */
 
+//! As part of this set of test cases, we define a mini IR and implement the
+//! `Function` trait for it so that we can use the regalloc public interface.
+
 use arbitrary::Arbitrary;
-/// As part of this set of test cases, we define a mini IR and implement the
-/// `Function` trait for it so that we can use the regalloc public interface.
+
 use regalloc::{
   BlockIx, InstIx, Map, MyRange, RealReg, RealRegUniverse, Reg, RegClass,
   RegClassInfo, Set, SpillSlot, TypedIxVec, VirtualReg, Writable,
@@ -19,7 +21,7 @@ use crate::validator::{validate, Context as ValidatorContext};
 // and Inst (instructions).  Also the get-regs and map-regs operations for
 // them.  Destinations are on the left.
 
-#[derive(Clone, Arbitrary)]
+#[derive(Clone)]
 pub enum Label {
   Unresolved { name: String },
   Resolved { name: String, bix: BlockIx },
@@ -57,7 +59,7 @@ impl fmt::Debug for Label {
   }
 }
 
-#[derive(Copy, Clone, Arbitrary)]
+#[derive(Copy, Clone)]
 pub enum RI {
   Reg { reg: Reg },
   Imm { imm: u32 },
@@ -105,7 +107,7 @@ impl RI {
   }
 }
 
-#[derive(Copy, Clone, Arbitrary)]
+#[derive(Copy, Clone)]
 pub enum AM {
   RI { base: Reg, offset: u32 },
   RR { base: Reg, offset: Reg },
@@ -314,7 +316,7 @@ impl BinOpF {
   }
 }
 
-#[derive(Clone, Arbitrary)]
+#[derive(Clone)]
 pub enum Inst {
   Imm { dst: Reg, imm: u32 },
   ImmF { dst: Reg, imm: f32 },
@@ -890,7 +892,20 @@ impl Value {
       Value::F32(n) => n,
     }
   }
+  fn cast_to_u32(self) -> u32 {
+    match self {
+      Value::U32(n) => n,
+      Value::F32(f) => f as u32,
+    }
+  }
+  fn cast_to_f32(self) -> f32 {
+    match self {
+      Value::U32(n) => n as f32,
+      Value::F32(f) => f,
+    }
+  }
 }
+
 impl fmt::Debug for Value {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     match self {
@@ -1170,12 +1185,12 @@ impl<'a> IState<'a> {
       }
       Inst::Load { dst, addr } => {
         let addr_v = self.get_AM(addr)?;
-        let dst_v = self.get_mem(addr_v)?.to_u32();
+        let dst_v = self.get_mem(addr_v)?.cast_to_u32();
         self.set_reg_u32(*dst, dst_v);
       }
       Inst::LoadF { dst, addr } => {
         let addr_v = self.get_AM(addr)?;
-        let dst_v = self.get_mem(addr_v)?.to_f32();
+        let dst_v = self.get_mem(addr_v)?.cast_to_f32();
         self.set_reg_f32(*dst, dst_v);
       }
       Inst::Store { addr, src } => {
@@ -1277,31 +1292,21 @@ pub fn run_func(
 //=============================================================================
 // Definition of Block and Func, and printing thereof.
 
-#[derive(Debug, Arbitrary)]
+#[derive(Debug, Clone)]
 pub struct Block {
   pub name: String,
   pub start: InstIx,
   pub len: u32,
   pub estimated_execution_frequency: u16,
 }
+
 impl Block {
   pub fn new(name: String, start: InstIx, len: u32) -> Self {
     Self { name, start, len, estimated_execution_frequency: 1 }
   }
 }
-impl Clone for Block {
-  // This is only needed for debug printing.
-  fn clone(&self) -> Self {
-    Block {
-      name: self.name.clone(),
-      start: self.start,
-      len: self.len,
-      estimated_execution_frequency: self.estimated_execution_frequency,
-    }
-  }
-}
 
-#[derive(Debug, Arbitrary)]
+#[derive(Debug, Clone)]
 pub struct Func {
   pub name: String,
   pub entry: Option<Label>,
@@ -1313,18 +1318,6 @@ pub struct Func {
   // must represent the ordering some other way; rearranging Func::blocks is
   // not allowed.
   pub blocks: TypedIxVec<BlockIx, Block>, // indexed by BlockIx
-}
-impl Clone for Func {
-  // This is only needed for debug printing.
-  fn clone(&self) -> Self {
-    Func {
-      name: self.name.clone(),
-      entry: self.entry.clone(),
-      num_virtual_regs: self.num_virtual_regs,
-      insns: self.insns.clone(),
-      blocks: self.blocks.clone(),
-    }
-  }
 }
 
 // Find a block Ix for a block name

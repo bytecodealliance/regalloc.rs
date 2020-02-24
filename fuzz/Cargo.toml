@@ -18,8 +18,8 @@ regalloc = { path = "../lib"}
 members = ["."]
 
 [[bin]]
-name = "binary_bt"
-path = "fuzz_binary_bt.rs"
+name = "bt"
+path = "fuzz_bt.rs"
 
 [[bin]]
 name = "validator"

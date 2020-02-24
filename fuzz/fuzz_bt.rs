@@ -7,8 +7,8 @@ use minira::{self, test_framework as ir};
 fuzz_target!(|func: ir::Func| {
     let mut func = func;
 
-    // 8 FP registers and 8 GP registers are enough for everyone.
-    let reg_universe = ir::make_universe(8, 8);
+    let num_regs = minira::fuzzing::NUM_REAL_REGS_PER_RC as usize;
+    let reg_universe = ir::make_universe(num_regs, num_regs);
 
     let expected_ret_value = match ir::run_func(
       &func,

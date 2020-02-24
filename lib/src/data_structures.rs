@@ -4,7 +4,6 @@
 
 //! Data structures for the whole crate.
 
-use arbitrary::{self, Arbitrary};
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 
@@ -271,7 +270,6 @@ impl<T: Copy + PartialOrd + PlusOne> Iterator for MyIterator<T> {
 // Vectors where both the index and element types can be specified (and at
 // most 2^32-1 elems can be stored.  What if this overflows?)
 
-#[derive(Arbitrary)]
 pub struct TypedIxVec<TyIx, Ty> {
   vek: Vec<Ty>,
   ty_ix: PhantomData<TyIx>,
@@ -353,7 +351,7 @@ where
 
 macro_rules! generate_boilerplate {
   ($TypeIx:ident, $Type:ident, $PrintingPrefix:expr) => {
-    #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
+    #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
     // Firstly, the indexing type (TypeIx)
     pub enum $TypeIx {
       $TypeIx(u32),
@@ -599,26 +597,11 @@ impl fmt::Debug for Reg {
   }
 }
 
-impl Arbitrary for Reg {
-  fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
-    let rc = RegClass::rc_from_u32(u.arbitrary::<u8>()? as u32 % 5);
-    // Up to 255 registers should be good for fuzzing.
-    let index = u.arbitrary::<u8>()?;
-    if u.arbitrary::<bool>()? {
-      // virtual.
-      Ok(Reg::new_virtual(rc, index as u32))
-    } else {
-      // real.
-      Ok(Reg::new_real(rc, 0x0, index))
-    }
-  }
-}
-
 // RealReg and VirtualReg are merely wrappers around Reg, which try to
 // dynamically ensure that they are really wrapping the correct flavour of
 // register.
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Arbitrary)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RealReg {
   reg: Reg,
 }
@@ -770,7 +753,7 @@ impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug>
   }
 }
 
-#[derive(Copy, Clone, PartialEq, Arbitrary)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum SpillSlot {
   SpillSlot(u32),
 }
@@ -947,7 +930,7 @@ pub struct RealRegUniverse {
 }
 
 /// Information about a single register class in the `RealRegUniverse`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct RegClassInfo {
   // Range of allocatable registers in this register class, in terms of
   // register indices.
