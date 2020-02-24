@@ -1,0 +1,6 @@
+v1 = i32
+
+b0:
+    imm v1, 0
+    addm v1, v1
+    finish v1

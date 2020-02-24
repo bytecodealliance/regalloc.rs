@@ -140,6 +140,14 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
   {
     Set { set: self.set.iter().map(f).collect() }
   }
+
+  fn filter_map<F, U>(&self, f: F) -> Set<U>
+  where
+    F: Fn(&T) -> Option<U>,
+    U: Eq + Ord + Hash + Copy + fmt::Debug,
+  {
+    Set { set: self.set.iter().filter_map(f).collect() }
+  }
 }
 
 impl<T: Eq + Ord + Hash + Copy + fmt::Debug> fmt::Debug for Set<T> {
@@ -836,6 +844,7 @@ pub struct SanitizedInstRegUses {
   pub san_defined: Set<Reg>,  // registers that are written.
   pub san_modified: Set<Reg>, // registers that are modified.
 }
+
 impl SanitizedInstRegUses {
   pub fn create_by_sanitizing(
     iru: &InstRegUses, reg_universe: &RealRegUniverse,
@@ -870,15 +879,27 @@ impl SanitizedInstRegUses {
       });
     }
 
+    // Remove modified registers from the set of used and defined registers, so
+    // we don't have to require the users to do so.
+
     let mut sru = SanitizedInstRegUses {
-      san_used: iru.used.clone(),
-      san_defined: Set::from_vec(
-        iru.defined.iter().map(|r| r.to_reg()).collect(),
-      ),
-      san_modified: Set::from_vec(
-        iru.modified.iter().map(|r| r.to_reg()).collect(),
-      ),
+      san_used: iru.used.filter_map(|&r| {
+        if iru.modified.contains(Writable::from_reg(r)) {
+          None
+        } else {
+          Some(r)
+        }
+      }),
+      san_defined: iru.defined.filter_map(|&r| {
+        if iru.modified.contains(r) {
+          None
+        } else {
+          Some(r.to_reg())
+        }
+      }),
+      san_modified: iru.modified.map(|r| r.to_reg()),
     };
+
     sanitize_reg_set(&mut sru.san_used, reg_universe);
     sanitize_reg_set(&mut sru.san_defined, reg_universe);
     sanitize_reg_set(&mut sru.san_modified, reg_universe);

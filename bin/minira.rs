@@ -376,3 +376,8 @@ fn lsra_simple_spill() {
 fn lsra_simple_loop() {
   test_utils::lsra("simple_loop", 2, 0);
 }
+
+#[test]
+fn any_use_modified() {
+  test_utils::bt("use_mod", 1, 0);
+}

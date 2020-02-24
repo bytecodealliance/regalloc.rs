@@ -596,99 +596,96 @@ impl Inst {
     }
   }
 
-  // Returns three sets of regs, (def, mod, use), being those def'd
-  // (written), those mod'd (modified) and those use'd (read) by the
-  // instruction, respectively.  Note "use" is sometimes written as "uce"
-  // below since "use" is a Rust reserved word, and similarly "mod" is
-  // written "m0d" (that's a zero, not capital-o).
+  // Returns three sets of regs, (def, mod, use), being those def'd (written),
+  // those mod'd (modified) and those use'd (read) by the instruction,
+  // respectively.
   //
   // Be careful here.  If an instruction really modifies a register -- as is
-  // typical for x86 -- that register needs to be in the |mod| set, and not
-  // in the |def| and |use| sets.  *Any* mistake in describing register uses
-  // here will almost certainly lead to incorrect register allocations.
+  // typical for x86 -- that register needs to be in the |mod| set, and not in
+  // the |def| and |use| sets.  *Any* mistake in describing register uses here
+  // will almost certainly lead to incorrect register allocations.
   //
   // Also the following must hold: the union of |def| and |use| must be
   // disjoint from |mod|.
   pub fn get_reg_usage(
     &self,
   ) -> (Set<Writable<Reg>>, Set<Writable<Reg>>, Set<Reg>) {
-    let mut def = Set::<Writable<Reg>>::empty();
-    let mut m0d = Set::<Writable<Reg>>::empty();
-    let mut uce = Set::<Reg>::empty();
+    let mut defined = Set::<Writable<Reg>>::empty();
+    let mut modified = Set::<Writable<Reg>>::empty();
+    let mut used = Set::<Reg>::empty();
+
     match self {
       Inst::Imm { dst, imm: _ } => {
-        def.insert(Writable::from_reg(*dst));
+        defined.insert(Writable::from_reg(*dst));
       }
       Inst::ImmF { dst, imm: _ } => {
-        def.insert(Writable::from_reg(*dst));
+        defined.insert(Writable::from_reg(*dst));
       }
       Inst::Copy { dst, src } => {
-        def.insert(Writable::from_reg(*dst));
-        uce.insert(*src);
+        defined.insert(Writable::from_reg(*dst));
+        used.insert(*src);
       }
       Inst::CopyF { dst, src } => {
-        def.insert(Writable::from_reg(*dst));
-        uce.insert(*src);
+        defined.insert(Writable::from_reg(*dst));
+        used.insert(*src);
       }
       Inst::BinOp { op: _, dst, src_left, src_right } => {
-        def.insert(Writable::from_reg(*dst));
-        uce.insert(*src_left);
-        src_right.add_reg_reads_to(&mut uce);
+        defined.insert(Writable::from_reg(*dst));
+        used.insert(*src_left);
+        src_right.add_reg_reads_to(&mut used);
       }
       Inst::BinOpM { op: _, dst, src_right } => {
-        m0d.insert(Writable::from_reg(*dst));
-        src_right.add_reg_reads_to(&mut uce);
+        modified.insert(Writable::from_reg(*dst));
+        src_right.add_reg_reads_to(&mut used);
       }
       Inst::BinOpF { op: _, dst, src_left, src_right } => {
-        def.insert(Writable::from_reg(*dst));
-        uce.insert(*src_left);
-        uce.insert(*src_right);
+        defined.insert(Writable::from_reg(*dst));
+        used.insert(*src_left);
+        used.insert(*src_right);
       }
       Inst::Store { addr, src } => {
-        addr.add_reg_reads_to(&mut uce);
-        uce.insert(*src);
+        addr.add_reg_reads_to(&mut used);
+        used.insert(*src);
       }
       Inst::StoreF { addr, src } => {
-        addr.add_reg_reads_to(&mut uce);
-        uce.insert(*src);
+        addr.add_reg_reads_to(&mut used);
+        used.insert(*src);
       }
       Inst::Load { dst, addr } => {
-        def.insert(Writable::from_reg(*dst));
-        addr.add_reg_reads_to(&mut uce);
+        defined.insert(Writable::from_reg(*dst));
+        addr.add_reg_reads_to(&mut used);
       }
       Inst::LoadF { dst, addr } => {
-        def.insert(Writable::from_reg(*dst));
-        addr.add_reg_reads_to(&mut uce);
+        defined.insert(Writable::from_reg(*dst));
+        addr.add_reg_reads_to(&mut used);
       }
       Inst::Goto { .. } => {}
       Inst::GotoCTF { cond, target_true: _, target_false: _ } => {
-        uce.insert(*cond);
+        used.insert(*cond);
       }
       Inst::PrintS { .. } => {}
       Inst::PrintI { reg } => {
-        uce.insert(*reg);
+        used.insert(*reg);
       }
       Inst::PrintF { reg } => {
-        uce.insert(*reg);
+        used.insert(*reg);
       }
       Inst::Finish { reg } => {
         if let Some(reg) = reg {
-          uce.insert(*reg);
+          used.insert(*reg);
         }
       }
       // Spill and Reload are seen here during the final pass over insts that
       // computes clobbered regs.
       Inst::Spill { src, .. } | Inst::SpillF { src, .. } => {
-        uce.insert(src.to_reg());
+        used.insert(src.to_reg());
       }
       Inst::Reload { dst, .. } | Inst::ReloadF { dst, .. } => {
-        def.insert(Writable::from_reg(dst.to_reg()));
+        defined.insert(Writable::from_reg(dst.to_reg()));
       }
     }
-    // Failure of either of these is serious and should be investigated.
-    debug_assert!(!def.intersects(&m0d));
-    debug_assert!(!uce.map(|r| Writable::from_reg(*r)).intersects(&m0d));
-    (def, m0d, uce)
+
+    (defined, modified, used)
   }
 
   /// Apply the specified VirtualReg->RealReg mappings to the instruction,
