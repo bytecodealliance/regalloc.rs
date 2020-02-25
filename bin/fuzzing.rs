@@ -29,23 +29,26 @@ impl FuzzingEnv {
     Ok(Label::Resolved { name: "(label???)".to_string(), bix: self.block(u)? })
   }
 
-  fn has_reg_with_rc(&self, rc: RegClass) -> bool {
+  /// Returns true whenever a register of the given register class may be used.
+  fn can_use_reg(&self, rc: RegClass) -> bool {
     !self.regs_by_rc[rc as usize].is_empty()
   }
 
-  fn can_have_reg(&self, rc: RegClass) -> bool {
-    self.has_reg_with_rc(rc)
-      || self.vregs.len() != (self.num_virtual_regs as usize)
+  /// Returns true whenever a register of the given register class may be defined.
+  fn can_def_reg(&self, rc: RegClass) -> bool {
+    // If we can use one with the given reg class, then we can redefine it!
+    self.can_use_reg(rc) || self.vregs.len() != (self.num_virtual_regs as usize)
   }
 
-  fn can_have_vreg(&self, rc: RegClass) -> bool {
+  /// Returns true whenever a virtual register of the given register class may be defined.
+  fn can_def_vreg(&self, rc: RegClass) -> bool {
     !self.vregs_by_rc[rc as usize].is_empty()
       || self.vregs.len() != (self.num_virtual_regs as usize)
   }
 
   fn def_reg(&mut self, rc: RegClass, u: &mut Unstructured) -> Result<Reg> {
-    debug_assert!(self.can_have_reg(rc));
-    let reg = if self.can_have_vreg(rc) && bool::arbitrary(u)? {
+    debug_assert!(self.can_def_reg(rc));
+    let reg = if self.can_def_vreg(rc) && bool::arbitrary(u)? {
       // virtual.
       let mut index = u16::arbitrary(u)? % self.num_virtual_regs;
       while self.vregs.contains_key(&index) && self.vregs[&index] != rc {
@@ -70,23 +73,20 @@ impl FuzzingEnv {
   }
 
   fn mod_reg(&mut self, rc: RegClass, u: &mut Unstructured) -> Result<Reg> {
-    let reg = self.get_reg(rc, u)?;
-    if reg.is_virtual() {
-      self.vregs.insert(reg.get_index() as u16, rc);
-    }
-    self.regs_by_rc[rc as usize].insert(reg);
-    Ok(reg)
+    // No need to handle the def part! If there was such a register, it was inserted in the first
+    // place with the same register class.
+    self.get_reg(rc, u)
   }
 
   fn get_reg(&self, rc: RegClass, u: &mut Unstructured) -> Result<Reg> {
-    debug_assert!(self.has_reg_with_rc(rc));
+    debug_assert!(self.can_use_reg(rc));
     let regs = Vec::from_iter(self.regs_by_rc[rc as usize].iter());
     let reg = *regs[usize::arbitrary(u)? % regs.len()];
     Ok(reg)
   }
 
   fn get_ri(&self, u: &mut Unstructured) -> Result<RI> {
-    Ok(if self.has_reg_with_rc(RegClass::I32) && bool::arbitrary(u)? {
+    Ok(if self.can_use_reg(RegClass::I32) && bool::arbitrary(u)? {
       RI::Reg { reg: self.get_reg(RegClass::I32, u)? }
     } else {
       RI::Imm { imm: u32::arbitrary(u)? }
@@ -94,7 +94,7 @@ impl FuzzingEnv {
   }
 
   fn get_am(&self, u: &mut Unstructured) -> Result<AM> {
-    debug_assert!(self.has_reg_with_rc(RegClass::I32));
+    debug_assert!(self.can_use_reg(RegClass::I32));
     let base = self.get_reg(RegClass::I32, u)?;
     Ok(if bool::arbitrary(u)? {
       // RI
@@ -125,26 +125,26 @@ impl FuzzingEnv {
     }
 
     let mut allowed_insts = Vec::new();
-    if self.can_have_reg(I32) {
+    if self.can_def_reg(I32) {
       allowed_insts.push(AllowedInst::Imm);
     }
-    if self.can_have_reg(F32) {
+    if self.can_def_reg(F32) {
       allowed_insts.push(AllowedInst::ImmF);
     }
-    if self.has_reg_with_rc(I32) {
+    if self.can_use_reg(I32) {
       allowed_insts.push(AllowedInst::Copy);
       allowed_insts.push(AllowedInst::BinOp);
       allowed_insts.push(AllowedInst::BinOpM);
       allowed_insts.push(AllowedInst::Load);
       allowed_insts.push(AllowedInst::Store);
-      if self.can_have_reg(F32) {
+      if self.can_def_reg(F32) {
         allowed_insts.push(AllowedInst::LoadF);
       }
-      if self.has_reg_with_rc(F32) {
+      if self.can_use_reg(F32) {
         allowed_insts.push(AllowedInst::StoreF);
       }
     }
-    if self.has_reg_with_rc(F32) {
+    if self.can_use_reg(F32) {
       allowed_insts.push(AllowedInst::CopyF);
       allowed_insts.push(AllowedInst::BinOpF);
     }
@@ -212,7 +212,7 @@ impl FuzzingEnv {
     }
 
     let mut allowed_insts = vec![AllowedInst::Goto, AllowedInst::Finish];
-    if self.has_reg_with_rc(I32) {
+    if self.can_use_reg(I32) {
       allowed_insts.push(AllowedInst::GotoCtf);
     }
 
@@ -225,9 +225,9 @@ impl FuzzingEnv {
       AllowedInst::Goto => Goto { target: self.label(u)? },
       AllowedInst::Finish => {
         let ret_value = if bool::arbitrary(u)? {
-          if self.has_reg_with_rc(I32) {
+          if self.can_use_reg(I32) {
             Some(self.get_reg(I32, u)?)
-          } else if self.has_reg_with_rc(F32) {
+          } else if self.can_use_reg(F32) {
             Some(self.get_reg(F32, u)?)
           } else {
             None

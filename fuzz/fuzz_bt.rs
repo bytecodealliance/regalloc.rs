@@ -10,19 +10,7 @@ fuzz_target!(|func: ir::Func| {
     let num_regs = minira::fuzzing::NUM_REAL_REGS_PER_RC as usize;
     let reg_universe = ir::make_universe(num_regs, num_regs);
 
-    let expected_ret_value = match ir::run_func(
-      &func,
-      "Before allocation",
-      &reg_universe,
-      ir::RunStage::BeforeRegalloc,
-    ) {
-        Ok(ret_value) => ret_value,
-        Err(err) => {
-            println!("can't interpret func: {}", err);
-            return;
-        }
-    };
-
+    let cloned_func = func.clone();
     func.print("before allocation");
 
     let result = match regalloc::allocate_registers(
@@ -40,12 +28,19 @@ fuzz_target!(|func: ir::Func| {
     func.update_from_alloc(result);
     func.print("after allocation");
 
+    let expected_ret_value = ir::run_func(
+      &cloned_func,
+      "Before allocation",
+      &reg_universe,
+      ir::RunStage::BeforeRegalloc,
+    );
+
     let observed_ret_value = ir::run_func(
       &func,
       "After allocation",
       &reg_universe,
       ir::RunStage::AfterRegalloc,
-    ).expect("should have run correctly the second time!");
+    );
 
     assert_eq!(
       expected_ret_value, observed_ret_value,

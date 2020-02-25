@@ -961,28 +961,16 @@ impl<'a> IState<'a> {
     state
   }
 
-  /// Helper function that returns errors in case we're interpreting, but not
-  /// after register allocation.
-  /// This is very useful for fuzzing, which runs both the interpreter and the
-  /// code after register allocation. Fuzzing may generate runtime errors that
-  /// we need to catch, during interpretation. After register allocation, since
-  /// the program ran properly in the interpreter, if there's an error, it
-  /// wasn't there in the first place and is thus a new correctness error.
-  fn interp_error<T>(&self, msg: String) -> IResult<T> {
-    if self.run_stage == RunStage::BeforeRegalloc {
-      return Err(msg);
-    }
-    panic!(msg);
-  }
-
   fn get_real_reg(&self, rreg: RealReg) -> IResult<Value> {
     // No automatic resizing.  If the rreg doesn't exist, just fail.
     match self.rregs.get(rreg.get_index()) {
       None => panic!("IState::get_real_reg: invalid rreg {:?}", rreg),
-      Some(None) => self.interp_error(format!(
-        "IState::get_real_reg: read of uninit rreg {:?} at nia {:?}",
-        rreg, self.nia
-      ))?,
+      Some(None) => {
+        return Err(format!(
+          "IState::get_real_reg: read of uninit rreg {:?} at nia {:?}",
+          rreg, self.nia
+        ))?
+      }
       Some(Some(val)) => Ok(*val),
     }
   }
@@ -1006,10 +994,10 @@ impl<'a> IState<'a> {
       None | Some(None) => {
         // entry either present or absent, but has never been written in both
         // cases.
-        self.interp_error(format!(
+        return Err(format!(
           "IState::get_virtual_reg: read of uninit vreg {:?}",
           vreg
-        ))?
+        ))?;
       }
       Some(Some(val)) => Ok(*val),
     }
@@ -1089,13 +1077,13 @@ impl<'a> IState<'a> {
   fn get_mem(&self, addr: u32) -> IResult<Value> {
     // No auto resizing of the memory.
     Ok(match self.mem.get(addr as usize) {
-      None => {
-        self.interp_error(format!("IState::getMem: invalid addr {}", addr))?
+      None => return Err(format!("IState::getMem: invalid addr {}", addr))?,
+      Some(None) => {
+        return Err(format!(
+          "IState::getMem: read of uninit mem at addr {}",
+          addr
+        ))?
       }
-      Some(None) => self.interp_error(format!(
-        "IState::getMem: read of uninit mem at addr {}",
-        addr
-      ))?,
       Some(Some(val)) => *val,
     })
   }
@@ -1103,8 +1091,9 @@ impl<'a> IState<'a> {
   fn set_mem_u32(&mut self, addr: u32, val: u32) -> IResult<()> {
     // No auto resizing of the memory
     match self.mem.get_mut(addr as usize) {
-      None => self
-        .interp_error(format!("IState::set_mem_u32: invalid addr {}", addr))?,
+      None => {
+        return Err(format!("IState::set_mem_u32: invalid addr {}", addr))?
+      }
       Some(val_p) => *val_p = Some(Value::U32(val)),
     }
     Ok(())
@@ -1113,8 +1102,9 @@ impl<'a> IState<'a> {
   fn set_mem_f32(&mut self, addr: u32, val: f32) -> IResult<()> {
     // No auto resizing of the memory
     match self.mem.get_mut(addr as usize) {
-      None => self
-        .interp_error(format!("IState::set_mem_f32: invalid addr {}", addr))?,
+      None => {
+        return Err(format!("IState::set_mem_f32: invalid addr {}", addr))?
+      }
       Some(val_p) => *val_p = Some(Value::F32(val)),
     }
     Ok(())
@@ -1163,24 +1153,19 @@ impl<'a> IState<'a> {
       Inst::BinOp { op, dst, src_left, src_right } => {
         let src_left_v = self.get_reg(*src_left)?.to_u32();
         let src_right_v = self.get_RI(src_right)?;
-        let dst_v = op
-          .calc(src_left_v, src_right_v)
-          .or_else(|err| self.interp_error(err))?;
+        let dst_v = op.calc(src_left_v, src_right_v)?;
         self.set_reg_u32(*dst, dst_v);
       }
       Inst::BinOpM { op, dst, src_right } => {
         let mut dst_v = self.get_reg(*dst)?.to_u32();
         let src_right_v = self.get_RI(src_right)?;
-        dst_v =
-          op.calc(dst_v, src_right_v).or_else(|err| self.interp_error(err))?;
+        dst_v = op.calc(dst_v, src_right_v)?;
         self.set_reg_u32(*dst, dst_v);
       }
       Inst::BinOpF { op, dst, src_left, src_right } => {
         let src_left_v = self.get_reg(*src_left)?.to_f32();
         let src_right_v = self.get_reg(*src_right)?.to_f32();
-        let dst_v = op
-          .calc(src_left_v, src_right_v)
-          .or_else(|err| self.interp_error(err))?;
+        let dst_v = op.calc(src_left_v, src_right_v)?;
         self.set_reg_f32(*dst, dst_v);
       }
       Inst::Load { dst, addr } => {
