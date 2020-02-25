@@ -722,7 +722,6 @@ fn allocate_blocked_reg<F: Function>(
           continue;
         }
         if let Some(reg) = state.intervals.fixed_reg(id) {
-          trace!("JEEJ {:?}, {:?}", id, reg);
           if reg == best_reg {
             block_pos = InstPoint::min_value();
             // TODO this break assumes there's only one fixed interval per real

@@ -17,6 +17,7 @@ struct FuzzingEnv {
   vregs: HashMap<u16, RegClass>,
   /// Really a hashmap from rc to HashSet<Reg>.
   regs_by_rc: Vec<HashSet<Reg>>,
+  vregs_by_rc: Vec<HashSet<u16>>,
 }
 
 impl FuzzingEnv {
@@ -37,30 +38,33 @@ impl FuzzingEnv {
       || self.vregs.len() != (self.num_virtual_regs as usize)
   }
 
+  fn can_have_vreg(&self, rc: RegClass) -> bool {
+    !self.vregs_by_rc[rc as usize].is_empty()
+      || self.vregs.len() != (self.num_virtual_regs as usize)
+  }
+
   fn def_reg(&mut self, rc: RegClass, u: &mut Unstructured) -> Result<Reg> {
-    let reg;
-    loop {
-      if bool::arbitrary(u)? {
-        // virtual.
-        let index = u16::arbitrary(u)? % self.num_virtual_regs;
-        let ret = Reg::new_virtual(rc, index as u32);
-        if self.vregs.contains_key(&index) && self.vregs[&index] != rc {
-          continue;
-        }
-        self.vregs.insert(index, rc);
-        reg = ret;
-      } else {
-        // real.
-        // TODO there's insider knowledge about the real reg universe stuck here.
-        let index = match rc {
-          RegClass::I32 => 0,
-          RegClass::F32 => 8,
-          _ => panic!("unexpected rc"),
-        } + u8::arbitrary(u)? % NUM_REAL_REGS_PER_RC;
-        reg = Reg::new_real(rc, 0x0, index);
+    debug_assert!(self.can_have_reg(rc));
+    let reg = if self.can_have_vreg(rc) && bool::arbitrary(u)? {
+      // virtual.
+      let mut index = u16::arbitrary(u)? % self.num_virtual_regs;
+      while self.vregs.contains_key(&index) && self.vregs[&index] != rc {
+        // linear probing!
+        index = (index + 1) % self.num_virtual_regs;
       }
-      break;
-    }
+      self.vregs.insert(index, rc);
+      self.vregs_by_rc[rc as usize].insert(index);
+      Reg::new_virtual(rc, index as u32)
+    } else {
+      // real.
+      // TODO there's insider knowledge about the real reg universe stuck here.
+      let index = match rc {
+        RegClass::I32 => 0,
+        RegClass::F32 => 8,
+        _ => panic!("unexpected rc"),
+      } + u8::arbitrary(u)? % NUM_REAL_REGS_PER_RC;
+      Reg::new_real(rc, 0x0, index)
+    };
     self.regs_by_rc[rc as usize].insert(reg);
     Ok(reg)
   }
@@ -106,152 +110,134 @@ impl FuzzingEnv {
     use Inst::*;
     use RegClass::*;
 
-    const NUM_VARIANTS: u8 = 14;
-
-    let inst;
-    loop {
-      inst = match u8::arbitrary(u)? % NUM_VARIANTS {
-        0 => {
-          if !self.can_have_reg(I32) {
-            continue;
-          }
-          Imm { dst: self.def_reg(I32, u)?, imm: u32::arbitrary(u)? }
-        }
-        1 => {
-          if !self.can_have_reg(F32) {
-            continue;
-          }
-          ImmF { dst: self.def_reg(F32, u)?, imm: f32::arbitrary(u)? }
-        }
-        2 => {
-          if !self.has_reg_with_rc(I32) {
-            continue;
-          }
-          Copy { dst: self.def_reg(I32, u)?, src: self.get_reg(I32, u)? }
-        }
-        3 => {
-          if !self.has_reg_with_rc(F32) {
-            continue;
-          }
-          CopyF { dst: self.def_reg(F32, u)?, src: self.get_reg(F32, u)? }
-        }
-        4 => {
-          if !self.has_reg_with_rc(I32) {
-            continue;
-          }
-          BinOp {
-            op: ir::BinOp::arbitrary(u)?,
-            dst: self.def_reg(I32, u)?,
-            src_left: self.get_reg(I32, u)?,
-            src_right: self.get_ri(u)?,
-          }
-        }
-        5 => {
-          if !self.has_reg_with_rc(I32) {
-            continue;
-          }
-          BinOpM {
-            op: ir::BinOp::arbitrary(u)?,
-            dst: self.mod_reg(I32, u)?,
-            src_right: self.get_ri(u)?,
-          }
-        }
-        6 => {
-          if !self.has_reg_with_rc(F32) {
-            continue;
-          }
-          BinOpF {
-            op: ir::BinOpF::arbitrary(u)?,
-            dst: self.def_reg(F32, u)?,
-            src_left: self.get_reg(F32, u)?,
-            src_right: self.get_reg(F32, u)?,
-          }
-        }
-        7 => {
-          if !self.has_reg_with_rc(I32) {
-            continue;
-          }
-          Load { dst: self.def_reg(I32, u)?, addr: self.get_am(u)? }
-        }
-        8 => {
-          if !self.has_reg_with_rc(I32) {
-            continue;
-          }
-          LoadF { dst: self.def_reg(F32, u)?, addr: self.get_am(u)? }
-        }
-        9 => {
-          if !self.has_reg_with_rc(I32) {
-            continue;
-          }
-          Store { addr: self.get_am(u)?, src: self.get_reg(I32, u)? }
-        }
-        10 => {
-          if !self.has_reg_with_rc(F32) {
-            continue;
-          }
-          if !self.has_reg_with_rc(I32) {
-            continue;
-          }
-          StoreF { addr: self.get_am(u)?, src: self.get_reg(F32, u)? }
-        }
-        11 => {
-          if !self.has_reg_with_rc(I32) {
-            continue;
-          }
-          PrintI { reg: self.get_reg(I32, u)? }
-        }
-        12 => {
-          if !self.has_reg_with_rc(F32) {
-            continue;
-          }
-          PrintF { reg: self.get_reg(F32, u)? }
-        }
-        13 => return self.inst_control_flow(u),
-        x => {
-          debug_assert!(x < NUM_VARIANTS, "update NUM_VARIANTS above");
-          unreachable!()
-        }
-      };
-      break;
+    enum AllowedInst {
+      Imm,
+      ImmF,
+      Copy,
+      CopyF,
+      BinOp,
+      BinOpM,
+      BinOpF,
+      Load,
+      LoadF,
+      Store,
+      StoreF,
     }
-    Ok(inst)
+
+    let mut allowed_insts = Vec::new();
+    if self.can_have_reg(I32) {
+      allowed_insts.push(AllowedInst::Imm);
+    }
+    if self.can_have_reg(F32) {
+      allowed_insts.push(AllowedInst::ImmF);
+    }
+    if self.has_reg_with_rc(I32) {
+      allowed_insts.push(AllowedInst::Copy);
+      allowed_insts.push(AllowedInst::BinOp);
+      allowed_insts.push(AllowedInst::BinOpM);
+      allowed_insts.push(AllowedInst::Load);
+      allowed_insts.push(AllowedInst::Store);
+      if self.can_have_reg(F32) {
+        allowed_insts.push(AllowedInst::LoadF);
+      }
+      if self.has_reg_with_rc(F32) {
+        allowed_insts.push(AllowedInst::StoreF);
+      }
+    }
+    if self.has_reg_with_rc(F32) {
+      allowed_insts.push(AllowedInst::CopyF);
+      allowed_insts.push(AllowedInst::BinOpF);
+    }
+
+    debug_assert!(!allowed_insts.is_empty());
+
+    let index = u8::arbitrary(u)? as usize % (allowed_insts.len() + 1);
+    if index == allowed_insts.len() {
+      return self.inst_control_flow(u);
+    }
+
+    Ok(match allowed_insts[index] {
+      AllowedInst::Imm => {
+        Imm { dst: self.def_reg(I32, u)?, imm: u32::arbitrary(u)? }
+      }
+      AllowedInst::ImmF => {
+        ImmF { dst: self.def_reg(F32, u)?, imm: f32::arbitrary(u)? }
+      }
+      AllowedInst::Copy => {
+        Copy { dst: self.def_reg(I32, u)?, src: self.get_reg(I32, u)? }
+      }
+      AllowedInst::CopyF => {
+        CopyF { dst: self.def_reg(F32, u)?, src: self.get_reg(F32, u)? }
+      }
+      AllowedInst::BinOp => BinOp {
+        op: ir::BinOp::arbitrary(u)?,
+        dst: self.def_reg(I32, u)?,
+        src_left: self.get_reg(I32, u)?,
+        src_right: self.get_ri(u)?,
+      },
+      AllowedInst::BinOpM => BinOpM {
+        op: ir::BinOp::arbitrary(u)?,
+        dst: self.mod_reg(I32, u)?,
+        src_right: self.get_ri(u)?,
+      },
+      AllowedInst::BinOpF => BinOpF {
+        op: ir::BinOpF::arbitrary(u)?,
+        dst: self.def_reg(F32, u)?,
+        src_left: self.get_reg(F32, u)?,
+        src_right: self.get_reg(F32, u)?,
+      },
+      AllowedInst::Load => {
+        Load { dst: self.def_reg(I32, u)?, addr: self.get_am(u)? }
+      }
+      AllowedInst::LoadF => {
+        LoadF { dst: self.def_reg(F32, u)?, addr: self.get_am(u)? }
+      }
+      AllowedInst::Store => {
+        Store { addr: self.get_am(u)?, src: self.get_reg(I32, u)? }
+      }
+      AllowedInst::StoreF => {
+        StoreF { addr: self.get_am(u)?, src: self.get_reg(F32, u)? }
+      }
+    })
   }
 
   fn inst_control_flow(&self, u: &mut Unstructured) -> Result<Inst> {
     use Inst::*;
     use RegClass::*;
-    let inst;
-    loop {
-      inst = match u8::arbitrary(u)? % 8 {
-        0 => {
-          if !self.has_reg_with_rc(I32) {
-            continue;
-          }
-          GotoCTF {
-            cond: self.get_reg(I32, u)?,
-            target_true: self.label(u)?,
-            target_false: self.label(u)?,
-          }
-        }
-        1 => Goto { target: self.label(u)? },
-        _ => {
-          let ret_value = if bool::arbitrary(u)? {
-            if self.has_reg_with_rc(I32) {
-              Some(self.get_reg(I32, u)?)
-            } else if self.has_reg_with_rc(F32) {
-              Some(self.get_reg(F32, u)?)
-            } else {
-              None
-            }
+
+    enum AllowedInst {
+      Goto,
+      GotoCtf,
+      Finish,
+    }
+
+    let mut allowed_insts = vec![AllowedInst::Goto, AllowedInst::Finish];
+    if self.has_reg_with_rc(I32) {
+      allowed_insts.push(AllowedInst::GotoCtf);
+    }
+
+    Ok(match allowed_insts[u8::arbitrary(u)? as usize % allowed_insts.len()] {
+      AllowedInst::GotoCtf => GotoCTF {
+        cond: self.get_reg(I32, u)?,
+        target_true: self.label(u)?,
+        target_false: self.label(u)?,
+      },
+      AllowedInst::Goto => Goto { target: self.label(u)? },
+      AllowedInst::Finish => {
+        let ret_value = if bool::arbitrary(u)? {
+          if self.has_reg_with_rc(I32) {
+            Some(self.get_reg(I32, u)?)
+          } else if self.has_reg_with_rc(F32) {
+            Some(self.get_reg(F32, u)?)
           } else {
             None
-          };
-          Finish { reg: ret_value }
-        }
-      };
-      break;
-    }
-    Ok(inst)
+          }
+        } else {
+          None
+        };
+        Finish { reg: ret_value }
+      }
+    })
   }
 }
 
@@ -265,6 +251,7 @@ impl Arbitrary for Func {
       num_virtual_regs,
       vregs: HashMap::new(),
       regs_by_rc: vec![HashSet::new(); NUM_REG_CLASSES as usize],
+      vregs_by_rc: vec![HashSet::new(); NUM_REG_CLASSES as usize],
     };
 
     let entry =
