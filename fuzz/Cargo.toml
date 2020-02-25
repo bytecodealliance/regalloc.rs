@@ -22,6 +22,10 @@ name = "bt"
 path = "fuzz_bt.rs"
 
 [[bin]]
+name = "bt_differential"
+path = "fuzz_bt_differential.rs"
+
+[[bin]]
 name = "validator"
 path = "fuzz_validator.rs"
 
