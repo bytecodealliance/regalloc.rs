@@ -10,6 +10,13 @@ use regalloc::*;
 pub const NUM_REAL_REGS_PER_RC: u8 = 8;
 const NUM_REG_CLASSES: u32 = 5;
 
+/// Maximum number of vregs.
+const NUM_VREGS: u16 = 16;
+/// Maximum number of blocks.
+const NUM_BLOCKS: u8 = 8;
+/// Maximum number of instructions per block.
+const NUM_BLOCK_INSTS: u8 = 8;
+
 struct FuzzingEnv {
   num_blocks: u8,
   num_virtual_regs: u16,
@@ -26,7 +33,8 @@ impl FuzzingEnv {
   }
 
   fn label(&self, u: &mut Unstructured) -> Result<Label> {
-    Ok(Label::Resolved { name: "(label???)".to_string(), bix: self.block(u)? })
+    let bix = self.block(u)?;
+    Ok(Label::Resolved { name: format!("{:?}", bix), bix })
   }
 
   /// Returns true whenever a register of the given register class may be used.
@@ -243,8 +251,8 @@ impl FuzzingEnv {
 
 impl Arbitrary for Func {
   fn arbitrary(u: &mut Unstructured) -> arbitrary::Result<Func> {
-    let num_virtual_regs = 1 + (u16::arbitrary(u)? % u16::max_value());
-    let mut num_blocks = 1 + (u8::arbitrary(u)? % u8::max_value());
+    let num_virtual_regs = 1 + (u16::arbitrary(u)? % NUM_VREGS);
+    let mut num_blocks = 1 + (u8::arbitrary(u)? % NUM_BLOCKS);
 
     let mut env = FuzzingEnv {
       num_blocks,
@@ -265,7 +273,7 @@ impl Arbitrary for Func {
     while num_blocks > 0 {
       let start = insts.len();
 
-      let mut num_block_insts = 1 + (u8::arbitrary(u)? % 255);
+      let mut num_block_insts = 1 + (u8::arbitrary(u)? % NUM_BLOCK_INSTS);
 
       while num_block_insts > 0 {
         let inst = if num_block_insts == 1 {
