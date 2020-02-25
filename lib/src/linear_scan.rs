@@ -332,7 +332,7 @@ struct State<'a, F: Function> {
   handled: Vec<LiveId>,
 
   /// Next available spill slot.
-  spill_slot: SpillSlot,
+  next_spill_slot: SpillSlot,
 }
 
 impl<'a, F: Function> State<'a, F> {
@@ -350,7 +350,7 @@ impl<'a, F: Function> State<'a, F> {
       active: Vec::new(),
       inactive: Vec::new(),
       handled: Vec::new(),
-      spill_slot: SpillSlot::new(0),
+      next_spill_slot: SpillSlot::new(0),
     }
   }
 
@@ -375,18 +375,36 @@ impl<'a, F: Function> State<'a, F> {
 
   fn spill(&mut self, id: LiveId) {
     debug_assert!(!self.intervals.is_fixed(id), "can't split fixed interval");
+    debug_assert!(self.intervals.spill_slot(id).is_none(), "already spilled");
     debug!("spilling {}", self.intervals.display(id, &self.fragments));
+
     // TODO this should be per vreg instead.
-    if let Some(_) = self.intervals.spill_slot(id) {
-      // Already has a spill slot inherited from a parent interval.
-    } else {
-      let reg_class = self.intervals.reg_class(id);
-      let vreg = self.intervals.vreg(id);
-      let size_slot = self.func.get_spillslot_size(reg_class, vreg);
-      let spill_slot = self.spill_slot.round_up(size_slot);
-      self.intervals.assign_spill(id, spill_slot);
-      self.spill_slot = self.spill_slot.inc(1);
+    let mut spill_slot = None;
+
+    // Try to find if there's a parent which allocated a spill slot for this
+    // particular virtual register, and reuse it in this case.
+    let mut cur_id = id;
+    while let Some(parent) = &self.intervals.data[cur_id.0].parent {
+      if let Some(parent_spill) = self.intervals.spill_slot(*parent) {
+        spill_slot = Some(parent_spill);
+        break;
+      }
+      cur_id = *parent;
     }
+
+    let spill_slot = match spill_slot {
+      None => {
+        let reg_class = self.intervals.reg_class(id);
+        let vreg = self.intervals.vreg(id);
+        let size_slot = self.func.get_spillslot_size(reg_class, vreg);
+        let spill_slot = self.next_spill_slot.round_up(size_slot);
+        self.next_spill_slot = self.next_spill_slot.inc(1);
+        spill_slot
+      }
+      Some(x) => x,
+    };
+
+    self.intervals.assign_spill(id, spill_slot);
   }
 }
 
@@ -651,7 +669,15 @@ fn allocate_blocked_reg<F: Function>(
         }
       }
     }
-    *best.unwrap().0
+    match best {
+      Some(best) => *best.0,
+      None => {
+        return Err(format!(
+          "no register available in this class: {:?}",
+          reg_class
+        ))
+      }
+    }
   };
   debug!(
     "selecting blocked register {:?} with furthest next use at {:?}",
@@ -1143,12 +1169,12 @@ fn split_and_spill<F: Function>(
     // - split the parent at last_use into itself [..., prev of last use] and child: [last_use, ...]
     // - split the child into [last_use, last_use] and grandchild [succ of last_use, ...]
     debug!("two steps split and spill");
-    state.spill(id);
 
     let child = split(state, id, Split::At(last_use));
     state
       .intervals
       .set_reg(child, state.intervals.allocated_register(id).unwrap());
+    state.spill(child);
 
     split(state, child, Split::Between(last_use, split_pos))
   } else {
@@ -1306,7 +1332,7 @@ pub fn run<F: Function>(
     }
     debug!("");
 
-    (state.fragments, state.intervals, state.spill_slot.get())
+    (state.fragments, state.intervals, state.next_spill_slot.get())
   };
 
   // Filter fixed intervals, they're already in the right place.
