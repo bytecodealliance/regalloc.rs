@@ -53,7 +53,7 @@ pub use crate::data_structures::InstRegUses;
 // instructions.
 
 pub use crate::data_structures::TypedIxVec;
-pub use crate::data_structures::{BlockIx, InstIx, MyRange};
+pub use crate::data_structures::{BlockIx, InstIx, Range};
 
 /// A trait defined by the regalloc client to provide access to its
 /// machine-instruction / CFG representation.
@@ -70,8 +70,8 @@ pub trait Function {
   fn insns(&self) -> &[Self::Inst];
 
   /// Get all instruction indices as an iterable range.
-  fn insn_indices(&self) -> MyRange<InstIx> {
-    MyRange::new(InstIx::new(0), self.insns().len())
+  fn insn_indices(&self) -> Range<InstIx> {
+    Range::new(InstIx::new(0), self.insns().len())
   }
 
   /// Allow mutable access to the underlying vector of instructions.
@@ -85,13 +85,13 @@ pub trait Function {
   fn get_insn_mut(&mut self, insn: InstIx) -> &mut Self::Inst;
 
   /// Allow iteration over basic blocks (in instruction order).
-  fn blocks(&self) -> MyRange<BlockIx>;
+  fn blocks(&self) -> Range<BlockIx>;
 
   /// Get the index of the entry block.
   fn entry_block(&self) -> BlockIx;
 
   /// Provide the range of instruction indices contained in each block.
-  fn block_insns(&self, block: BlockIx) -> MyRange<InstIx>;
+  fn block_insns(&self, block: BlockIx) -> Range<InstIx>;
 
   /// Get CFG successors for a given block.
   fn block_succs(&self, block: BlockIx) -> Vec<BlockIx>;

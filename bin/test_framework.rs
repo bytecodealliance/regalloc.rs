@@ -8,7 +8,7 @@
 use arbitrary::Arbitrary;
 
 use regalloc::{
-  BlockIx, InstIx, Map, MyRange, RealReg, RealRegUniverse, Reg, RegClass,
+  BlockIx, InstIx, Map, Range, RealReg, RealRegUniverse, Reg, RegClass,
   RegClassInfo, Set, SpillSlot, TypedIxVec, VirtualReg, Writable,
   NUM_REG_CLASSES,
 };
@@ -1725,13 +1725,13 @@ impl regalloc::Function for Func {
     BlockIx::new(0)
   }
 
-  fn blocks(&self) -> MyRange<BlockIx> {
+  fn blocks(&self) -> Range<BlockIx> {
     self.blocks.range()
   }
 
   /// Provide the range of instruction indices contained in each block.
-  fn block_insns(&self, block: BlockIx) -> MyRange<InstIx> {
-    MyRange::new(self.blocks[block].start, self.blocks[block].len as usize)
+  fn block_insns(&self, block: BlockIx) -> Range<InstIx> {
+    Range::new(self.blocks[block].start, self.blocks[block].len as usize)
   }
 
   /// Get CFG successors: indexed by block, provide a list of successor blocks.

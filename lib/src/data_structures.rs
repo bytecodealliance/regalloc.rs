@@ -207,12 +207,13 @@ pub trait PlusN: PlusOne {
 }
 
 #[derive(Clone, Copy)]
-pub struct MyRange<T> {
+pub struct Range<T> {
   first: T,
   last_plus1: T,
   len: usize,
 }
-impl<T: Copy + PartialOrd + PlusOne> IntoIterator for MyRange<T> {
+
+impl<T: Copy + PartialOrd + PlusOne> IntoIterator for Range<T> {
   type Item = T;
   type IntoIter = MyIterator<T>;
   fn into_iter(self) -> Self::IntoIter {
@@ -220,10 +221,10 @@ impl<T: Copy + PartialOrd + PlusOne> IntoIterator for MyRange<T> {
   }
 }
 
-impl<T: Copy + Eq + Ord + PlusOne + PlusN> MyRange<T> {
+impl<T: Copy + Eq + Ord + PlusOne + PlusN> Range<T> {
   /// Create a new range object.
-  pub fn new(from: T, len: usize) -> MyRange<T> {
-    MyRange { first: from, last_plus1: from.plus_n(len), len }
+  pub fn new(from: T, len: usize) -> Range<T> {
+    Range { first: from, last_plus1: from.plus_n(len), len }
   }
 
   pub fn start(&self) -> T {
@@ -250,7 +251,7 @@ impl<T: Copy + Eq + Ord + PlusOne + PlusN> MyRange<T> {
 }
 
 pub struct MyIterator<T> {
-  range: MyRange<T>,
+  range: Range<T>,
   next: T,
 }
 impl<T: Copy + PartialOrd + PlusOne> Iterator for MyIterator<T> {
@@ -313,8 +314,8 @@ where
   pub fn elems_mut(&mut self) -> &mut [Ty] {
     &mut self.vek[..]
   }
-  pub fn range(&self) -> MyRange<TyIx> {
-    MyRange::new(TyIx::zero(), self.len() as usize)
+  pub fn range(&self) -> Range<TyIx> {
+    Range::new(TyIx::zero(), self.len() as usize)
   }
 }
 
@@ -384,9 +385,9 @@ macro_rules! generate_boilerplate {
         $TypeIx::$TypeIx(self.get() - delta)
       }
       #[allow(dead_code)]
-      pub fn dotdot(&self, last_plus1: $TypeIx) -> MyRange<$TypeIx> {
+      pub fn dotdot(&self, last_plus1: $TypeIx) -> Range<$TypeIx> {
         let len = (last_plus1.get() - self.get()) as usize;
-        MyRange::new(*self, len)
+        Range::new(*self, len)
       }
     }
     impl fmt::Debug for $TypeIx {
