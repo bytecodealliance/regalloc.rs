@@ -4,7 +4,12 @@
 
 //! Main file / top-level module for minira library.
 
+// Make the analysis module public for fuzzing.
+#[cfg(feature = "fuzzing")]
+pub mod analysis;
+#[cfg(not(feature = "fuzzing"))]
 mod analysis;
+
 mod backtracking;
 mod data_structures;
 mod inst_stream;

@@ -1,12 +1,19 @@
 use crate::test_framework::*;
 use regalloc::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+#[derive(PartialEq, Debug)]
+pub enum RegRef {
+  Use,
+  Def,
+}
 
 pub struct Context<'rru> {
   pub num_vregs: usize,
   pub num_blocks: u32,
   real_reg_universe: &'rru RealRegUniverse,
   vreg_types: HashMap<usize, RegClass>,
+  used_regs: HashSet<Reg>,
 }
 
 impl<'rru> Context<'rru> {
@@ -16,12 +23,21 @@ impl<'rru> Context<'rru> {
       real_reg_universe,
       num_blocks: func.blocks.len(),
       vreg_types: HashMap::new(),
+      used_regs: HashSet::new(),
     }
   }
 
-  pub fn check_reg(&mut self, reg: Reg) -> bool {
+  pub fn check_reg(&mut self, reg: Reg, reg_ref: RegRef) -> bool {
     let rc = reg.get_class();
     let index = reg.get_index();
+
+    if !self.used_regs.contains(&reg) {
+      if reg_ref == RegRef::Use {
+        // Use before def.
+        return false;
+      }
+      self.used_regs.insert(reg);
+    }
 
     if reg.is_virtual() {
       // If the register has been mentioned earlier, check that it didn't change type in the
@@ -51,6 +67,12 @@ impl<'rru> Context<'rru> {
         None => false,
       }
     }
+  }
+
+  pub fn check_reg_rc(
+    &mut self, reg: &Reg, reg_ref: RegRef, expected_class: RegClass,
+  ) -> bool {
+    reg.get_class() == expected_class && self.check_reg(*reg, reg_ref)
   }
 }
 
@@ -131,6 +153,8 @@ pub fn validate(
           inst, b.name
         ));
       }
+
+      // This is a poor man's liveness analysis, since it doesn't take control flow into account.
       if !inst.type_checks(&mut cx) {
         return Err(format!(
           "inst {:?} in block {} does not type check",
@@ -155,6 +179,10 @@ pub fn validate(
         }
       }
     }
+  }
+
+  if let Err(err) = regalloc::analysis::run_analysis(func, real_reg_universe) {
+    return Err(err.to_string());
   }
 
   Ok(())

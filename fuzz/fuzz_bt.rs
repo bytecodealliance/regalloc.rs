@@ -10,7 +10,7 @@ fuzz_target!(|func: ir::Func| {
     let num_regs = minira::fuzzing::NUM_REAL_REGS_PER_RC as usize;
     let reg_universe = ir::make_universe(num_regs, num_regs);
 
-    func.print("before allocation");
+    let func_backup = func.clone();
 
     let result = match regalloc::allocate_registers(
       &mut func,
@@ -19,11 +19,11 @@ fuzz_target!(|func: ir::Func| {
     ) {
         Ok(result) => result,
         Err(err) => {
+            func_backup.print("");
             println!("allocation error: {}", err);
             return;
         }
     };
 
     func.update_from_alloc(result);
-    func.print("after allocation");
 });

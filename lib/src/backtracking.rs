@@ -398,7 +398,7 @@ pub fn alloc_main<F: Function>(
 ) -> Result<RegAllocResult<F>, String> {
   // Note that the analysis phase can fail; hence we propagate any error.
   let (san_reg_uses, rlr_env, mut vlr_env, mut frag_env, _liveouts) =
-    run_analysis(func, reg_universe)?;
+    run_analysis(func, reg_universe).map_err(|err| err.to_string())?;
 
   // -------- Alloc main --------
 

@@ -16,6 +16,29 @@ use crate::data_structures::{
 };
 use crate::interface::Function;
 
+pub enum AnalysisError {
+  /// A critical edge from "from" to "to" has been found, and should have been
+  /// removed by the caller in the first place.
+  CriticalEdge { from: BlockIx, to: BlockIx },
+
+  /// Some values in the entry block are livein to the function, while not being
+  /// marked as such.
+  EntryLiveinValues,
+}
+
+impl ToString for AnalysisError {
+  fn to_string(&self) -> String {
+    match self {
+      AnalysisError::CriticalEdge { from, to } => {
+        format!("critical edge detected, from {:?} to {:?}", from, to)
+      }
+      AnalysisError::EntryLiveinValues => {
+        "entry block has live-in value not present in function liveins".into()
+      }
+    }
+  }
+}
+
 //=============================================================================
 // Control-flow analysis results for a Func: predecessors, successors,
 // dominators and loop depths.
@@ -42,7 +65,7 @@ struct CFGInfo {
 
 impl CFGInfo {
   #[inline(never)]
-  fn create<F: Function>(func: &F) -> Result<Self, String> {
+  fn create<F: Function>(func: &F) -> Result<Self, AnalysisError> {
     let nBlocks = func.blocks().len() as u32;
 
     // First calculate the succ map, since we can do that directly from
@@ -77,11 +100,10 @@ impl CFGInfo {
       }
       for dst in dst_set.iter() {
         if pred_map[*dst].card() >= 2 {
-          return Err(format!(
-            "critical edge found from {:?} to {:?}",
-            BlockIx::new(src),
-            dst
-          ));
+          return Err(AnalysisError::CriticalEdge {
+            from: BlockIx::new(src),
+            to: *dst,
+          });
         }
       }
     }
@@ -925,7 +947,7 @@ pub fn run_analysis<F: Function>(
     // Liveouts
     TypedIxVec<BlockIx, Set<Reg>>,
   ),
-  String,
+  AnalysisError,
 > {
   // See |get_sanitized_reg_uses| for the meaning of "sanitized".
   let san_reg_uses = get_sanitized_reg_uses(func, reg_universe);
@@ -1015,10 +1037,7 @@ pub fn run_analysis<F: Function>(
       .collect(),
   );
   if !livein_sets_per_block[func.entry_block()].is_subset_of(&func_liveins) {
-    return Err(
-      "entry block has live-in value not present in function liveins"
-        .to_string(),
-    );
+    return Err(AnalysisError::EntryLiveinValues);
   }
 
   // Add function liveouts to every block ending in a return.

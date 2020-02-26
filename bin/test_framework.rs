@@ -14,7 +14,7 @@ use regalloc::{
 };
 use std::fmt;
 
-use crate::validator::{validate, Context as ValidatorContext};
+use crate::validator::{validate, Context as ValidatorContext, RegRef};
 
 //=============================================================================
 // Definition of: Label, RI (reg-or-immediate operands), AM (address modes),
@@ -101,7 +101,7 @@ impl RI {
   }
   fn type_checks(&self, cx: &mut ValidatorContext) -> bool {
     match self {
-      RI::Reg { reg } => reg_type_checks(reg, RegClass::I32, cx),
+      RI::Reg { reg } => cx.check_reg_rc(reg, RegRef::Use, RegClass::I32),
       RI::Imm { .. } => true,
     }
   }
@@ -167,9 +167,10 @@ impl AM {
   fn type_checks(&self, cx: &mut ValidatorContext) -> bool {
     use RegClass::*;
     match self {
-      AM::RI { base, .. } => reg_type_checks(base, I32, cx),
+      AM::RI { base, .. } => cx.check_reg_rc(base, RegRef::Use, I32),
       AM::RR { base, offset } => {
-        reg_type_checks(base, I32, cx) && reg_type_checks(offset, I32, cx)
+        cx.check_reg_rc(base, RegRef::Use, I32)
+          && cx.check_reg_rc(offset, RegRef::Use, I32)
       }
     }
   }
@@ -792,49 +793,56 @@ impl Inst {
 
   pub fn type_checks(&self, cx: &mut ValidatorContext) -> bool {
     use RegClass::*;
+    // Always check uses before defs.
     match self {
-      Inst::Imm { dst, imm: _ } => reg_type_checks(dst, I32, cx),
-      Inst::ImmF { dst, imm: _ } => reg_type_checks(dst, F32, cx),
+      Inst::Imm { dst, imm: _ } => cx.check_reg_rc(dst, RegRef::Def, I32),
+      Inst::ImmF { dst, imm: _ } => cx.check_reg_rc(dst, RegRef::Def, F32),
       Inst::Copy { dst, src } => {
-        reg_type_checks(dst, I32, cx) && reg_type_checks(src, I32, cx)
+        cx.check_reg_rc(src, RegRef::Use, I32)
+          && cx.check_reg_rc(dst, RegRef::Def, I32)
       }
       Inst::CopyF { dst, src } => {
-        reg_type_checks(dst, F32, cx) && reg_type_checks(src, F32, cx)
+        cx.check_reg_rc(src, RegRef::Use, F32)
+          && cx.check_reg_rc(dst, RegRef::Def, F32)
       }
       Inst::Load { dst, addr } => {
-        reg_type_checks(dst, I32, cx) && addr.type_checks(cx)
+        addr.type_checks(cx) && cx.check_reg_rc(dst, RegRef::Def, I32)
       }
       Inst::LoadF { dst, addr } => {
-        reg_type_checks(dst, F32, cx) && addr.type_checks(cx)
+        addr.type_checks(cx) && cx.check_reg_rc(dst, RegRef::Def, F32)
       }
       Inst::Store { addr, src } => {
-        reg_type_checks(src, I32, cx) && addr.type_checks(cx)
+        cx.check_reg_rc(src, RegRef::Use, I32) && addr.type_checks(cx)
       }
       Inst::StoreF { addr, src } => {
-        reg_type_checks(src, F32, cx) && addr.type_checks(cx)
+        cx.check_reg_rc(src, RegRef::Use, F32) && addr.type_checks(cx)
       }
       Inst::Goto { target } => target.type_checks(cx),
       Inst::GotoCTF { cond, target_true, target_false } => {
-        reg_type_checks(cond, I32, cx)
+        cx.check_reg_rc(cond, RegRef::Use, I32)
           && target_true.type_checks(cx)
           && target_false.type_checks(cx)
       }
       Inst::PrintS { .. } => true,
-      Inst::PrintI { reg } => reg_type_checks(reg, I32, cx),
-      Inst::PrintF { reg } => reg_type_checks(reg, F32, cx),
-      Inst::Finish { reg } => reg.map_or(true, |reg| cx.check_reg(reg)),
+      Inst::PrintI { reg } => cx.check_reg_rc(reg, RegRef::Use, I32),
+      Inst::PrintF { reg } => cx.check_reg_rc(reg, RegRef::Use, F32),
+      Inst::Finish { reg } => {
+        reg.map_or(true, |reg| cx.check_reg(reg, RegRef::Use))
+      }
       Inst::BinOp { op: _, dst, src_left, src_right } => {
-        reg_type_checks(dst, I32, cx)
-          && reg_type_checks(src_left, I32, cx)
+        cx.check_reg_rc(src_left, RegRef::Use, I32)
           && src_right.type_checks(cx)
+          && cx.check_reg_rc(dst, RegRef::Def, I32)
       }
       Inst::BinOpM { op: _, dst, src_right } => {
-        reg_type_checks(dst, I32, cx) && src_right.type_checks(cx)
+        cx.check_reg_rc(dst, RegRef::Use, I32)
+          && src_right.type_checks(cx)
+          && cx.check_reg_rc(dst, RegRef::Def, I32)
       }
       Inst::BinOpF { op: _, dst, src_left, src_right } => {
-        reg_type_checks(dst, F32, cx)
-          && reg_type_checks(src_left, F32, cx)
-          && reg_type_checks(src_right, F32, cx)
+        cx.check_reg_rc(src_left, RegRef::Use, F32)
+          && cx.check_reg_rc(src_right, RegRef::Use, F32)
+          && cx.check_reg_rc(dst, RegRef::Def, F32)
       }
 
       // These are not user instructions.
@@ -846,12 +854,6 @@ impl Inst {
       }
     }
   }
-}
-
-fn reg_type_checks(
-  reg: &Reg, expected_class: RegClass, cx: &mut ValidatorContext,
-) -> bool {
-  cx.check_reg(*reg) && reg.get_class() == expected_class
 }
 
 //=============================================================================

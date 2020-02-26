@@ -7,7 +7,7 @@ use std::iter::FromIterator;
 use crate::test_framework::{self as ir, *};
 use regalloc::*;
 
-pub const NUM_REAL_REGS_PER_RC: u8 = 8;
+pub const NUM_REAL_REGS_PER_RC: u8 = 4;
 const NUM_REG_CLASSES: u32 = 5;
 
 /// Maximum number of vregs.
@@ -71,7 +71,7 @@ impl FuzzingEnv {
       // TODO there's insider knowledge about the real reg universe stuck here.
       let index = match rc {
         RegClass::I32 => 0,
-        RegClass::F32 => 8,
+        RegClass::F32 => NUM_REAL_REGS_PER_RC,
         _ => panic!("unexpected rc"),
       } + u8::arbitrary(u)? % NUM_REAL_REGS_PER_RC;
       Reg::new_real(rc, 0x0, index)
@@ -164,6 +164,7 @@ impl FuzzingEnv {
       return self.inst_control_flow(u);
     }
 
+    // Get uses before defs!
     Ok(match allowed_insts[index] {
       AllowedInst::Imm => {
         Imm { dst: self.def_reg(I32, u)?, imm: u32::arbitrary(u)? }
@@ -172,33 +173,45 @@ impl FuzzingEnv {
         ImmF { dst: self.def_reg(F32, u)?, imm: f32::arbitrary(u)? }
       }
       AllowedInst::Copy => {
-        Copy { dst: self.def_reg(I32, u)?, src: self.get_reg(I32, u)? }
+        let src = self.get_reg(I32, u)?;
+        Copy { dst: self.def_reg(I32, u)?, src }
       }
       AllowedInst::CopyF => {
-        CopyF { dst: self.def_reg(F32, u)?, src: self.get_reg(F32, u)? }
+        let src = self.get_reg(F32, u)?;
+        CopyF { dst: self.def_reg(F32, u)?, src }
       }
-      AllowedInst::BinOp => BinOp {
-        op: ir::BinOp::arbitrary(u)?,
-        dst: self.def_reg(I32, u)?,
-        src_left: self.get_reg(I32, u)?,
-        src_right: self.get_ri(u)?,
-      },
+      AllowedInst::BinOp => {
+        let src_left = self.get_reg(I32, u)?;
+        let src_right = self.get_ri(u)?;
+        BinOp {
+          op: ir::BinOp::arbitrary(u)?,
+          dst: self.def_reg(I32, u)?,
+          src_left,
+          src_right,
+        }
+      }
       AllowedInst::BinOpM => BinOpM {
         op: ir::BinOp::arbitrary(u)?,
         dst: self.mod_reg(I32, u)?,
         src_right: self.get_ri(u)?,
       },
-      AllowedInst::BinOpF => BinOpF {
-        op: ir::BinOpF::arbitrary(u)?,
-        dst: self.def_reg(F32, u)?,
-        src_left: self.get_reg(F32, u)?,
-        src_right: self.get_reg(F32, u)?,
-      },
+      AllowedInst::BinOpF => {
+        let src_left = self.get_reg(F32, u)?;
+        let src_right = self.get_reg(F32, u)?;
+        BinOpF {
+          op: ir::BinOpF::arbitrary(u)?,
+          dst: self.def_reg(F32, u)?,
+          src_left,
+          src_right,
+        }
+      }
       AllowedInst::Load => {
-        Load { dst: self.def_reg(I32, u)?, addr: self.get_am(u)? }
+        let addr = self.get_am(u)?;
+        Load { dst: self.def_reg(I32, u)?, addr }
       }
       AllowedInst::LoadF => {
-        LoadF { dst: self.def_reg(F32, u)?, addr: self.get_am(u)? }
+        let addr = self.get_am(u)?;
+        LoadF { dst: self.def_reg(F32, u)?, addr }
       }
       AllowedInst::Store => {
         Store { addr: self.get_am(u)?, src: self.get_reg(I32, u)? }
