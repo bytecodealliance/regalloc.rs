@@ -11,15 +11,7 @@ use std::str::CharIndices;
 
 use regalloc::{Reg, RegClass};
 
-use crate::test_framework::{
-  i_add, i_addm, i_cmp_gt, i_cmp_le, i_cmp_lt, i_copy, i_finish, i_goto,
-  i_goto_ctf, i_imm, i_load, i_print_i, i_print_s, i_store, i_sub, i_subm,
-  s_add, s_addm, s_and, s_cmp_eq, s_cmp_ge, s_cmp_gt, s_cmp_le, s_cmp_lt,
-  s_copy, s_fadd, s_fdiv, s_fmul, s_fsub, s_if_then, s_if_then_else, s_imm,
-  s_immf, s_load, s_loadf, s_mod, s_mul, s_print_f, s_print_i, s_print_s,
-  s_repeat_until, s_shr, s_store, s_storef, s_sub, s_while_do, Blockifier,
-  Func, Inst, AM, AM_R, AM_RI, AM_RR, RI, RI_I, RI_R,
-};
+use crate::test_framework::*;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -160,6 +152,17 @@ impl<'f, 'str> Parser<'f, 'str> {
     } else {
       self.error("expected char")
     }
+  }
+
+  fn try_read_char(&mut self, expected: char) -> Option<char> {
+    self.skip_whitespace_and_comments();
+    if let Some(c) = self.peek() {
+      if c == expected {
+        self.advance().unwrap();
+        return Some(c);
+      }
+    }
+    None
   }
 
   fn try_read_ident(&mut self) -> Option<String> {
@@ -321,10 +324,13 @@ impl<'f, 'str> Parser<'f, 'str> {
     // Either RR or RI. As a shortcut, allow R, meaning RI with 0 offset.
     self.expect_char('[')?;
     let base = self.read_var()?;
-    let am = if let Some(disp) = self.try_read_var()? {
-      AM_RR(base, disp)
-    } else if let Some(offset) = self.try_read_int()? {
-      AM_RI(base, offset)
+    let am = if let Some(_) = self.try_read_char(',') {
+      if let Some(disp) = self.try_read_var()? {
+        AM_RR(base, disp)
+      } else {
+        let offset = self.read_int()?;
+        AM_RI(base, offset)
+      }
     } else {
       AM_R(base)
     };
@@ -421,6 +427,22 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_addm(dst, src));
         }
 
+        "copy" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src = parser.read_var()?;
+          insts.push(i_copy(dst, src));
+        }
+
+        "cmp_gt" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src = parser.read_var()?;
+          parser.expect_char(',')?;
+          let ri = parser.read_ri()?;
+          insts.push(i_cmp_gt(dst, src, ri));
+        }
+
         "cmp_lt" => {
           let dst = parser.read_var()?;
           parser.expect_char(',')?;
@@ -464,11 +486,34 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_load(dst, addr));
         }
 
+        "loadf" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let addr = parser.read_am()?;
+          insts.push(i_loadf(dst, addr));
+        }
+
+        "mod" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_left = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_right = parser.read_ri()?;
+          insts.push(i_mod(dst, src_left, src_right));
+        }
+
         "store" => {
           let addr = parser.read_am()?;
           parser.expect_char(',')?;
           let src = parser.read_var()?;
           insts.push(i_store(addr, src));
+        }
+
+        "storef" => {
+          let addr = parser.read_am()?;
+          parser.expect_char(',')?;
+          let src = parser.read_var()?;
+          insts.push(i_storef(addr, src));
         }
 
         "printi" => {
