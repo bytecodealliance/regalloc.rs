@@ -13,13 +13,285 @@ use std::fmt;
 use crate::analysis::run_analysis;
 use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx, RangeFragKind,
-  RealRange, RealRegUniverse, RegClass, SortedRangeFragIxs, SpillSlot,
-  TypedIxVec, VirtualRange, VirtualRangeIx, Writable,
+  RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, RegClass,
+  SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx,
+  VirtualReg, Writable,
 };
 use crate::inst_stream::{
   edit_inst_stream, InstAndPoint, InstsAndPoints, RangeAllocations,
 };
 use crate::interface::{Function, RegAllocResult};
+
+//=============================================================================
+// Analysis in support of copy coalescing.
+//
+// This detects and collects information about, all copy coalescing
+// opportunities in the incoming function.  It does not use that information
+// at all -- that is for the main allocation loop to do.
+
+// A coalescing hint for a virtual live range.  The u32 is an arbitrary
+// "weight" value which indicates a relative strength-of-preference for the
+// hint.  It exists because a VLR can have arbitrarily many copy
+// instructions at its "boundary", and hence arbitrarily many hints.  Of
+// course the allocator core can honour at most one of them, so it needs a
+// way to choose between them.  In this implementation, the u32s are simply
+// the estimated execution count of the associated copy instruction.
+#[derive(Clone)]
+enum Hint {
+  // I would like to have the same real register as some other virtual range.
+  SameAs(VirtualRangeIx, u32),
+  // I would like to have exactly this real register.
+  Exactly(RealReg, u32),
+}
+fn show_hint(h: &Hint) -> String {
+  match h {
+    Hint::SameAs(vlrix, weight) => {
+      format!("(SameAs {:?}, weight={})", vlrix, weight)
+    }
+    Hint::Exactly(rreg, weight) => {
+      format!("(Exactly {:?}, weight={})", rreg, weight)
+    }
+  }
+}
+impl Hint {
+  fn get_weight(&self) -> u32 {
+    match self {
+      Hint::SameAs(_vlrix, weight) => *weight,
+      Hint::Exactly(_rreg, weight) => *weight,
+    }
+  }
+}
+
+fn do_coalescing_analysis<F: Function>(
+  func: &F, rlr_env: &TypedIxVec<RealRangeIx, RealRange>,
+  vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+  est_freqs: &TypedIxVec<BlockIx, u32>,
+) -> TypedIxVec<VirtualRangeIx, Vec<Hint>> {
+  // We have in hand the virtual live ranges.  Each of these carries its
+  // associated vreg.  So in effect we have a VLR -> VReg mapping.  We now
+  // invert that, so as to generate a mapping from VRegs to their containing
+  // VLRs.
+  //
+  // Note that multiple VLRs may map to the same VReg.  So the inverse mapping
+  // will actually be from VRegs to a set of VLRs.  In most cases, we expect
+  // the virtual-registerised-code given to this allocator to be derived from
+  // SSA, in which case each VReg will have only one VLR.  So in this case,
+  // the cost of first creating the mapping, and then looking up all the VRegs
+  // in moves in it, will have cost linear in the size of the input function.
+  //
+  // It would be convenient here to know how many VRegs there are ahead of
+  // time, but until then we'll discover it dynamically.
+  // NB re the SmallVec.  That has set semantics (no dups)
+  // FIXME use SmallVec for the VirtualRangeIxs.  Or even a sparse set.
+  let mut vreg_to_vlrs_map = Vec::</*vreg index,*/ Vec<VirtualRangeIx>>::new();
+
+  for (vlr, n) in vlr_env.iter().zip(0..) {
+    let vlrix = VirtualRangeIx::new(n);
+    let vreg: VirtualReg = vlr.vreg;
+    // Now we know that there's a VLR |vlr| that is for VReg |vreg|.  Update
+    // the inverse mapping accordingly.  That may involve resizing it, since
+    // we have no idea of the order in which we will first encounter VRegs.
+    // By contrast, we know we are stepping sequentially through the VLR
+    // (index) space, and we'll never see the same VLRIx twice.  So there's no
+    // need to check for dups when adding a VLR index to an existing binding
+    // for a VReg.
+    let vreg_ix = vreg.get_index();
+
+    while vreg_to_vlrs_map.len() <= vreg_ix {
+      vreg_to_vlrs_map.push(vec![]); // This is very un-clever
+    }
+
+    vreg_to_vlrs_map[vreg_ix].push(vlrix);
+  }
+
+  // Same for the real live ranges
+  let mut rreg_to_rlrs_map = Vec::</*rreg index,*/ Vec<RealRangeIx>>::new();
+
+  for (rlr, n) in rlr_env.iter().zip(0..) {
+    let rlrix = RealRangeIx::new(n);
+    let rreg: RealReg = rlr.rreg;
+    let rreg_ix = rreg.get_index();
+
+    while rreg_to_rlrs_map.len() <= rreg_ix {
+      rreg_to_rlrs_map.push(vec![]); // This is very un-clever
+    }
+
+    rreg_to_rlrs_map[rreg_ix].push(rlrix);
+  }
+
+  // And what do we got?
+  //for (vlrixs, vreg) in vreg_to_vlrs_map.iter().zip(0..) {
+  //  println!("QQQQ vreg v{:?} -> vlrixs {:?}", vreg, vlrixs);
+  //}
+  //for (rlrixs, rreg) in rreg_to_rlrs_map.iter().zip(0..) {
+  //  println!("QQQQ rreg r{:?} -> rlrixs {:?}", rreg, rlrixs);
+  //}
+
+  // Range end checks for VRegs
+  let doesVRegHaveXXat
+  // true = "last use" false = "first def"
+    = |xxIsLastUse: bool, vreg: VirtualReg, iix: InstIx|
+    -> Option<VirtualRangeIx> {
+      let vreg_no = vreg.get_index();
+      let vlrixs = &vreg_to_vlrs_map[vreg_no];
+      for vlrix in vlrixs {
+        let frags = &vlr_env[*vlrix].sorted_frags;
+        for fix in &frags.frag_ixs {
+          let frag = &frag_env[*fix];
+          if xxIsLastUse {
+            // We're checking to see if |vreg| has a last use in this block
+            // (well, technically, a fragment end in the block; we don't care if
+            // it is later redefined in the same block) .. anyway ..
+            // We're checking to see if |vreg| has a last use in this block
+            // at |iix|.u
+            if frag.last == InstPoint::new_use(iix) {
+              return Some(*vlrix);
+            }
+          } else {
+            // We're checking to see if |vreg| has a first def in this block
+            // at |iix|.d
+            if frag.first == InstPoint::new_def(iix) {
+              return Some(*vlrix);
+            }
+          }
+        }
+      }
+      None
+    };
+
+  // Range end checks for RRegs
+  let doesRRegHaveXXat
+  // true = "last use" false = "first def"
+    = |xxIsLastUse: bool, rreg: RealReg, iix: InstIx|
+    -> Option<RealRangeIx> {
+      let rreg_no = rreg.get_index();
+      let rlrixs = &rreg_to_rlrs_map[rreg_no];
+      for rlrix in rlrixs {
+        let frags = &rlr_env[*rlrix].sorted_frags;
+        for fix in &frags.frag_ixs {
+          let frag = &frag_env[*fix];
+          if xxIsLastUse {
+            // We're checking to see if |rreg| has a last use in this block
+            // at |iix|.u
+            if frag.last == InstPoint::new_use(iix) {
+              return Some(*rlrix);
+            }
+          } else {
+            // We're checking to see if |rreg| has a first def in this block
+            // at |iix|.d
+            if frag.first == InstPoint::new_def(iix) {
+              return Some(*rlrix);
+            }
+          }
+        }
+      }
+      None
+    };
+
+  // Make up a vector of registers that are connected by moves:
+  //
+  //    (dstReg, srcReg, transferring insn, estimated execution count)
+  //
+  // This can contain real-to-real moves, which we obviously can't do anything
+  // about.  We'll remove them in the next pass.
+  let mut connectedByMoves = Vec::<(Reg, Reg, InstIx, u32)>::new();
+  for b in func.blocks() {
+    let block_eef = est_freqs[b];
+    for iix in func.block_insns(b) {
+      let insn = &func.get_insn(iix);
+      let im = func.is_move(insn);
+      match im {
+        None => {}
+        Some((wreg, reg)) => {
+          connectedByMoves.push((wreg.to_reg(), reg, iix, block_eef));
+        }
+      }
+    }
+  }
+
+  // FIXME SmallVec!
+  // XX these sub-vectors could contain duplicates, I suppose, for example if
+  // there are two identical copy insns at different points on the "boundary"
+  // for some VLR.  I don't think it matters though since we're going to rank
+  // the hints by strength and then choose at most one.
+  let mut hints = TypedIxVec::<VirtualRangeIx, Vec<Hint>>::new();
+  hints.resize(vlr_env.len(), vec![]);
+
+  for (rDst, rSrc, iix, eef) in connectedByMoves {
+    //println!("QQQQ at {:?} {:?} <- {:?} (eef {})", iix, rDst, rSrc, eef);
+    match (rDst.is_virtual(), rSrc.is_virtual()) {
+      (true, true) => {
+        // Check for a V <- V hint.
+        let rSrcV = rSrc.to_virtual_reg();
+        let rDstV = rDst.to_virtual_reg();
+        let mb_vlrSrc =
+          doesVRegHaveXXat(/*xxIsLastUse=*/ true, rSrcV, iix);
+        let mb_vlrDst =
+          doesVRegHaveXXat(/*xxIsLastUse=*/ false, rDstV, iix);
+        if mb_vlrSrc.is_some() && mb_vlrDst.is_some() {
+          let vlrSrc = mb_vlrSrc.unwrap();
+          let vlrDst = mb_vlrDst.unwrap();
+          // Add hints for both VLRs, since we don't know which one will
+          // assign first.  Indeed, a VLR may be assigned and un-assigned
+          // arbitrarily many times.
+          hints[vlrSrc].push(Hint::SameAs(vlrDst, eef));
+          hints[vlrDst].push(Hint::SameAs(vlrSrc, eef));
+        }
+      }
+      (true, false) => {
+        // Check for a V <- R hint.
+        let rSrcR = rSrc.to_real_reg();
+        let rDstV = rDst.to_virtual_reg();
+        let mb_rlrSrc =
+          doesRRegHaveXXat(/*xxIsLastUse=*/ true, rSrcR, iix);
+        let mb_vlrDst =
+          doesVRegHaveXXat(/*xxIsLastUse=*/ false, rDstV, iix);
+        if mb_rlrSrc.is_some() && mb_vlrDst.is_some() {
+          let vlrDst = mb_vlrDst.unwrap();
+          hints[vlrDst].push(Hint::Exactly(rSrcR, eef));
+        }
+      }
+      (false, true) => {
+        // Check for a R <- V hint.
+        let rSrcV = rSrc.to_virtual_reg();
+        let rDstR = rDst.to_real_reg();
+        let mb_vlrSrc =
+          doesVRegHaveXXat(/*xxIsLastUse=*/ true, rSrcV, iix);
+        let mb_rlrDst =
+          doesRRegHaveXXat(/*xxIsLastUse=*/ false, rDstR, iix);
+        if mb_vlrSrc.is_some() && mb_rlrDst.is_some() {
+          let vlrSrc = mb_vlrSrc.unwrap();
+          hints[vlrSrc].push(Hint::Exactly(rDstR, eef));
+        }
+      }
+      (false, false) => {
+        // This is a real-to-real move.  There's nothing we can do.  Ignore it.
+      }
+    }
+  }
+
+  // For the convenience of the allocator core, sort the hints for each VLR so
+  // as to move the most preferred to the front.
+  for hints_for_one_vlr in hints.iter_mut() {
+    hints_for_one_vlr
+      .sort_by(|h1, h2| h2.get_weight().partial_cmp(&h1.get_weight()).unwrap());
+  }
+
+  debug!("");
+  debug!("Coalescing hints:");
+  let mut n = 0;
+  for hints_for_one_vlr in hints.iter() {
+    let mut s = "".to_string();
+    for hint in hints_for_one_vlr {
+      s = s + &show_hint(hint) + &" ".to_string();
+    }
+    debug!("  {:<4?}   {}", VirtualRangeIx::new(n), s);
+    n += 1;
+  }
+
+  hints
+}
 
 //=============================================================================
 // The as-yet-unallocated VirtualReg LR prio queue
@@ -396,9 +668,14 @@ impl fmt::Debug for EditListItem {
 pub fn alloc_main<F: Function>(
   func: &mut F, reg_universe: &RealRegUniverse,
 ) -> Result<RegAllocResult<F>, String> {
+  // -------- Perform initial liveness analysis --------
   // Note that the analysis phase can fail; hence we propagate any error.
-  let (san_reg_uses, rlr_env, mut vlr_env, mut frag_env, _liveouts) =
+  let (san_reg_uses, rlr_env, mut vlr_env, mut frag_env, _liveouts, est_freqs) =
     run_analysis(func, reg_universe).map_err(|err| err.to_string())?;
+
+  // Also perform analysis that finds all coalesing opportunities.
+  let hints: TypedIxVec<VirtualRangeIx, Vec<Hint>> =
+    do_coalescing_analysis(func, &rlr_env, &vlr_env, &frag_env, &est_freqs);
 
   // -------- Alloc main --------
 
@@ -475,6 +752,61 @@ pub fn alloc_main<F: Function>(
         }
         &Some(ref info) => (info.first, info.last),
       };
+
+    // BEGIN Try to do coalescing
+    //
+    // Work through the stated preferences of |curr_vlr|, to see if we can
+    // honour any of them without having to evict any previous assignment.  If
+    // so, do that.
+    //
+    // |hints| has one entry per VLR, but only for VLRs which existed
+    // initially (viz, not for any created by spilling/splitting/whatever).
+    // Hence:
+    let mut rreg_from_hint: Option<usize> = None;
+    if curr_vlrix.get() < hints.len() {
+      for hint in &hints[curr_vlrix] {
+        // BEGIN for each hint
+        debug_assert!(rreg_from_hint.is_none());
+        debug!("--   considering hint {}", show_hint(hint));
+        let mb_cand = match hint {
+          Hint::SameAs(other_vlrix, _weight) => {
+            // It wants the same reg as some other VLR, but we can only honour
+            // that if the other VLR actually *has* a reg at this point.  Its
+            // |rreg| field will tell us exactly that.
+            vlr_env[*other_vlrix].rreg
+          }
+          Hint::Exactly(rreg, _weight) => Some(*rreg),
+        };
+        // If we now have a valid preference, see if we can honour it.
+        if let Some(rreg) = mb_cand {
+          let rregNo = rreg.get_index();
+          if per_real_reg[rregNo]
+            .can_add_VirtualRange_without_eviction(curr_vlr, &frag_env)
+          {
+            rreg_from_hint = Some(rregNo);
+          }
+        }
+        // If we found a preference we can honour, stop processing hints.
+        if rreg_from_hint.is_some() {
+          break;
+        }
+        // END for each hint
+      }
+    }
+    //rreg_from_hint = None; // uncomment to disable coalescing
+    if let Some(rregNo) = rreg_from_hint {
+      // Yay!
+      let rreg = reg_universe.regs[rregNo].0;
+      debug!("--   HINTED alloc to  {}", reg_universe.regs[rregNo].1);
+      per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
+      debug_assert!(curr_vlr.rreg.is_none());
+      // Directly modify bits of vlr_env.  This means we have to abandon
+      // the immutable borrow for curr_vlr, but that's OK -- we won't
+      // need it again (in this loop iteration).
+      vlr_env[curr_vlrix].rreg = Some(rreg);
+      continue;
+    }
+    // END Try to do coalescing
 
     // See if we can find a RealReg to which we can assign this
     // VirtualRange without evicting any previous assignment.

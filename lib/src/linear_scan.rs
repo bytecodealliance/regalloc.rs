@@ -1277,7 +1277,7 @@ impl<T> std::ops::IndexMut<RealReg> for RegisterMapping<T> {
 pub fn run<F: Function>(
   func: &mut F, reg_universe: &RealRegUniverse,
 ) -> Result<RegAllocResult<F>, String> {
-  let (_sanitized_reg_uses, rlrs, vlrs, fragments, liveouts) =
+  let (_sanitized_reg_uses, rlrs, vlrs, fragments, liveouts, _est_freqs) =
     run_analysis(func, reg_universe).map_err(|err| err.to_string())?;
 
   let intervals = Intervals::new(rlrs, vlrs, &fragments);

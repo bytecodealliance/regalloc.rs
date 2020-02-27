@@ -944,8 +944,10 @@ pub fn run_analysis<F: Function>(
     TypedIxVec<VirtualRangeIx, VirtualRange>,
     // The fragment table
     TypedIxVec<RangeFragIx, RangeFrag>,
-    // Liveouts
+    // Liveouts per block
     TypedIxVec<BlockIx, Set<Reg>>,
+    // Estimated execution frequency per block
+    TypedIxVec<BlockIx, u32>,
   ),
   AnalysisError,
 > {
@@ -1093,5 +1095,14 @@ pub fn run_analysis<F: Function>(
     n += 1;
   }
 
-  Ok((san_reg_uses, rlr_env, vlr_env, frag_env, liveout_sets_per_block))
+  debug_assert!(liveout_sets_per_block.len() == estFreqs.len());
+
+  Ok((
+    san_reg_uses,
+    rlr_env,
+    vlr_env,
+    frag_env,
+    liveout_sets_per_block,
+    estFreqs,
+  ))
 }
