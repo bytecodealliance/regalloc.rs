@@ -1424,9 +1424,11 @@ fn resolve_moves<F: Function>(
 
     if let Some(parent_id) = interval.parent {
       // Reconnect with the parent location, by adding a move if needed.
-      let mut at_inst = intervals.start_point(interval.id, &fragments);
-      at_inst.pt = Point::Reload;
+      let at_inst = intervals.start_point(interval.id, &fragments);
       if !is_block_boundary(func, at_inst) {
+        let mut at_inst = at_inst;
+        at_inst.pt = Point::Reload;
+
         let wreg = Writable::from_reg(rreg);
         let reload = if let Some(spill_slot) = intervals.spill_slot(parent_id) {
           trace!(
