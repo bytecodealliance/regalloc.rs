@@ -305,7 +305,10 @@ fn bt_3_loops() {
 }
 #[test]
 fn lsra_3_loops() {
-  test_utils::lsra("3_loops", 8, 8);
+  assert!(test_utils::run_lsra("3_loops", 1, 0).is_err());
+  for i in 2..9 {
+    test_utils::lsra("3_loops", i, 0);
+  }
 }
 
 #[test]

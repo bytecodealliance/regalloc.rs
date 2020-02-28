@@ -965,9 +965,9 @@ fn find_optimal_split_pos<F: Function>(
       }
     }
 
-    let idef = InstPoint::new_def(iix);
-    if reg_uses.defined.contains(wreg) {
-      found = Some(idef);
+    let next_use = InstPoint::new_use(iix.plus(1));
+    if reg_uses.defined.contains(wreg) && next_use < to {
+      found = Some(next_use);
       break;
     }
   }
