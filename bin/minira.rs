@@ -178,7 +178,10 @@ fn main() {
 
 #[cfg(test)]
 mod test_utils {
+  use regalloc::RegAllocResult;
+
   use super::*;
+  use crate::test_framework::Func;
 
   pub fn bt(func_name: &str, num_gpr: usize, num_fpu: usize) {
     let _ = pretty_env_logger::try_init();
@@ -210,6 +213,15 @@ mod test_utils {
       "Incorrect interpreter result: expected {:?}, observed {:?}",
       expected_ret_value, observed_ret_value
     );
+  }
+
+  pub fn run_lsra(
+    func_name: &str, num_gpr: usize, num_fpu: usize,
+  ) -> Result<RegAllocResult<Func>, String> {
+    let _ = pretty_env_logger::try_init();
+    let mut func = test_cases::find_func(func_name).unwrap();
+    let reg_universe = make_universe(num_gpr, num_fpu);
+    allocate_registers(&mut func, RegAllocAlgorithm::LinearScan, &reg_universe)
   }
 
   pub fn lsra(func_name: &str, num_gpr: usize, num_fpu: usize) {
@@ -375,6 +387,7 @@ fn lsra_simple_spill() {
 
 #[test]
 fn lsra_simple_loop() {
+  assert!(test_utils::run_lsra("simple_loop", 1, 0).is_err());
   test_utils::lsra("simple_loop", 2, 0);
 }
 

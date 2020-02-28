@@ -701,6 +701,12 @@ fn allocate_blocked_reg<F: Function>(
     first_use, next_use_pos[best_reg]
   );
 
+  if first_use == next_use_pos[best_reg] {
+    // The register is already taken at this position, there's nothing much we
+    // can do.
+    return Err("running out of registers".into());
+  }
+
   if first_use > next_use_pos[best_reg] {
     debug!("spill current interval");
     let new_int = split(state, cur_id, Split::At(first_use));
@@ -711,6 +717,9 @@ fn allocate_blocked_reg<F: Function>(
 
     // Spill intervals that currently block the selected register.
     state.intervals.set_reg(cur_id, best_reg);
+
+    let mut next_active = Vec::new();
+    let mut next_inactive = Vec::new();
 
     // Check that there's no interference with a fixed interval, and if so split
     // at the intersection.
@@ -751,7 +760,9 @@ fn allocate_blocked_reg<F: Function>(
       if block_pos < state.intervals.end_point(cur_id, &state.fragments) {
         debug!("allocate_blocked_reg: fixed conflict! blocked at {:?}, while ending at {:?}",
           block_pos, state.intervals.end_point(cur_id, &state.fragments));
-        split_and_spill(state, cur_id, block_pos)?;
+        if let Some(child) = split_and_spill(state, cur_id, block_pos)? {
+          next_inactive.push(child);
+        }
       }
     }
 
@@ -763,7 +774,9 @@ fn allocate_blocked_reg<F: Function>(
         if reg == best_reg {
           // spill it!
           debug!("allocate_blocked_reg: split and spill active stolen reg");
-          split_and_spill(state, id, start_pos)?;
+          if let Some(child) = split_and_spill(state, id, start_pos)? {
+            next_active.push(child);
+          }
           break;
         }
       }
@@ -784,13 +797,18 @@ fn allocate_blocked_reg<F: Function>(
             debug!("allocate_blocked_reg: split and spill inactive stolen reg");
             // start_pos is in the middle of a hole in the split interval
             // (otherwise it'd be active), so it's a great split position.
-            split_and_spill(state, id, start_pos)?;
+            if let Some(child) = split_and_spill(state, id, start_pos)? {
+              next_inactive.push(child);
+            }
           }
           // TODO
           // break;
         }
       }
     }
+
+    state.active.append(&mut next_active);
+    state.inactive.append(&mut next_inactive);
   }
 
   Ok(())
@@ -1156,24 +1174,31 @@ fn prev_pos(mut pos: InstPoint) -> InstPoint {
 
 /// Splits the given interval between the last use before `split_pos` and
 /// `split_pos`.
+///
+/// In case of two-ways split (i.e. only place to split is precisely split_pos),
+/// returns the live interval id for the middle child, to be added back to the
+/// list of active/inactive intervals after iterating on these.
 fn split_and_spill<F: Function>(
   state: &mut State<F>, id: LiveId, split_pos: InstPoint,
-) -> Result<(), String> {
+) -> Result<Option<LiveId>, String> {
   // First position that's the last use, or the next use just after the last def.
   let last_use = find_last_use_before(state, id, split_pos);
   debug!("split_and_spill: spill between {:?} and {:?}", last_use, split_pos);
+
+  let mut two_ways_child = None;
 
   let child = if last_use == split_pos.at_use() {
     // The interval is used at last_use, but we must split there:
     // - split the parent at last_use into itself [..., prev of last use] and child: [last_use, ...]
     // - split the child into [last_use, last_use] and grandchild [succ of last_use, ...]
-    debug!("two steps split and spill");
+    debug!("two-ways split and spill");
 
     let child = split(state, id, Split::At(last_use));
     state
       .intervals
       .set_reg(child, state.intervals.allocated_register(id).unwrap());
     state.spill(child);
+    two_ways_child = Some(child);
 
     split(state, child, Split::Between(last_use, split_pos))
   } else {
@@ -1213,7 +1238,7 @@ fn split_and_spill<F: Function>(
   // In both cases, the middle child interval can remain on the stack.
   debug!("unused split interval {:?} becomes handled", child);
   state.handled.push(child);
-  Ok(())
+  Ok(two_ways_child)
 }
 
 /// A mapping from real reg to some T.
