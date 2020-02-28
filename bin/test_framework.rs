@@ -930,11 +930,12 @@ struct IState<'a> {
   rregs: Vec<Option<Value>>, // [0 .. maxRealRegs)
   mem: Vec<Option<Value>>, // [0 .. maxMem)
   slots: Vec<Option<Value>>, // [0..] Spill slots, no upper limit
-  n_insns: usize, // Stats: number of insns executed
-  n_spills: usize, // Stats: .. of which are spills
-  n_reloads: usize, // Stats: .. of which are reloads
+  num_insts: usize, // Stats: number of insns executed
+  num_spills: usize, // Stats: .. of which are spills
+  num_reloads: usize, // Stats: .. of which are reloads
   run_stage: RunStage,
   ret_value: Option<Value>,
+  stdout: String, // Everything that's printed out.
 }
 
 type IResult<T> = Result<T, String>;
@@ -952,11 +953,12 @@ impl<'a> IState<'a> {
       rregs: Vec::new(),
       mem: Vec::new(),
       slots: Vec::new(),
-      n_insns: 0,
-      n_spills: 0,
-      n_reloads: 0,
+      num_insts: 0,
+      num_spills: 0,
+      num_reloads: 0,
       run_stage,
       ret_value: None,
+      stdout: String::new(),
     };
     state.rregs.resize(max_real_regs, None);
     state.mem.resize(max_mem, None);
@@ -1140,7 +1142,7 @@ impl<'a> IState<'a> {
 
     let iix = self.nia;
     self.nia = iix.plus(1);
-    self.n_insns += 1;
+    self.num_insts += 1;
 
     let insn = &self.func.insns[iix];
     match insn {
@@ -1193,22 +1195,22 @@ impl<'a> IState<'a> {
       Inst::Spill { dst, src } => {
         let src_v = self.get_real_reg(*src)?.to_u32();
         self.set_spill_slot_u32(*dst, src_v);
-        self.n_spills += 1;
+        self.num_spills += 1;
       }
       Inst::SpillF { dst, src } => {
         let src_v = self.get_real_reg(*src)?.to_f32();
         self.set_spill_slot_f32(*dst, src_v);
-        self.n_spills += 1;
+        self.num_spills += 1;
       }
       Inst::Reload { dst, src } => {
         let src_v = self.get_spill_slot(*src).to_u32();
         self.set_reg_u32(dst.to_reg(), src_v);
-        self.n_reloads += 1;
+        self.num_reloads += 1;
       }
       Inst::ReloadF { dst, src } => {
         let src_v = self.get_spill_slot(*src).to_f32();
         self.set_reg_f32(dst.to_reg(), src_v);
-        self.n_reloads += 1;
+        self.num_reloads += 1;
       }
       Inst::Goto { target } => {
         self.nia = self.func.blocks[target.get_block_ix()].start
@@ -1221,9 +1223,20 @@ impl<'a> IState<'a> {
         };
         self.nia = self.func.blocks[target.get_block_ix()].start;
       }
-      Inst::PrintS { str } => print!("{}", str),
-      Inst::PrintI { reg } => print!("{:?}", self.get_reg(*reg)?.to_u32()),
-      Inst::PrintF { reg } => print!("{:?}", self.get_reg(*reg)?.to_f32()),
+      Inst::PrintS { str } => {
+        self.stdout += str;
+        print!("{}", str);
+      }
+      Inst::PrintI { reg } => {
+        let str = format!("{:?}", self.get_reg(*reg)?.to_u32());
+        print!("{}", str);
+        self.stdout += &str;
+      }
+      Inst::PrintF { reg } => {
+        let str = format!("{:?}", self.get_reg(*reg)?.to_f32());
+        print!("{}", str);
+        self.stdout += &str;
+      }
       Inst::Finish { reg } => {
         self.ret_value =
           if let Some(reg) = *reg { Some(self.get_reg(reg)?) } else { None };
@@ -1238,9 +1251,21 @@ impl<'a> IState<'a> {
 /// loops during testing.
 const MAX_NUM_STEPS: u32 = 1000000;
 
+#[derive(Debug)]
+pub struct RunResult {
+  /// Return value.
+  pub ret_value: Option<Value>,
+
+  /// Number of dynamically executed steps.
+  pub num_steps: usize,
+
+  /// Everything that's been printed out.
+  pub stdout: String,
+}
+
 pub fn run_func(
   f: &Func, who: &str, reg_universe: &RealRegUniverse, run_stage: RunStage,
-) -> Result<Option<Value>, String> {
+) -> Result<RunResult, String> {
   println!("");
   println!(
     "Running stage '{}': Func: name='{}' entry='{:?}'",
@@ -1254,7 +1279,7 @@ pub fn run_func(
   }
 
   let mut istate =
-    IState::new(f, reg_universe.regs.len(), /*maxMem=*/ 1000, run_stage);
+    IState::new(f, reg_universe.regs.len(), /* max_mem */ 1000, run_stage);
   let mut done = false;
   let mut allowed_steps = MAX_NUM_STEPS;
   while allowed_steps > 0 && !done {
@@ -1270,10 +1295,14 @@ pub fn run_func(
 
   println!(
     "Running stage '{}': done.  {} insns, {} spills, {} reloads",
-    who, istate.n_insns, istate.n_spills, istate.n_reloads
+    who, istate.num_insts, istate.num_spills, istate.num_reloads
   );
 
-  Ok(istate.ret_value)
+  Ok(RunResult {
+    ret_value: istate.ret_value,
+    num_steps: istate.num_insts,
+    stdout: istate.stdout,
+  })
 }
 
 //=============================================================================

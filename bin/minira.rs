@@ -55,7 +55,7 @@ mod test_framework;
 mod validator;
 
 use regalloc::{allocate_registers, RegAllocAlgorithm};
-use test_framework::{make_universe, run_func, RunStage};
+use test_framework::{make_universe, run_func, RunResult, RunStage};
 
 use clap;
 use log::{self, error, info};
@@ -157,23 +157,59 @@ fn main() {
 
   func.print("after allocation");
 
-  let expected_ret_value = run_func(
+  let before_regalloc_result = run_func(
     &original_func,
     "Before allocation",
     &reg_universe,
     RunStage::BeforeRegalloc,
   );
 
-  let observed_ret_value =
+  let after_regalloc_result =
     run_func(&func, "After allocation", &reg_universe, RunStage::AfterRegalloc);
 
   println!("");
 
-  assert_eq!(
-    expected_ret_value, observed_ret_value,
-    "Incorrect interpreter result: expected {:?}, observed {:?}",
-    expected_ret_value, observed_ret_value
-  );
+  check_results(before_regalloc_result, after_regalloc_result);
+}
+
+fn check_results(
+  before_regalloc_result: Result<RunResult, String>,
+  after_regalloc_result: Result<RunResult, String>,
+) {
+  match before_regalloc_result {
+    Ok(before_regalloc_result) => {
+      let after_regalloc_result = after_regalloc_result
+        .expect("code after regalloc should have succeeded");
+
+      // The interpreted result number of dynamic steps is a lower bound on the
+      // number of dynamic steps executed after regalloc.
+      assert!(
+        before_regalloc_result.num_steps <= after_regalloc_result.num_steps,
+        "inconsistent trace"
+      );
+
+      assert_eq!(
+        before_regalloc_result.ret_value, after_regalloc_result.ret_value,
+        "Incorrect interpreter result: expected {:?}, observed {:?}",
+        before_regalloc_result.ret_value, after_regalloc_result.ret_value
+      );
+
+      assert_eq!(
+        before_regalloc_result.stdout, after_regalloc_result.stdout,
+        r#"Different stdout values before/after regalloc:
+- before:
+{}
+-after:
+{}
+        "#,
+        before_regalloc_result.stdout, after_regalloc_result.stdout
+      );
+    }
+
+    Err(err) => {
+      assert_eq!(err, after_regalloc_result.unwrap_err());
+    }
+  }
 }
 
 #[cfg(test)]
@@ -183,11 +219,11 @@ mod test_utils {
   use super::*;
   use crate::test_framework::Func;
 
-  pub fn bt(func_name: &str, num_gpr: usize, num_fpu: usize) {
+  pub fn check_bt(func_name: &str, num_gpr: usize, num_fpu: usize) {
     let _ = pretty_env_logger::try_init();
     let mut func = test_cases::find_func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
-    let expected_ret_value = run_func(
+    let before_regalloc_result = run_func(
       &func,
       "Before allocation",
       &reg_universe,
@@ -202,17 +238,13 @@ mod test_utils {
       panic!("allocation failed: {}", err);
     });
     func.update_from_alloc(result);
-    let observed_ret_value = run_func(
+    let after_regalloc_result = run_func(
       &func,
       "After allocation",
       &reg_universe,
       RunStage::AfterRegalloc,
     );
-    assert_eq!(
-      expected_ret_value, observed_ret_value,
-      "Incorrect interpreter result: expected {:?}, observed {:?}",
-      expected_ret_value, observed_ret_value
-    );
+    check_results(before_regalloc_result, after_regalloc_result);
   }
 
   pub fn run_lsra(
@@ -224,11 +256,11 @@ mod test_utils {
     allocate_registers(&mut func, RegAllocAlgorithm::LinearScan, &reg_universe)
   }
 
-  pub fn lsra(func_name: &str, num_gpr: usize, num_fpu: usize) {
+  pub fn check_lsra(func_name: &str, num_gpr: usize, num_fpu: usize) {
     let _ = pretty_env_logger::try_init();
     let mut func = test_cases::find_func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
-    let expected_ret_value = run_func(
+    let before_regalloc_result = run_func(
       &func,
       "Before allocation",
       &reg_universe,
@@ -245,17 +277,13 @@ mod test_utils {
     });
     func.update_from_alloc(result);
     func.print("AFTER");
-    let observed_ret_value = run_func(
+    let after_regalloc_result = run_func(
       &func,
       "After allocation",
       &reg_universe,
       RunStage::AfterRegalloc,
     );
-    assert_eq!(
-      expected_ret_value, observed_ret_value,
-      "Incorrect interpreter result: expected {:?}, observed {:?}",
-      expected_ret_value, observed_ret_value
-    );
+    check_results(before_regalloc_result, after_regalloc_result);
   }
 }
 
@@ -265,142 +293,142 @@ mod test_utils {
 
 #[test]
 fn bt_badness() {
-  test_utils::bt("badness", 1, 0);
+  test_utils::check_bt("badness", 1, 0);
 }
 #[test]
 fn lsra_badness() {
-  test_utils::lsra("badness", 1, 0);
+  test_utils::check_lsra("badness", 1, 0);
 }
 
 #[test]
 fn bt_straight_line() {
-  test_utils::bt("straight_line", 1, 0);
+  test_utils::check_bt("straight_line", 1, 0);
 }
 #[test]
 fn lsra_straight_line() {
-  test_utils::lsra("straight_line", 2, 0);
+  test_utils::check_lsra("straight_line", 2, 0);
 }
 
 #[test]
 fn bt_fill_then_sum() {
-  test_utils::bt("fill_then_sum", 8, 8);
+  test_utils::check_bt("fill_then_sum", 8, 8);
 }
 #[test]
 fn lsra_fill_then_sum() {
   assert!(test_utils::run_lsra("fill_then_sum", 1, 0).is_err());
   assert!(test_utils::run_lsra("fill_then_sum", 2, 0).is_err());
   for i in 3..8 {
-    test_utils::lsra("fill_then_sum", i, 0);
+    test_utils::check_lsra("fill_then_sum", i, 0);
   }
 }
 
 #[test]
 fn bt_ssort() {
-  test_utils::bt("ssort", 8, 8);
+  test_utils::check_bt("ssort", 8, 8);
 }
 #[test]
 fn lsra_ssort() {
-  test_utils::lsra("ssort", 8, 8);
+  test_utils::check_lsra("ssort", 8, 8);
 }
 
 #[test]
 fn bt_3_loops() {
-  test_utils::bt("3_loops", 8, 8);
+  test_utils::check_bt("3_loops", 8, 8);
 }
 #[test]
 fn lsra_3_loops() {
   assert!(test_utils::run_lsra("3_loops", 1, 0).is_err());
   for i in 2..9 {
-    test_utils::lsra("3_loops", i, 0);
+    test_utils::check_lsra("3_loops", i, 0);
   }
 }
 
 #[test]
 fn bt_stmts() {
-  test_utils::bt("stmts", 8, 8);
+  test_utils::check_bt("stmts", 8, 8);
 }
 #[test]
 fn lsra_stmts() {
-  test_utils::lsra("stmts", 8, 8);
+  test_utils::check_lsra("stmts", 8, 8);
 }
 
 #[test]
 fn bt_needs_splitting() {
-  test_utils::bt("needs_splitting", 8, 8);
+  test_utils::check_bt("needs_splitting", 8, 8);
 }
 #[test]
 fn lsra_needs_splitting() {
-  test_utils::lsra("needs_splitting", 8, 8);
+  test_utils::check_lsra("needs_splitting", 8, 8);
 }
 
 #[test]
 fn bt_needs_splitting2() {
-  test_utils::bt("needs_splitting2", 8, 8);
+  test_utils::check_bt("needs_splitting2", 8, 8);
 }
 #[test]
 fn lsra_needs_splitting2() {
-  test_utils::lsra("needs_splitting2", 8, 8);
+  test_utils::check_lsra("needs_splitting2", 8, 8);
 }
 
 #[test]
 fn bt_qsort() {
-  test_utils::bt("qsort", 8, 8);
+  test_utils::check_bt("qsort", 8, 8);
 }
 #[test]
 fn lsra_qsort() {
-  test_utils::lsra("qsort", 8, 8);
+  test_utils::check_lsra("qsort", 8, 8);
 }
 
 #[test]
 fn bt_fill_then_sum_2a() {
-  test_utils::bt("fill_then_sum_2a", 8, 8);
+  test_utils::check_bt("fill_then_sum_2a", 8, 8);
 }
 #[test]
 fn lsra_2a_fill_then_sum_2a() {
   for i in 3..8 {
-    test_utils::lsra("fill_then_sum", i, 0);
+    test_utils::check_lsra("fill_then_sum", i, 0);
   }
 }
 
 #[test]
 fn bt_ssort_2a() {
-  test_utils::bt("ssort_2a", 8, 8);
+  test_utils::check_bt("ssort_2a", 8, 8);
 }
 #[test]
 fn lsra_2a_ssort() {
-  test_utils::lsra("ssort_2a", 8, 8);
+  test_utils::check_lsra("ssort_2a", 8, 8);
 }
 
 #[test]
 fn bt_fp1() {
-  test_utils::bt("fp1", 8, 8);
+  test_utils::check_bt("fp1", 8, 8);
 }
 #[test]
 fn lsra_fp1() {
-  test_utils::lsra("fp1", 8, 8);
+  test_utils::check_lsra("fp1", 8, 8);
 }
 
 #[test]
 fn bt_fp2() {
-  test_utils::bt("fp2", 8, 8);
+  test_utils::check_bt("fp2", 8, 8);
 }
 #[test]
 fn lsra_fp2() {
-  test_utils::lsra("fp2", 8, 8);
+  test_utils::check_lsra("fp2", 8, 8);
 }
 
 #[test]
 fn lsra_simple_spill() {
-  test_utils::lsra("simple_spill", 1, 0);
+  test_utils::check_lsra("simple_spill", 1, 0);
 }
 
 #[test]
 fn lsra_simple_loop() {
   assert!(test_utils::run_lsra("simple_loop", 1, 0).is_err());
-  test_utils::lsra("simple_loop", 2, 0);
+  test_utils::check_lsra("simple_loop", 2, 0);
 }
 
 #[test]
 fn any_use_modified() {
-  test_utils::bt("use_mod", 1, 0);
+  test_utils::check_bt("use_mod", 1, 0);
 }
