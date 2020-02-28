@@ -1667,9 +1667,9 @@ impl Blockifier {
   }
 
   // The main external function.  Convert the given statements, into a Func.
-  pub fn finish(mut self, stmts: Vec<Stmt>) -> Func {
+  pub fn finish(mut self, stmts: Vec<Stmt>, ret_value: Option<Reg>) -> Func {
     let (ent_bno, exit_bno) = self.blockify(stmts);
-    self.blocks[exit_bno].push(i_finish(None));
+    self.blocks[exit_bno].push(i_finish(ret_value));
 
     // Convert (ent_bno, exit_bno, cleanedUp) into a Func
     let mut func = Func::new(&self.name);

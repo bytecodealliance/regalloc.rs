@@ -7,15 +7,7 @@
 use regalloc::{Reg, RegClass};
 
 use crate::parser;
-use crate::test_framework::{
-  i_add, i_addm, i_cmp_gt, i_cmp_le, i_cmp_lt, i_copy, i_finish, i_goto,
-  i_goto_ctf, i_imm, i_load, i_print_i, i_print_s, i_store, i_sub, i_subm,
-  s_add, s_addm, s_and, s_cmp_eq, s_cmp_ge, s_cmp_gt, s_cmp_le, s_cmp_lt,
-  s_copy, s_fadd, s_fdiv, s_fmul, s_fsub, s_if_then, s_if_then_else, s_imm,
-  s_immf, s_load, s_loadf, s_mod, s_mul, s_print_f, s_print_i, s_print_s,
-  s_repeat_until, s_shr, s_store, s_storef, s_sub, s_while_do, Blockifier,
-  Func, AM_R, AM_RI, AM_RR, RI_I, RI_R,
-};
+use crate::test_framework::*;
 
 use std::path::Path;
 
@@ -378,7 +370,7 @@ fn test_stmts() -> Func {
       )
   ];
    */
-  bif.finish(stmts)
+  bif.finish(stmts, Some(v_sum))
 }
 
 // Test cases where live range splitting might obviously help
@@ -444,7 +436,7 @@ fn test_needs_splitting() -> Func {
     s_print_i(v_sum),
     s_print_s("\n"),
   ];
-  bif.finish(stmts)
+  bif.finish(stmts, Some(v_sum))
 }
 
 // This is the same as needs_splitting, but with the live ranges split
@@ -532,7 +524,7 @@ fn test_needs_splitting2() -> Func {
     s_print_i(v_sum),
     s_print_s("\n"),
   ];
-  bif.finish(stmts)
+  bif.finish(stmts, Some(v_sum))
 }
 
 // A big test.  This is derived from function fallbackQSort3 in the bzip2
@@ -870,7 +862,7 @@ fn test_qsort() -> Func {
     s_print_s("\n"),
   ];
 
-  bif.finish(stmts)
+  bif.finish(stmts, None)
 }
 
 // This is a version of fill_then_sum that uses some 2-operand insns.
@@ -1172,7 +1164,7 @@ fn test_fp1() -> Func {
     s_print_s("\n"),
   ];
 
-  bif.finish(stmts)
+  bif.finish(stmts, Some(f2))
 }
 
 fn test_fp2() -> Func {
@@ -1267,7 +1259,7 @@ fn test_fp2() -> Func {
     ),
   ];
 
-  bif.finish(stmts)
+  bif.finish(stmts, None)
 }
 
 // This is the list of available tests.  This function returns either the
