@@ -1588,7 +1588,7 @@ fn resolve_moves<F: Function>(
           pos
         };
 
-        let inst = match (
+        match (
           intervals.allocated_register(cur_id),
           intervals.allocated_register(succ_id),
         ) {
@@ -1605,7 +1605,9 @@ fn resolve_moves<F: Function>(
               block,
               succ
             );
-            func.gen_move(Writable::from_reg(succ_rreg), cur_rreg, vreg)
+            let inst =
+              func.gen_move(Writable::from_reg(succ_rreg), cur_rreg, vreg);
+            memory_moves.push(InstAndPoint::new(insert_pos, inst));
           }
 
           (Some(cur_rreg), None) => {
@@ -1620,7 +1622,10 @@ fn resolve_moves<F: Function>(
               block,
               succ
             );
-            func.gen_spill(spillslot, cur_rreg, vreg)
+            let inst = func.gen_spill(spillslot, cur_rreg, vreg);
+            // Put spills before moves/reloads.
+            // TODO implement this as part of cyclic moves scheduling.
+            memory_moves.insert(0, InstAndPoint::new(insert_pos, inst));
           }
 
           (None, Some(rreg)) => {
@@ -1635,7 +1640,9 @@ fn resolve_moves<F: Function>(
               block,
               succ
             );
-            func.gen_reload(Writable::from_reg(rreg), spillslot, vreg)
+            let inst =
+              func.gen_reload(Writable::from_reg(rreg), spillslot, vreg);
+            memory_moves.push(InstAndPoint::new(insert_pos, inst));
           }
 
           (None, None) => {
@@ -1649,8 +1656,6 @@ fn resolve_moves<F: Function>(
             continue;
           }
         };
-
-        memory_moves.push(InstAndPoint::new(insert_pos, inst));
       }
     }
 

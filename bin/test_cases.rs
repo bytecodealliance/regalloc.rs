@@ -527,6 +527,30 @@ fn test_needs_splitting2() -> Func {
   bif.finish(stmts, Some(v_sum))
 }
 
+fn test_stmt_loop() -> Func {
+  let mut bif = Blockifier::new("stmt_loop");
+  let v_x = bif.new_virtual_reg(RegClass::I32);
+  let v_y = bif.new_virtual_reg(RegClass::I32);
+  let v_i = bif.new_virtual_reg(RegClass::I32);
+  let v_tmp = bif.new_virtual_reg(RegClass::I32);
+  let stmts = vec![
+    s_imm(v_x, 1),
+    s_imm(v_y, 2),
+    s_imm(v_i, 0),
+    s_repeat_until(
+      vec![
+        s_add(v_x, v_x, RI_I(3)),
+        s_add(v_y, v_y, RI_I(4)),
+        s_add(v_i, v_i, RI_I(1)),
+        s_cmp_ge(v_tmp, v_i, RI_I(10)),
+      ],
+      v_tmp,
+    ),
+    s_add(v_x, v_x, RI_R(v_y)),
+  ];
+  bif.finish(stmts, Some(v_x))
+}
+
 // A big test.  This is derived from function fallbackQSort3 in the bzip2
 // sources.  Just be glad it was me and not you that had to translate it by
 // hand into machine code.  It generates 900 pseudo-random numbers, and then
@@ -1277,6 +1301,7 @@ pub fn find_func(name: &str) -> Result<Func, Vec<String>> {
     test_ssort_2a(),         // 2-operand version of shellsort
     test_fp1(),              // very feeble floating point
     test_fp2(),              // floating point with loops and arrays
+    test_stmt_loop(),
   ];
 
   let mut all_names = Vec::new();

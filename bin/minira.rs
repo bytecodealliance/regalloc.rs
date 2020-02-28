@@ -429,6 +429,14 @@ fn lsra_simple_loop() {
 }
 
 #[test]
+fn lsra_stmt_loop() {
+  assert!(test_utils::run_lsra("stmt_loop", 1, 0).is_err());
+  for i in 2..5 {
+    test_utils::check_lsra("stmt_loop", i, 0);
+  }
+}
+
+#[test]
 fn any_use_modified() {
   test_utils::check_bt("use_mod", 1, 0);
 }
