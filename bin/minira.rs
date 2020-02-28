@@ -287,7 +287,11 @@ fn bt_fill_then_sum() {
 }
 #[test]
 fn lsra_fill_then_sum() {
-  test_utils::lsra("fill_then_sum", 8, 8);
+  assert!(test_utils::run_lsra("fill_then_sum", 1, 0).is_err());
+  assert!(test_utils::run_lsra("fill_then_sum", 2, 0).is_err());
+  for i in 3..8 {
+    test_utils::lsra("fill_then_sum", i, 0);
+  }
 }
 
 #[test]
@@ -353,7 +357,9 @@ fn bt_fill_then_sum_2a() {
 }
 #[test]
 fn lsra_2a_fill_then_sum_2a() {
-  test_utils::lsra("fill_then_sum_2a", 8, 8);
+  for i in 3..8 {
+    test_utils::lsra("fill_then_sum", i, 0);
+  }
 }
 
 #[test]

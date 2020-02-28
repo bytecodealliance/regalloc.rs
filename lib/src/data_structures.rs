@@ -832,7 +832,7 @@ pub struct SanitizedInstRegUses {
 impl SanitizedInstRegUses {
   pub fn create_by_sanitizing(
     iru: &InstRegUses, reg_universe: &RealRegUniverse,
-  ) -> SanitizedInstRegUses {
+  ) -> Result<SanitizedInstRegUses, RealReg> {
     // Note, this is pretty inefficient.  But it doesn't matter; it will need
     // to be redone anyway when it comes time to replace Set<Reg> with the
     // pairing of a (specialised) bitset of RealReg and a (vanilla) bitset of
@@ -841,8 +841,11 @@ impl SanitizedInstRegUses {
     // The goal is:
     // (1) to remove from |set|, any RealRegs which are not available to the
     //     allocator, and
-    // (2) assert if any RealRegs in the set are not mentioned in the universe
-    fn sanitize_reg_set(set: &mut Set<Reg>, reg_universe: &RealRegUniverse) {
+    // (2) assert if any RealRegs in the set are not mentioned in the universe.
+    fn sanitize_reg_set(
+      set: &mut Set<Reg>, reg_universe: &RealRegUniverse,
+    ) -> Result<(), RealReg> {
+      let mut err = Ok(());
       set.retain(|&reg| {
         if reg.is_virtual() {
           // Retain all virtual registers.
@@ -854,13 +857,15 @@ impl SanitizedInstRegUses {
             // the client gave us an instruction which mentions a RealReg which
             // isn't listed in the RealRegUniverse it gave us.  That's not
             // allowed.
-            panic!("sanitize_reg_set: unexpected RealReg in set");
+            err = Err(reg.as_real_reg().unwrap());
+            false
           } else {
             // Retain only real registers that are available to the allocator.
             rreg_ix < reg_universe.allocable
           }
         }
       });
+      err
     }
 
     // Remove modified registers from the set of used and defined registers, so
@@ -884,11 +889,11 @@ impl SanitizedInstRegUses {
       san_modified: iru.modified.map(|r| r.to_reg()),
     };
 
-    sanitize_reg_set(&mut sru.san_used, reg_universe);
-    sanitize_reg_set(&mut sru.san_defined, reg_universe);
-    sanitize_reg_set(&mut sru.san_modified, reg_universe);
+    sanitize_reg_set(&mut sru.san_used, reg_universe)?;
+    sanitize_reg_set(&mut sru.san_defined, reg_universe)?;
+    sanitize_reg_set(&mut sru.san_modified, reg_universe)?;
 
-    sru
+    Ok(sru)
   }
 }
 

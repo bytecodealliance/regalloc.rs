@@ -10,7 +10,7 @@ use std::fmt;
 
 use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Map, Queue, RangeFrag, RangeFragIx,
-  RangeFragKind, RealRange, RealRangeIx, RealRegUniverse, Reg,
+  RangeFragKind, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg,
   SanitizedInstRegUses, Set, SortedRangeFragIxs, TypedIxVec, VirtualRange,
   VirtualRangeIx,
 };
@@ -24,6 +24,9 @@ pub enum AnalysisError {
   /// Some values in the entry block are livein to the function, while not being
   /// marked as such.
   EntryLiveinValues,
+
+  /// A non-existing real register has been seen in the code.
+  NonExistingRealReg(RealReg),
 }
 
 impl ToString for AnalysisError {
@@ -34,6 +37,9 @@ impl ToString for AnalysisError {
       }
       AnalysisError::EntryLiveinValues => {
         "entry block has live-in value not present in function liveins".into()
+      }
+      AnalysisError::NonExistingRealReg(reg) => {
+        format!("instructions mention real register {:?}, which isn't defined in the register universe", reg)
       }
     }
   }
@@ -346,14 +352,14 @@ fn calc_dominators(
 
 fn get_sanitized_reg_uses<F: Function>(
   f: &F, reg_universe: &RealRegUniverse,
-) -> TypedIxVec<InstIx, SanitizedInstRegUses> {
+) -> Result<TypedIxVec<InstIx, SanitizedInstRegUses>, RealReg> {
   let mut san_reg_uses = TypedIxVec::new();
   for inst in f.insns() {
     let iru = f.get_regs(inst); // AUDITED
-    let sru = SanitizedInstRegUses::create_by_sanitizing(&iru, reg_universe);
+    let sru = SanitizedInstRegUses::create_by_sanitizing(&iru, reg_universe)?;
     san_reg_uses.push(sru);
   }
-  san_reg_uses
+  Ok(san_reg_uses)
 }
 
 //=============================================================================
@@ -952,7 +958,8 @@ pub fn run_analysis<F: Function>(
   AnalysisError,
 > {
   // See |get_sanitized_reg_uses| for the meaning of "sanitized".
-  let san_reg_uses = get_sanitized_reg_uses(func, reg_universe);
+  let san_reg_uses = get_sanitized_reg_uses(func, reg_universe)
+    .map_err(|reg| AnalysisError::NonExistingRealReg(reg))?;
 
   let (def_sets_per_block, use_sets_per_block) =
     calc_def_and_use(func, &san_reg_uses);

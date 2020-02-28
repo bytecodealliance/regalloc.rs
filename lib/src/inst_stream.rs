@@ -386,7 +386,8 @@ pub(crate) fn fill_memory_moves<F: Function>(
 
   for insn in insns.iter() {
     let iru = func.get_regs(insn); // AUDITED
-    let sru = SanitizedInstRegUses::create_by_sanitizing(&iru, &reg_universe);
+    let sru = SanitizedInstRegUses::create_by_sanitizing(&iru, &reg_universe)
+      .expect("only existing real registers at this point");
     for reg in sru.san_modified.iter().chain(sru.san_defined.iter()) {
       assert!(reg.is_real());
       clobbered_registers.insert(reg.to_real_reg());
