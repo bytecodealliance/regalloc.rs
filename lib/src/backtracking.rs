@@ -13,7 +13,7 @@ use std::fmt;
 use crate::analysis::run_analysis;
 use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx, RangeFragKind,
-  RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, RegClass,
+  RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, RegClass, Set,
   SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx,
   VirtualReg, Writable,
 };
@@ -21,6 +21,66 @@ use crate::inst_stream::{
   edit_inst_stream, InstAndPoint, InstsAndPoints, RangeAllocations,
 };
 use crate::interface::{Function, RegAllocResult};
+
+//=============================================================================
+// Union-find for sets of VirtualRangeIxs.  This is support of coalescing.
+//
+// This is a ultra-lame stand-in implementation.  It should be replaced by
+// something efficient, such as from Chapter 8 of "Data Structures and
+// Algorithm Analysis in C" (Mark Allen Weiss, 1992).
+
+struct UnionFindVLRIx {
+  sets: Vec<Set<VirtualRangeIx>>,
+}
+impl UnionFindVLRIx {
+  fn new(n_elems: u32) -> Self {
+    let mut sets = Vec::new();
+    for i in 0..n_elems {
+      sets.push(Set::unit(VirtualRangeIx::new(i)));
+    }
+    UnionFindVLRIx { sets }
+  }
+  fn union(&mut self, vlrix1: VirtualRangeIx, vlrix2: VirtualRangeIx) {
+    let mut ix1 = None;
+    let mut ix2 = None;
+    for i in 0..self.sets.len() {
+      if self.sets[i].contains(vlrix1) {
+        ix1 = Some(i);
+        break;
+      }
+    }
+    for i in 0..self.sets.len() {
+      if self.sets[i].contains(vlrix2) {
+        ix2 = Some(i);
+        break;
+      }
+    }
+    debug_assert!(ix1.is_some() && ix2.is_some());
+    let mut ix1u = ix1.unwrap();
+    let mut ix2u = ix2.unwrap();
+    if ix1u == ix2u {
+      return;
+    }
+    if ix1u > ix2u {
+      let tmp = ix1u;
+      ix1u = ix2u;
+      ix2u = tmp;
+    }
+    debug_assert!(ix1u < ix2u);
+    debug_assert!(self.sets.len() >= 2);
+    let tmp_set2 = self.sets[ix2u].clone();
+    self.sets[ix1u].union(&tmp_set2);
+    self.sets.remove(ix2u);
+  }
+  fn find(&self, vlrix: VirtualRangeIx) -> Set<VirtualRangeIx> {
+    for i in 0..self.sets.len() {
+      if self.sets[i].contains(vlrix) {
+        return self.sets[i].clone();
+      }
+    }
+    panic!("should not be asked to find non-existent VLRIx")
+  }
+}
 
 //=============================================================================
 // Analysis in support of copy coalescing.
@@ -67,7 +127,7 @@ fn do_coalescing_analysis<F: Function>(
   vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
   est_freqs: &TypedIxVec<BlockIx, u32>,
-) -> TypedIxVec<VirtualRangeIx, Vec<Hint>> {
+) -> (TypedIxVec<VirtualRangeIx, Vec<Hint>>, UnionFindVLRIx) {
   // We have in hand the virtual live ranges.  Each of these carries its
   // associated vreg.  So in effect we have a VLR -> VReg mapping.  We now
   // invert that, so as to generate a mapping from VRegs to their containing
@@ -218,6 +278,8 @@ fn do_coalescing_analysis<F: Function>(
   let mut hints = TypedIxVec::<VirtualRangeIx, Vec<Hint>>::new();
   hints.resize(vlr_env.len(), vec![]);
 
+  let mut vlrEquivClasses = UnionFindVLRIx::new(vlr_env.len());
+
   for (rDst, rSrc, iix, eef) in connectedByMoves {
     //println!("QQQQ at {:?} {:?} <- {:?} (eef {})", iix, rDst, rSrc, eef);
     match (rDst.is_virtual(), rSrc.is_virtual()) {
@@ -237,6 +299,7 @@ fn do_coalescing_analysis<F: Function>(
           // arbitrarily many times.
           hints[vlrSrc].push(Hint::SameAs(vlrDst, eef));
           hints[vlrDst].push(Hint::SameAs(vlrSrc, eef));
+          vlrEquivClasses.union(vlrDst, vlrSrc);
         }
       }
       (true, false) => {
@@ -289,8 +352,11 @@ fn do_coalescing_analysis<F: Function>(
     debug!("  {:<4?}   {}", VirtualRangeIx::new(n), s);
     n += 1;
   }
+  for eclass in &vlrEquivClasses.sets {
+    debug!("  eclass {:?}", eclass);
+  }
 
-  hints
+  (hints, vlrEquivClasses)
 }
 
 //=============================================================================
@@ -455,7 +521,8 @@ impl PerRealReg {
 
   #[inline(never)]
   fn find_best_evict_VirtualRange(
-    &self, would_like_to_add: &VirtualRange,
+    &self, would_like_to_add: VirtualRangeIx,
+    do_not_evict: &Set<VirtualRangeIx>,
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> Option<(VirtualRangeIx, f32)> {
@@ -464,6 +531,8 @@ impl PerRealReg {
     // return that LR and its cost.  Valid candidates VirtualRanges must
     // meet the following criteria:
     // - must be assigned to this register (obviously)
+    // - must not be a member of |do_not_evict|
+    //   (so the caller can arbitrary exclude candidates)
     // - must have a non-infinite spill cost
     //   (since we don't want to eject spill/reload LRs)
     // - must have a spill cost less than that of |would_like_to_add|
@@ -472,17 +541,20 @@ impl PerRealReg {
     //   (otherwise all this is pointless)
     let mut best_so_far: Option<(VirtualRangeIx, f32)> = None;
     for cand_vlrix in &self.vlrixs_assigned {
+      if do_not_evict.contains(*cand_vlrix) {
+        continue;
+      }
       let cand_vlr = &vlr_env[*cand_vlrix];
       if cand_vlr.spill_cost.is_none() {
         continue;
       }
       let cand_cost = cand_vlr.spill_cost.unwrap();
-      if !cost_is_less(Some(cand_cost), would_like_to_add.spill_cost) {
+      if !cost_is_less(Some(cand_cost), vlr_env[would_like_to_add].spill_cost) {
         continue;
       }
       if !self.frags_in_use.can_add_if_we_first_del(
         &cand_vlr.sorted_frags,
-        &would_like_to_add.sorted_frags,
+        &vlr_env[would_like_to_add].sorted_frags,
         frag_env,
       ) {
         continue;
@@ -674,8 +746,11 @@ pub fn alloc_main<F: Function>(
     run_analysis(func, reg_universe).map_err(|err| err.to_string())?;
 
   // Also perform analysis that finds all coalesing opportunities.
-  let hints: TypedIxVec<VirtualRangeIx, Vec<Hint>> =
+  let coalescing_info =
     do_coalescing_analysis(func, &rlr_env, &vlr_env, &frag_env, &est_freqs);
+  let hints: TypedIxVec<VirtualRangeIx, Vec<Hint>> = coalescing_info.0;
+  let vlrEquivClasses: UnionFindVLRIx = coalescing_info.1;
+  debug_assert!(hints.len() == vlr_env.len());
 
   // -------- Alloc main --------
 
@@ -731,15 +806,118 @@ pub fn alloc_main<F: Function>(
   // * split it.  This causes it to disappear but be replaced by two
   //   VirtualRanges which together constitute the original.
   debug!("");
-  debug!("-- MAIN ALLOCATION LOOP:");
-  while let Some(curr_vlrix) = prioQ.get_longest_VirtualRange(&vlr_env) {
+  debug!("-- MAIN ALLOCATION LOOP (DI means 'direct', CO means 'coalesced'):");
+
+  // A handy constant
+  let empty_Set_VirtualRangeIx = Set::<VirtualRangeIx>::empty();
+
+  // ======== BEGIN Main allocation loop ========
+  'main_allocation_loop: while let Some(curr_vlrix) =
+    prioQ.get_longest_VirtualRange(&vlr_env)
+  {
     let curr_vlr = &vlr_env[curr_vlrix];
 
-    debug!("-- considering        {:?}:  {:?}", curr_vlrix, curr_vlr);
+    debug!("-- considering         {:?}:  {:?}", curr_vlrix, curr_vlr);
 
     debug_assert!(curr_vlr.vreg.to_reg().is_virtual());
     let curr_vlr_rc = curr_vlr.vreg.get_class().rc_to_usize();
 
+    // ==== BEGIN Try to do coalescing ====
+    //
+    // First, look through the hints for |curr_vlr|, collecting up candidate
+    // real regs, in decreasing order of preference, in |hinted_regs|.
+    // FIXME (very) SmallVec
+    let mut hinted_regs = Vec::<RealReg>::new();
+
+    // |hints| has one entry per VLR, but only for VLRs which existed
+    // initially (viz, not for any created by spilling/splitting/whatever).
+    // Hence:
+    if curr_vlrix.get() < hints.len() {
+      for hint in &hints[curr_vlrix] {
+        // BEGIN for each hint
+        let mb_cand = match hint {
+          Hint::SameAs(other_vlrix, _weight) => {
+            // It wants the same reg as some other VLR, but we can only honour
+            // that if the other VLR actually *has* a reg at this point.  Its
+            // |rreg| field will tell us exactly that.
+            vlr_env[*other_vlrix].rreg
+          }
+          Hint::Exactly(rreg, _weight) => Some(*rreg),
+        };
+        // So now |mb_cand| might have a preferred real reg.  If so, add it to
+        // the list of cands.
+        if let Some(rreg) = mb_cand {
+          hinted_regs.push(rreg);
+        }
+        // END for each hint
+      }
+    }
+
+    // Now work through the list of preferences, to see if we can honour any
+    // of them.
+    for rreg in hinted_regs {
+      // Try for the easy case: the requested register is available without
+      // having to evict other range(s).
+      let rregNo = rreg.get_index();
+      debug!("--   CO candidate      {}", reg_universe.regs[rregNo].1);
+      if per_real_reg[rregNo]
+        .can_add_VirtualRange_without_eviction(curr_vlr, &frag_env)
+      {
+        debug!("--   CO alloc to       {}", reg_universe.regs[rregNo].1);
+        per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
+        debug_assert!(curr_vlr.rreg.is_none());
+        // Directly modify bits of vlr_env.  This means we have to abandon
+        // the immutable borrow for curr_vlr, but that's OK -- we won't
+        // need it again (in this loop iteration).
+        vlr_env[curr_vlrix].rreg = Some(rreg);
+        continue 'main_allocation_loop;
+      }
+
+      // Try for the not-so-easy case: the requested register is available,
+      // but only if we evict some other range.  We take care not to evict any
+      // range which is in the same equivalence class as |curr_vlr| since
+      // those are (by definition) connected to |curr_vlr| via V-V copies, and
+      // so evicting any of them would be counterproductive from the point of
+      // view of removing copies.
+      let do_not_evict = vlrEquivClasses.find(curr_vlrix);
+      let mb_evict_cand: Option<(VirtualRangeIx, f32)> = per_real_reg[rregNo]
+        .find_best_evict_VirtualRange(
+          curr_vlrix,
+          &do_not_evict,
+          &vlr_env,
+          &frag_env,
+        );
+      if let Some((vlrix_to_evict, _)) = mb_evict_cand {
+        // Evict ..
+        debug!(
+          "--   CO evict          {:?}:  {:?}",
+          vlrix_to_evict, &vlr_env[vlrix_to_evict]
+        );
+        debug_assert!(vlrix_to_evict != curr_vlrix);
+        per_real_reg[rregNo].del_VirtualRange(
+          vlrix_to_evict,
+          &vlr_env,
+          &frag_env,
+        );
+        prioQ.add_VirtualRange(vlrix_to_evict);
+        debug_assert!(vlr_env[vlrix_to_evict].rreg.is_some());
+        // .. and reassign.
+        debug!("--   CO then alloc to  {}", reg_universe.regs[rregNo].1);
+        per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
+        debug_assert!(curr_vlr.rreg.is_none());
+        // Again, directly modify vlr_env.
+        vlr_env[curr_vlrix].rreg = Some(rreg);
+        vlr_env[vlrix_to_evict].rreg = None;
+        continue 'main_allocation_loop;
+      }
+    }
+    // ==== END Try to do coalescing ====
+
+    // We get here if we failed to find a viable assignment by the process of
+    // looking at the coalescing hints.
+    //
+    // See if we can find a RealReg to which we can assign this
+    // VirtualRange without evicting any previous assignment.
     let (first_in_rc, last_in_rc) =
       match &reg_universe.allocable_by_class[curr_vlr_rc] {
         &None => {
@@ -753,83 +931,18 @@ pub fn alloc_main<F: Function>(
         &Some(ref info) => (info.first, info.last),
       };
 
-    // BEGIN Try to do coalescing
-    //
-    // Work through the stated preferences of |curr_vlr|, to see if we can
-    // honour any of them without having to evict any previous assignment.  If
-    // so, do that.
-    //
-    // |hints| has one entry per VLR, but only for VLRs which existed
-    // initially (viz, not for any created by spilling/splitting/whatever).
-    // Hence:
-    let mut rreg_from_hint: Option<usize> = None;
-    if curr_vlrix.get() < hints.len() {
-      for hint in &hints[curr_vlrix] {
-        // BEGIN for each hint
-        debug_assert!(rreg_from_hint.is_none());
-        debug!("--   considering hint {}", show_hint(hint));
-        let mb_cand = match hint {
-          Hint::SameAs(other_vlrix, _weight) => {
-            // It wants the same reg as some other VLR, but we can only honour
-            // that if the other VLR actually *has* a reg at this point.  Its
-            // |rreg| field will tell us exactly that.
-            vlr_env[*other_vlrix].rreg
-          }
-          Hint::Exactly(rreg, _weight) => Some(*rreg),
-        };
-        // If we now have a valid preference, see if we can honour it.
-        if let Some(rreg) = mb_cand {
-          let rregNo = rreg.get_index();
-          if per_real_reg[rregNo]
-            .can_add_VirtualRange_without_eviction(curr_vlr, &frag_env)
-          {
-            rreg_from_hint = Some(rregNo);
-          }
-        }
-        // If we found a preference we can honour, stop processing hints.
-        if rreg_from_hint.is_some() {
-          break;
-        }
-        // END for each hint
-      }
-    }
-    //rreg_from_hint = None; // uncomment to disable coalescing
-    if let Some(rregNo) = rreg_from_hint {
-      // Yay!
-      let rreg = reg_universe.regs[rregNo].0;
-      debug!("--   HINTED alloc to  {}", reg_universe.regs[rregNo].1);
-      per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
-      debug_assert!(curr_vlr.rreg.is_none());
-      // Directly modify bits of vlr_env.  This means we have to abandon
-      // the immutable borrow for curr_vlr, but that's OK -- we won't
-      // need it again (in this loop iteration).
-      vlr_env[curr_vlrix].rreg = Some(rreg);
-      continue;
-    }
-    // END Try to do coalescing
-
-    // See if we can find a RealReg to which we can assign this
-    // VirtualRange without evicting any previous assignment.
-    let mut rreg_to_use = None;
-    for i in first_in_rc..last_in_rc + 1 {
-      if per_real_reg[i]
+    for rregNo in first_in_rc..last_in_rc + 1 {
+      if per_real_reg[rregNo]
         .can_add_VirtualRange_without_eviction(curr_vlr, &frag_env)
       {
-        rreg_to_use = Some(i);
-        break;
+        let rreg = reg_universe.regs[rregNo].0;
+        debug!("--   DI alloc to       {}", reg_universe.regs[rregNo].1);
+        per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
+        debug_assert!(curr_vlr.rreg.is_none());
+        // Again, directly modify vlr_env.
+        vlr_env[curr_vlrix].rreg = Some(rreg);
+        continue 'main_allocation_loop;
       }
-    }
-    if let Some(rregNo) = rreg_to_use {
-      // Yay!
-      let rreg = reg_universe.regs[rregNo].0;
-      debug!("--   direct alloc to  {}", reg_universe.regs[rregNo].1);
-      per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
-      debug_assert!(curr_vlr.rreg.is_none());
-      // Directly modify bits of vlr_env.  This means we have to abandon
-      // the immutable borrow for curr_vlr, but that's OK -- we won't
-      // need it again (in this loop iteration).
-      vlr_env[curr_vlrix].rreg = Some(rreg);
-      continue;
     }
 
     // That didn't work out.  Next, try to see if we can allocate it by
@@ -839,10 +952,14 @@ pub fn alloc_main<F: Function>(
 
     // (rregNo for best cand, its VirtualRangeIx, and its spill cost)
     let mut best_so_far: Option<(usize, VirtualRangeIx, f32)> = None;
-    for i in first_in_rc..last_in_rc + 1 {
+    for rregNo in first_in_rc..last_in_rc + 1 {
       let mb_better_cand: Option<(VirtualRangeIx, f32)>;
-      mb_better_cand = per_real_reg[i]
-        .find_best_evict_VirtualRange(&curr_vlr, &vlr_env, &frag_env);
+      mb_better_cand = per_real_reg[rregNo].find_best_evict_VirtualRange(
+        curr_vlrix,
+        &empty_Set_VirtualRangeIx,
+        &vlr_env,
+        &frag_env,
+      );
       if let Some((cand_vlrix, cand_cost)) = mb_better_cand {
         // See if this is better than the best so far, and if so take
         // it.  First some sanity checks:
@@ -864,14 +981,14 @@ pub fn alloc_main<F: Function>(
           // Either this is the first possible candidate we've seen,
           // or it's better than any previous one.  In either case,
           // make note of it.
-          best_so_far = Some((i, cand_vlrix, cand_cost));
+          best_so_far = Some((rregNo, cand_vlrix, cand_cost));
         }
       }
     }
     if let Some((rregNo, vlrix_to_evict, _)) = best_so_far {
       // Evict ..
       debug!(
-        "--   evict            {:?}:  {:?}",
+        "--   DI evict          {:?}:  {:?}",
         vlrix_to_evict, &vlr_env[vlrix_to_evict]
       );
       debug_assert!(vlrix_to_evict != curr_vlrix);
@@ -884,7 +1001,7 @@ pub fn alloc_main<F: Function>(
       debug_assert!(vlr_env[vlrix_to_evict].rreg.is_some());
       // .. and reassign.
       let rreg = reg_universe.regs[rregNo].0;
-      debug!("--   then alloc to    {}", reg_universe.regs[rregNo].1);
+      debug!("--   DI then alloc to  {}", reg_universe.regs[rregNo].1);
       per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
       debug_assert!(curr_vlr.rreg.is_none());
       // Directly modify bits of vlr_env.  This means we have to abandon
@@ -892,7 +1009,7 @@ pub fn alloc_main<F: Function>(
       // need it again again (in this loop iteration).
       vlr_env[curr_vlrix].rreg = Some(rreg);
       vlr_env[vlrix_to_evict].rreg = None;
-      continue;
+      continue 'main_allocation_loop;
     }
 
     // Still no luck.  We can't find a register to put it in, so we'll
@@ -1056,7 +1173,9 @@ pub fn alloc_main<F: Function>(
     }
 
     next_spill_slot = next_spill_slot.inc(num_slots);
+    // And implicitly "continue 'main_allocation_loop"
   }
+  // ======== END Main allocation loop ========
 
   // Reload and spill instructions are missing.  To generate them, go through
   // the "edit list", which contains info on both how to generate the
