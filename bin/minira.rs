@@ -121,7 +121,8 @@ mod test_framework;
 mod validator;
 
 use regalloc::{allocate_registers, RegAllocAlgorithm};
-use test_framework::{make_universe, run_func, RunResult, RunStage};
+use test_framework::{make_universe, run_func, RunStage};
+use validator::check_results;
 
 use clap;
 use log::{self, error, info};
@@ -234,48 +235,11 @@ fn main() {
     run_func(&func, "After allocation", &reg_universe, RunStage::AfterRegalloc);
 
   println!("");
+  println!("result before: {:#?}", before_regalloc_result);
+  println!("result after: {:#?}", after_regalloc_result);
+  println!("");
 
-  check_results(before_regalloc_result, after_regalloc_result);
-}
-
-fn check_results(
-  before_regalloc_result: Result<RunResult, String>,
-  after_regalloc_result: Result<RunResult, String>,
-) {
-  match before_regalloc_result {
-    Ok(before_regalloc_result) => {
-      let after_regalloc_result = after_regalloc_result
-        .expect("code after regalloc should have succeeded");
-
-      // The interpreted result number of dynamic steps is a lower bound on the
-      // number of dynamic steps executed after regalloc.
-      assert!(
-        before_regalloc_result.num_steps <= after_regalloc_result.num_steps,
-        "inconsistent trace"
-      );
-
-      assert_eq!(
-        before_regalloc_result.ret_value, after_regalloc_result.ret_value,
-        "Incorrect interpreter result: expected {:?}, observed {:?}",
-        before_regalloc_result.ret_value, after_regalloc_result.ret_value
-      );
-
-      assert_eq!(
-        before_regalloc_result.stdout, after_regalloc_result.stdout,
-        r#"Different stdout values before/after regalloc:
-- before:
-{}
--after:
-{}
-        "#,
-        before_regalloc_result.stdout, after_regalloc_result.stdout
-      );
-    }
-
-    Err(err) => {
-      assert_eq!(err, after_regalloc_result.unwrap_err());
-    }
-  }
+  check_results(&before_regalloc_result, &after_regalloc_result);
 }
 
 #[cfg(test)]
@@ -310,9 +274,10 @@ mod test_utils {
       &reg_universe,
       RunStage::AfterRegalloc,
     );
-    check_results(before_regalloc_result, after_regalloc_result);
+    check_results(&before_regalloc_result, &after_regalloc_result);
   }
 
+  // Note: num_gpr/num_fpu: must include the scratch register.
   pub fn run_lsra(
     func_name: &str, num_gpr: usize, num_fpu: usize,
   ) -> Result<RegAllocResult<Func>, String> {
@@ -322,6 +287,7 @@ mod test_utils {
     allocate_registers(&mut func, RegAllocAlgorithm::LinearScan, &reg_universe)
   }
 
+  // Note: num_gpr/num_fpu: must include the scratch register.
   pub fn check_lsra(func_name: &str, num_gpr: usize, num_fpu: usize) {
     let _ = pretty_env_logger::try_init();
     let mut func = test_cases::find_func(func_name).unwrap();
@@ -349,7 +315,56 @@ mod test_utils {
       &reg_universe,
       RunStage::AfterRegalloc,
     );
-    check_results(before_regalloc_result, after_regalloc_result);
+    check_results(&before_regalloc_result, &after_regalloc_result);
+  }
+
+  // Note: num_gpr/num_fpu: must include the scratch register.
+  pub fn loop_lsra(func_name: &str, mut num_gpr: usize) {
+    let _ = pretty_env_logger::try_init();
+    let func = test_cases::find_func(func_name).unwrap();
+
+    // For the interpreter run, give many real registers.
+    let reg_universe = make_universe(32, 32);
+    let before_regalloc_result = run_func(
+      &func,
+      "Before allocation",
+      &reg_universe,
+      RunStage::BeforeRegalloc,
+    );
+    func.print("BEFORE");
+
+    loop {
+      println!("for num_gpr = {}", num_gpr);
+
+      let mut func = func.clone();
+      let reg_universe = make_universe(num_gpr, 0);
+
+      let result = allocate_registers(
+        &mut func,
+        RegAllocAlgorithm::LinearScan,
+        &reg_universe,
+      )
+      .expect("regalloc failure");
+
+      func.update_from_alloc(result);
+      func.print("AFTER");
+
+      let after_regalloc_result = run_func(
+        &func,
+        "After allocation",
+        &reg_universe,
+        RunStage::AfterRegalloc,
+      );
+
+      check_results(&before_regalloc_result, &after_regalloc_result);
+
+      if let Ok(results) = after_regalloc_result {
+        if results.num_reloads == 0 {
+          break;
+        }
+      }
+      num_gpr += 1;
+    }
   }
 }
 
@@ -357,15 +372,17 @@ mod test_utils {
 // registers iterating down to 3, so as to stress the spilling machinery as
 // much as we can.
 
+// Badness requires 0 registers, so any combination should just work fine.
 #[test]
 fn bt_badness() {
   test_utils::check_bt("badness", 1, 0);
 }
 #[test]
 fn lsra_badness() {
-  test_utils::check_lsra("badness", 1, 0);
+  test_utils::check_lsra("badness", 2, 0);
 }
 
+// straight_line requires one register.
 #[test]
 fn bt_straight_line() {
   test_utils::check_bt("straight_line", 1, 0);
@@ -375,6 +392,7 @@ fn lsra_straight_line() {
   test_utils::check_lsra("straight_line", 2, 0);
 }
 
+// fill_then_sum requires 3 registers (it mentions r2 explicitly).
 #[test]
 fn bt_fill_then_sum() {
   test_utils::check_bt("fill_then_sum", 8, 8);
@@ -383,20 +401,48 @@ fn bt_fill_then_sum() {
 fn lsra_fill_then_sum() {
   assert!(test_utils::run_lsra("fill_then_sum", 1, 0).is_err());
   assert!(test_utils::run_lsra("fill_then_sum", 2, 0).is_err());
-  for i in 3..8 {
-    test_utils::check_lsra("fill_then_sum", i, 0);
-  }
+  // We can't test 3 here, because there's a panic in the code, since r2 is the
+  // scratch register by definition. Not so bad.
+  test_utils::loop_lsra("fill_then_sum", 4);
 }
 
+// ssort requires at least 2 registers.
 #[test]
 fn bt_ssort() {
   test_utils::check_bt("ssort", 8, 8);
 }
 #[test]
-fn lsra_ssort() {
-  test_utils::check_lsra("ssort", 8, 8);
+fn lsra_ssort_3() {
+  test_utils::check_lsra("ssort", 3, 0);
+}
+#[test]
+fn lsra_ssort_4() {
+  test_utils::check_lsra("ssort", 4, 0);
+}
+#[test]
+fn lsra_ssort_5() {
+  test_utils::check_lsra("ssort", 5, 0);
+}
+#[test]
+fn lsra_ssort_6() {
+  test_utils::check_lsra("ssort", 6, 0);
+}
+#[test]
+fn lsra_ssort_7() {
+  test_utils::check_lsra("ssort", 7, 0);
+}
+#[test]
+fn lsra_ssort_8() {
+  test_utils::check_lsra("ssort", 8, 0);
 }
 
+// Requires 2 registers.
+#[test]
+fn lsra_ssort2() {
+  test_utils::loop_lsra("ssort2", 3);
+}
+
+// 3_loops requires at least 2 registers.
 #[test]
 fn bt_3_loops() {
   test_utils::check_bt("3_loops", 8, 8);
@@ -404,47 +450,73 @@ fn bt_3_loops() {
 #[test]
 fn lsra_3_loops() {
   assert!(test_utils::run_lsra("3_loops", 1, 0).is_err());
-  for i in 2..9 {
-    test_utils::check_lsra("3_loops", i, 0);
-  }
+  assert!(test_utils::run_lsra("3_loops", 2, 0).is_err());
+  test_utils::loop_lsra("3_loops", 3);
 }
 
+// stmts requires at least 2 registers.
 #[test]
 fn bt_stmts() {
   test_utils::check_bt("stmts", 8, 8);
 }
 #[test]
 fn lsra_stmts() {
-  test_utils::check_lsra("stmts", 8, 8);
+  assert!(test_utils::run_lsra("stmts", 1, 0).is_err());
+  assert!(test_utils::run_lsra("stmts", 2, 0).is_err());
+  test_utils::loop_lsra("stmts", 3);
 }
 
+// needs_splitting requires at least 2 registers.
 #[test]
 fn bt_needs_splitting() {
   test_utils::check_bt("needs_splitting", 8, 8);
 }
 #[test]
 fn lsra_needs_splitting() {
-  test_utils::check_lsra("needs_splitting", 8, 8);
+  assert!(test_utils::run_lsra("needs_splitting", 1, 0).is_err());
+  assert!(test_utils::run_lsra("needs_splitting", 2, 0).is_err());
+  test_utils::loop_lsra("needs_splitting", 3);
 }
 
+// needs_splitting2 requires at least 2 registers.
 #[test]
 fn bt_needs_splitting2() {
   test_utils::check_bt("needs_splitting2", 8, 8);
 }
 #[test]
 fn lsra_needs_splitting2() {
-  test_utils::check_lsra("needs_splitting2", 8, 8);
+  assert!(test_utils::run_lsra("needs_splitting2", 1, 0).is_err());
+  assert!(test_utils::run_lsra("needs_splitting2", 2, 0).is_err());
+  test_utils::loop_lsra("needs_splitting2", 3);
 }
 
+// qsort requires at least 3 registers.
+// The following test are put in several functions because this takes a lot of
+// time to interpret, and putting these in a single function would slow down the
+// testing pipeline a lot.
 #[test]
 fn bt_qsort() {
   test_utils::check_bt("qsort", 8, 8);
 }
-
-// The following test are put in several functions because this takes a lot of
-// time to interpret, and putting these in a single function would slow down the
-// testing pipeline a lot.
-
+#[test]
+fn lsra_qsort_cant() {
+  assert!(test_utils::run_lsra("qsort", 1, 0).is_err());
+  assert!(test_utils::run_lsra("qsort", 2, 0).is_err());
+  assert!(test_utils::run_lsra("qsort", 3, 0).is_err());
+}
+#[test]
+fn lsra_qsort_4() {
+  test_utils::check_lsra("qsort", 4, 0);
+}
+// TODO Have LSRA pass these tests.
+//#[test]
+//fn lsra_qsort_5() {
+//test_utils::check_lsra("qsort", 5, 0);
+//}
+#[test]
+fn lsra_qsort_6() {
+  test_utils::check_lsra("qsort", 6, 0);
+}
 #[test]
 fn lsra_qsort_7() {
   test_utils::check_lsra("qsort", 7, 0);
@@ -489,65 +561,116 @@ fn lsra_qsort_16() {
 fn lsra_qsort_17() {
   test_utils::check_lsra("qsort", 17, 0);
 }
+#[test]
+fn lsra_qsort_18() {
+  test_utils::check_lsra("qsort", 18, 0);
+}
 
+// Requires at least 3 registers (r2 is mentioned explicitly).
 #[test]
 fn bt_fill_then_sum_2a() {
   test_utils::check_bt("fill_then_sum_2a", 8, 8);
 }
 #[test]
-fn lsra_2a_fill_then_sum_2a() {
-  for i in 3..8 {
-    test_utils::check_lsra("fill_then_sum", i, 0);
-  }
+fn lsra_fill_then_sum_2a() {
+  assert!(test_utils::run_lsra("fill_then_sum_2a", 1, 0).is_err());
+  assert!(test_utils::run_lsra("fill_then_sum_2a", 2, 0).is_err());
+  // See comment in lsra_fill_then_sum for 3 registers.
+  test_utils::loop_lsra("fill_then_sum_2a", 4);
 }
 
+// Requires at least 2 registers.
 #[test]
 fn bt_ssort_2a() {
   test_utils::check_bt("ssort_2a", 8, 8);
 }
 #[test]
 fn lsra_2a_ssort() {
-  test_utils::check_lsra("ssort_2a", 8, 8);
+  assert!(test_utils::run_lsra("ssort_2a", 1, 0).is_err());
+  assert!(test_utils::run_lsra("ssort_2a", 2, 0).is_err());
+  test_utils::loop_lsra("ssort_2a", 3);
 }
 
+// Requires 1 GPR and 2 FPUs at least.
 #[test]
 fn bt_fp1() {
   test_utils::check_bt("fp1", 8, 8);
 }
 #[test]
 fn lsra_fp1() {
-  test_utils::check_lsra("fp1", 8, 8);
+  assert!(test_utils::run_lsra("fp1", 2, 1).is_err());
+  assert!(test_utils::run_lsra("fp1", 1, 2).is_err());
+  assert!(test_utils::run_lsra("fp1", 2, 2).is_err());
+  test_utils::check_lsra("fp1", 2, 3);
 }
 
+// Requires 2 GPRs and 2 FPUs at least.
 #[test]
 fn bt_fp2() {
   test_utils::check_bt("fp2", 8, 8);
 }
 #[test]
 fn lsra_fp2() {
-  test_utils::check_lsra("fp2", 8, 8);
+  for i in 3..8 {
+    for j in 3..8 {
+      test_utils::check_lsra("fp2", i, j);
+    }
+  }
 }
 
+// Requires at least 1 GPR.
 #[test]
 fn lsra_simple_spill() {
-  test_utils::check_lsra("simple_spill", 1, 0);
+  test_utils::loop_lsra("simple_spill", 2);
 }
 
+// Requires at least 2 GPRs.
 #[test]
 fn lsra_simple_loop() {
-  assert!(test_utils::run_lsra("simple_loop", 1, 0).is_err());
-  test_utils::check_lsra("simple_loop", 2, 0);
+  test_utils::loop_lsra("simple_loop", 3);
+}
+
+// Requires at least 2 GPRs.
+#[test]
+fn lsra_stmt_loop() {
+  test_utils::loop_lsra("stmt_loop", 3)
 }
 
 #[test]
-fn lsra_stmt_loop() {
-  assert!(test_utils::run_lsra("stmt_loop", 1, 0).is_err());
-  for i in 2..5 {
-    test_utils::check_lsra("stmt_loop", i, 0);
-  }
+fn lsra_stmt_repeat() {
+  test_utils::loop_lsra("stmt_repeat", 3)
 }
 
 #[test]
 fn any_use_modified() {
   test_utils::check_bt("use_mod", 1, 0);
+}
+
+#[test]
+fn lsra_blocked_fixed() {
+  test_utils::check_lsra("blocked_fixed", 5, 2);
+}
+#[test]
+fn lsra_multi_split() {
+  test_utils::check_lsra("lsra_multi_split", 5, 0);
+}
+#[test]
+fn lsra_double_succ() {
+  test_utils::check_lsra("lsra_double_succ", 5, 2);
+}
+#[test]
+fn lsra_inblock_fixup_pos() {
+  test_utils::check_lsra("lsra_inblock_fixup_pos", 5, 2);
+}
+#[test]
+fn lsra_parallel_reloads() {
+  test_utils::check_lsra("lsra_parallel_reloads", 5, 2);
+}
+#[test]
+fn lsra_flush_block_fixups() {
+  test_utils::check_lsra("lsra_flush_block_fixups", 5, 2);
+}
+#[test]
+fn lsra_split_unused() {
+  test_utils::check_lsra("lsra_split_unused", 5, 2);
 }

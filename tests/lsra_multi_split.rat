@@ -1,0 +1,18 @@
+v0I = i32
+v2I = i32
+v6I = i32
+v8I = i32
+
+r0I = real i32 0
+r1I = real i32 1
+r3I = real i32 3
+
+b0:
+    imm     v0I, 3405774903
+    imm     v8I, 138391
+    imm     v2I, 49666
+    imm     r0I, 0
+    imm     r1I, 16
+    cmp_gt  r3I, v8I, v2I
+    cmp_gt  v6I, v0I, 268500992
+    finish  v8I

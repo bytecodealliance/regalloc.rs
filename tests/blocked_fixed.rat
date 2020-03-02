@@ -1,0 +1,26 @@
+v0F = f32
+v4I = i32
+r0I = real i32 0
+v3I = i32
+v1I = i32
+r3I = real i32 3
+
+b0:
+  immf    v0F, 0.000010860901
+  imm     v4I, 926628863
+  add     r0I, v4I, v4I
+  imm     v3I, 2264924159
+  cmp_gt   v1I, r0I, r0I
+  imm     r0I, 1073741831
+  cmp_gt   v1I, v1I, v1I
+  goto b1
+
+b1:
+  cmp_gt   r3I, v1I, 4278190080
+  cmp_gt   v1I, v3I, v3I
+  imm     r0I, 992951040
+  cmp_gt   v1I, r3I, 3014656
+  cmp_gt   v1I, v3I, v3I
+  cmp_gt   v1I, v3I, v3I
+  mul     v1I, v4I, r0I
+  finish  r3I

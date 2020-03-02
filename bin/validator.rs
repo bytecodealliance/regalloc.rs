@@ -187,3 +187,44 @@ pub fn validate(
 
   Ok(())
 }
+
+pub fn check_results(
+  before_regalloc_result: &Result<RunResult, String>,
+  after_regalloc_result: &Result<RunResult, String>,
+) {
+  match before_regalloc_result {
+    Ok(before_regalloc_result) => {
+      let after_regalloc_result = after_regalloc_result
+        .as_ref()
+        .expect("code after regalloc should have succeeded");
+
+      // The interpreted result number of dynamic steps is a lower bound on the
+      // number of dynamic steps executed after regalloc.
+      assert!(
+        before_regalloc_result.num_steps <= after_regalloc_result.num_steps,
+        "inconsistent trace"
+      );
+
+      assert_eq!(
+        before_regalloc_result.ret_value, after_regalloc_result.ret_value,
+        "Incorrect interpreter result: expected {:?}, observed {:?}",
+        before_regalloc_result.ret_value, after_regalloc_result.ret_value
+      );
+
+      assert_eq!(
+        before_regalloc_result.stdout, after_regalloc_result.stdout,
+        r#"Different stdout values before/after regalloc:
+- before:
+{}
+-after:
+{}
+        "#,
+        before_regalloc_result.stdout, after_regalloc_result.stdout
+      );
+    }
+
+    Err(err) => {
+      assert_eq!(err, after_regalloc_result.as_ref().unwrap_err());
+    }
+  }
+}

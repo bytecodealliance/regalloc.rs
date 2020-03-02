@@ -283,7 +283,7 @@ pub struct TypedIxVec<TyIx, Ty> {
 impl<TyIx, Ty> TypedIxVec<TyIx, Ty>
 where
   Ty: Clone,
-  TyIx: Copy + Eq + Ord + Zero + PlusOne + PlusN,
+  TyIx: Copy + Eq + Ord + Zero + PlusOne + PlusN + Into<u32>,
 {
   pub fn new() -> Self {
     Self { vek: Vec::new(), ty_ix: PhantomData::<TyIx> }
@@ -320,6 +320,9 @@ where
   }
   pub fn range(&self) -> Range<TyIx> {
     Range::new(TyIx::zero(), self.len() as usize)
+  }
+  pub fn remove(&mut self, idx: TyIx) -> Ty {
+    self.vek.remove(idx.into() as usize)
   }
 }
 
@@ -639,7 +642,7 @@ impl fmt::Debug for RealReg {
   }
 }
 
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VirtualReg {
   reg: Reg,
 }
@@ -1363,11 +1366,13 @@ impl RangeFrag {
 pub struct SortedRangeFragIxs {
   pub frag_ixs: Vec<RangeFragIx>,
 }
+
 impl fmt::Debug for SortedRangeFragIxs {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     self.frag_ixs.fmt(fmt)
   }
 }
+
 impl SortedRangeFragIxs {
   pub fn show_with_fenv(
     &self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
@@ -1394,12 +1399,8 @@ impl SortedRangeFragIxs {
     }
   }
 
-  pub fn new(
-    source: &Vec<RangeFragIx>, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
-  ) -> Self {
-    let mut res = SortedRangeFragIxs { frag_ixs: source.clone() };
-    // check the source is ordered, and clone (or sort it)
-    res.frag_ixs.sort_unstable_by(|fix_a, fix_b| {
+  pub fn sort(&mut self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
+    self.frag_ixs.sort_unstable_by(|fix_a, fix_b| {
       match cmp_range_frags(&fenv[*fix_a], &fenv[*fix_b]) {
         Some(Ordering::Less) => Ordering::Less,
         Some(Ordering::Greater) => Ordering::Greater,
@@ -1408,6 +1409,14 @@ impl SortedRangeFragIxs {
         }
       }
     });
+  }
+
+  pub fn new(
+    source: &Vec<RangeFragIx>, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+  ) -> Self {
+    let mut res = SortedRangeFragIxs { frag_ixs: source.clone() };
+    // check the source is ordered, and clone (or sort it)
+    res.sort(fenv);
     res.check(fenv);
     res
   }
