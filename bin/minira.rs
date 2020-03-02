@@ -440,9 +440,54 @@ fn lsra_needs_splitting2() {
 fn bt_qsort() {
   test_utils::check_bt("qsort", 8, 8);
 }
+
+// The following test are put in several functions because this takes a lot of
+// time to interpret, and putting these in a single function would slow down the
+// testing pipeline a lot.
+
 #[test]
-fn lsra_qsort() {
-  test_utils::check_lsra("qsort", 8, 8);
+fn lsra_qsort_7() {
+  test_utils::check_lsra("qsort", 7, 0);
+}
+#[test]
+fn lsra_qsort_8() {
+  test_utils::check_lsra("qsort", 8, 0);
+}
+#[test]
+fn lsra_qsort_9() {
+  test_utils::check_lsra("qsort", 9, 0);
+}
+#[test]
+fn lsra_qsort_10() {
+  test_utils::check_lsra("qsort", 10, 0);
+}
+#[test]
+fn lsra_qsort_11() {
+  test_utils::check_lsra("qsort", 11, 0);
+}
+#[test]
+fn lsra_qsort_12() {
+  test_utils::check_lsra("qsort", 12, 0);
+}
+#[test]
+fn lsra_qsort_13() {
+  test_utils::check_lsra("qsort", 13, 0);
+}
+#[test]
+fn lsra_qsort_14() {
+  test_utils::check_lsra("qsort", 14, 0);
+}
+#[test]
+fn lsra_qsort_15() {
+  test_utils::check_lsra("qsort", 15, 0);
+}
+#[test]
+fn lsra_qsort_16() {
+  test_utils::check_lsra("qsort", 16, 0);
+}
+#[test]
+fn lsra_qsort_17() {
+  test_utils::check_lsra("qsort", 17, 0);
 }
 
 #[test]

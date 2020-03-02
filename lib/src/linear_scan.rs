@@ -16,6 +16,7 @@
 // - (correctness) use sanitized reg uses in lieu of reg uses.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt;
 
 use log::{debug, trace};
@@ -928,16 +929,17 @@ fn is_vreg_defined_at<F: Function>(
 fn find_optimal_split_pos<F: Function>(
   state: &State<F>, id: LiveId, from: InstPoint, to: InstPoint,
 ) -> Result<InstPoint, ()> {
-  trace!("find_optimal_split_pos between {:?} and {:?}", from, to);
   // TODO Consider loop depth to avoid splitting in the middle of a loop
   // whenever possible.
+  trace!("find_optimal_split_pos between {:?} and {:?}", from, to);
+
   debug_assert!(from <= to, "split between positions are inconsistent");
   debug_assert!(
     state.intervals.covers(id, &from, &state.fragments),
     "split between start not in interval"
   );
   debug_assert!(
-    state.intervals.covers(id, &to, &state.fragments),
+    to <= state.intervals.end_point(id, &state.fragments),
     "split between end not in interval"
   );
 
@@ -1307,7 +1309,7 @@ pub fn run<F: Function>(
 
   let intervals = Intervals::new(rlrs, vlrs, &fragments);
 
-  let (fragments, intervals, num_spill_slots) = {
+  let (fragments, intervals, mut num_spill_slots) = {
     let mut state = State::new(func, fragments, intervals);
 
     // Put all the fixed intervals in the inactive list: they're either becoming
@@ -1380,8 +1382,14 @@ pub fn run<F: Function>(
     fragments[first_frag_ix].first
   });
 
-  let memory_moves =
-    resolve_moves(func, &intervals, &virtual_intervals, &fragments, &liveouts);
+  let memory_moves = resolve_moves(
+    func,
+    &intervals,
+    &virtual_intervals,
+    &fragments,
+    &liveouts,
+    &mut num_spill_slots,
+  );
 
   apply_registers(func, &intervals, virtual_intervals, &fragments);
 
@@ -1420,6 +1428,7 @@ fn find_enclosing_interval(
 fn resolve_moves<F: Function>(
   func: &F, intervals: &Intervals, virtual_intervals: &Vec<&LiveInterval>,
   fragments: &Fragments, liveouts: &TypedIxVec<BlockIx, Set<Reg>>,
+  spill_slot: &mut u32,
 ) -> InstsAndPoints<F> {
   let mut memory_moves = InstsAndPoints::new();
 
@@ -1522,9 +1531,8 @@ fn resolve_moves<F: Function>(
   // Once that's done:
   // - resolve cycles in the pending moves
   // - generate real moves from the pending moves.
+  let mut parallel_move_map = HashMap::new();
   for block in func.blocks() {
-    let mut parallel_moves = Vec::new();
-
     let successors = func.block_succs(block);
 
     // Where to insert the fixup move, if needed? If there's more than one
@@ -1534,7 +1542,7 @@ fn resolve_moves<F: Function>(
     // We assume critical edges have been split, so
     // if the current block has more than one successor, then its successors
     // have at most one predecessor.
-    let has_one_successor = successors.len() == 1;
+    let cur_has_one_succ = successors.len() == 1;
 
     for succ in successors {
       for &reg in liveouts[block].iter() {
@@ -1551,14 +1559,15 @@ fn resolve_moves<F: Function>(
             &virtual_intervals,
           ) {
             Some(found) => found,
-            // The vreg is unused in this successor.
+            // The vreg is unused in this successor, no need to update its
+            // location.
             None => continue,
           };
           (first_inst, found)
         };
 
         // Find the interval for this (vreg, inst) pair.
-        // TODO Probably need to optimized this.
+        // TODO Probably need to optimize this.
         let (cur_last_inst, cur_id) = {
           let last_inst = func.block_insns(block).last();
           // see XXX above
@@ -1577,7 +1586,7 @@ fn resolve_moves<F: Function>(
           (last_inst, cur_id)
         };
 
-        let insert_pos = if has_one_successor {
+        let insert_pos = if cur_has_one_succ {
           let mut pos = cur_last_inst;
           // Before the control flow instruction.
           pos.pt = Point::Reload;
@@ -1588,6 +1597,9 @@ fn resolve_moves<F: Function>(
           pos
         };
 
+        let pending_moves =
+          parallel_move_map.entry(insert_pos).or_insert(Vec::new());
+
         match (
           intervals.allocated_register(cur_id),
           intervals.allocated_register(succ_id),
@@ -1597,7 +1609,6 @@ fn resolve_moves<F: Function>(
             if cur_rreg == succ_rreg {
               continue;
             }
-            parallel_moves.push((cur_rreg, succ_rreg));
             trace!(
               "boundary fixup: gen move at {:?} for {:?} between {:?} and {:?}",
               insert_pos,
@@ -1605,9 +1616,7 @@ fn resolve_moves<F: Function>(
               block,
               succ
             );
-            let inst =
-              func.gen_move(Writable::from_reg(succ_rreg), cur_rreg, vreg);
-            memory_moves.push(InstAndPoint::new(insert_pos, inst));
+            pending_moves.push(MoveOp::new_move(cur_rreg, succ_rreg, vreg));
           }
 
           (Some(cur_rreg), None) => {
@@ -1622,10 +1631,7 @@ fn resolve_moves<F: Function>(
               block,
               succ
             );
-            let inst = func.gen_spill(spillslot, cur_rreg, vreg);
-            // Put spills before moves/reloads.
-            // TODO implement this as part of cyclic moves scheduling.
-            memory_moves.insert(0, InstAndPoint::new(insert_pos, inst));
+            pending_moves.push(MoveOp::new_spill(cur_rreg, spillslot, vreg));
           }
 
           (None, Some(rreg)) => {
@@ -1640,39 +1646,251 @@ fn resolve_moves<F: Function>(
               block,
               succ
             );
-            let inst =
-              func.gen_reload(Writable::from_reg(rreg), spillslot, vreg);
-            memory_moves.push(InstAndPoint::new(insert_pos, inst));
+            pending_moves.push(MoveOp::new_reload(spillslot, rreg, vreg));
           }
 
           (None, None) => {
             // Stack to stack: ugh.
             let left_spill_slot = intervals.spill_slot(cur_id).unwrap();
             let right_spill_slot = intervals.spill_slot(succ_id).unwrap();
-            assert_eq!(
+            debug_assert_eq!(
               left_spill_slot, right_spill_slot,
-              "NYI: move from stack to stack."
+              "Moves from stack to stack only happen on the same vreg, thus the same stack slot"
             );
             continue;
           }
         };
       }
     }
-
-    // TODO consider cyclic moves here.
-    {
-      let mut set = Set::empty();
-      for pm in &parallel_moves {
-        if set.contains(pm.0) {
-          unimplemented!("cyclic moves");
-        }
-        set.insert(pm.1);
-      }
-    }
   }
   debug!("");
 
+  for (at_inst, parallel_moves) in parallel_move_map {
+    let ordered_moves = schedule_moves(parallel_moves);
+    emit_moves(at_inst, ordered_moves, &mut memory_moves, func, spill_slot);
+  }
+
   memory_moves
+}
+
+#[derive(PartialEq)]
+enum MoveOperand {
+  Reg(RealReg),
+  Stack(SpillSlot),
+}
+
+impl MoveOperand {
+  fn aliases(&self, other: &Self) -> bool {
+    self == other
+  }
+}
+
+struct MoveOp {
+  from: MoveOperand,
+  to: MoveOperand,
+  vreg: VirtualReg,
+  cycle_begin: Option<usize>,
+  cycle_end: Option<usize>,
+}
+
+impl MoveOp {
+  fn new_move(from: RealReg, to: RealReg, vreg: VirtualReg) -> Self {
+    Self {
+      from: MoveOperand::Reg(from),
+      to: MoveOperand::Reg(to),
+      vreg,
+      cycle_begin: None,
+      cycle_end: None,
+    }
+  }
+
+  fn new_spill(from: RealReg, to: SpillSlot, vreg: VirtualReg) -> Self {
+    Self {
+      from: MoveOperand::Reg(from),
+      to: MoveOperand::Stack(to),
+      vreg,
+      cycle_begin: None,
+      cycle_end: None,
+    }
+  }
+
+  fn new_reload(from: SpillSlot, to: RealReg, vreg: VirtualReg) -> Self {
+    Self {
+      from: MoveOperand::Stack(from),
+      to: MoveOperand::Reg(to),
+      vreg,
+      cycle_begin: None,
+      cycle_end: None,
+    }
+  }
+
+  fn gen_inst<F: Function>(&self, func: &F) -> F::Inst {
+    match self.from {
+      MoveOperand::Reg(from) => match self.to {
+        MoveOperand::Reg(to) => {
+          func.gen_move(Writable::from_reg(to), from, self.vreg)
+        }
+        MoveOperand::Stack(to) => func.gen_spill(to, from, self.vreg),
+      },
+      MoveOperand::Stack(from) => match self.to {
+        MoveOperand::Reg(to) => {
+          func.gen_reload(Writable::from_reg(to), from, self.vreg)
+        }
+        MoveOperand::Stack(_to) => unreachable!("stack to stack move"),
+      },
+    }
+  }
+}
+
+fn find_blocking_move<'a>(
+  pending: &'a mut Vec<MoveOp>, last: &MoveOp,
+) -> Option<(usize, &'a mut MoveOp)> {
+  for (i, other) in pending.iter_mut().enumerate() {
+    if other.from.aliases(&last.to) {
+      return Some((i, other));
+    }
+  }
+  None
+}
+
+fn find_cycled_move<'a>(
+  stack: &'a mut Vec<MoveOp>, from: &mut usize, last: &MoveOp,
+) -> Option<&'a mut MoveOp> {
+  for i in *from..stack.len() {
+    *from += 1;
+    let other = &stack[i];
+    if other.from.aliases(&last.to) {
+      return Some(&mut stack[i]);
+    }
+  }
+  None
+}
+
+/// Given a pending list of moves, returns a list of moves ordered in a correct
+/// way, i.e., no move clobbers another one.
+fn schedule_moves(mut pending: Vec<MoveOp>) -> Vec<MoveOp> {
+  let mut ordered_moves = Vec::new();
+
+  let mut num_cycles = 0;
+  let mut cur_cycles = 0;
+
+  while let Some(pm) = pending.pop() {
+    let mut stack = vec![pm];
+
+    while !stack.is_empty() {
+      let blocking_pair =
+        find_blocking_move(&mut pending, stack.last().unwrap());
+
+      if let Some((blocking_idx, blocking)) = blocking_pair {
+        let mut stack_cur = 0;
+
+        let has_cycles = if let Some(mut cycled) =
+          find_cycled_move(&mut stack, &mut stack_cur, blocking)
+        {
+          debug_assert!(cycled.cycle_end.is_none());
+          cycled.cycle_end = Some(cur_cycles);
+          true
+        } else {
+          false
+        };
+
+        if has_cycles {
+          loop {
+            match find_cycled_move(&mut stack, &mut stack_cur, blocking) {
+              Some(ref mut cycled) => {
+                debug_assert!(cycled.cycle_end.is_none());
+                cycled.cycle_end = Some(cur_cycles);
+              }
+              None => break,
+            }
+          }
+
+          debug_assert!(blocking.cycle_begin.is_none());
+          blocking.cycle_begin = Some(cur_cycles);
+          cur_cycles += 1;
+        }
+
+        let blocking = pending.remove(blocking_idx);
+        stack.push(blocking);
+      } else {
+        // There's no blocking move! We can push this in the ordered list of
+        // moves.
+        // TODO IonMonkey has more optimizations for this case.
+        let last = stack.pop().unwrap();
+        ordered_moves.push(last);
+      }
+    }
+
+    if num_cycles < cur_cycles {
+      num_cycles = cur_cycles;
+    }
+    cur_cycles = 0;
+  }
+
+  ordered_moves
+}
+
+fn emit_moves<F: Function>(
+  at_inst: InstPoint, ordered_moves: Vec<MoveOp>,
+  memory_moves: &mut InstsAndPoints<F>, func: &F, num_spill_slots: &mut u32,
+) {
+  let mut spill_slot = None;
+  let mut in_cycle = false;
+
+  for mov in ordered_moves {
+    if let Some(_) = &mov.cycle_end {
+      debug_assert!(in_cycle);
+
+      // There is some pattern:
+      //   (A -> B)
+      //   (B -> A)
+      // This case handles (B -> A), which we reach last. We emit a move from
+      // the saved value of B, to A.
+      let inst = match mov.to {
+        MoveOperand::Reg(dst_reg) => func.gen_reload(
+          Writable::from_reg(dst_reg),
+          spill_slot.expect("should have a cycle spill slot"),
+          mov.vreg,
+        ),
+        MoveOperand::Stack(_dst_spill) => unimplemented!("stack to stack move"),
+      };
+
+      memory_moves.push(InstAndPoint::new(at_inst, inst));
+      in_cycle = false;
+      continue;
+    }
+
+    if let Some(_) = &mov.cycle_begin {
+      debug_assert!(!in_cycle);
+
+      // There is some pattern:
+      //   (A -> B)
+      //   (B -> A)
+      // This case handles (A -> B), which we reach first. We save B, then allow
+      // the original move to continue.
+      match spill_slot {
+        Some(_) => {}
+        None => {
+          spill_slot = Some(SpillSlot::new(*num_spill_slots));
+          *num_spill_slots += 1;
+        }
+      }
+
+      let inst = match mov.to {
+        MoveOperand::Reg(src_reg) => {
+          func.gen_spill(spill_slot.unwrap(), src_reg, mov.vreg)
+        }
+        MoveOperand::Stack(_src_spill) => unimplemented!("stack to stack move"),
+      };
+
+      memory_moves.push(InstAndPoint::new(at_inst, inst));
+      in_cycle = true;
+      continue;
+    }
+
+    // A normal move which is not part of a cycle.
+    memory_moves.push(InstAndPoint::new(at_inst, mov.gen_inst(func)));
+  }
 }
 
 fn apply_registers<F: Function>(
