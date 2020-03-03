@@ -6,6 +6,7 @@
 #![allow(non_camel_case_types)]
 
 use log::debug;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 
 use crate::data_structures::{
@@ -27,6 +28,9 @@ pub enum AnalysisError {
 
   /// A non-existing real register has been seen in the code.
   NonExistingRealReg(RealReg),
+
+  /// At least one block is dead.
+  UnreachableBlocks,
 }
 
 impl ToString for AnalysisError {
@@ -40,6 +44,9 @@ impl ToString for AnalysisError {
       }
       AnalysisError::NonExistingRealReg(reg) => {
         format!("instructions mention real register {:?}, which isn't defined in the register universe", reg)
+      }
+      AnalysisError::UnreachableBlocks => {
+        "at least one block is unreachable".to_string()
       }
     }
   }
@@ -169,6 +176,25 @@ impl CFGInfo {
         if !visited[bix] {
           dfs(&mut pre_ord, &mut post_ord, &mut visited, &succ_map, bix);
         }
+      }
+    }
+
+    // Check that all blocks are reachable.
+    {
+      let mut visited_blocks = HashSet::default();
+      let mut stack = vec![func.entry_block()];
+      while let Some(block) = stack.pop() {
+        if !visited_blocks.contains(&block) {
+          visited_blocks.insert(block);
+
+          use std::iter::FromIterator;
+          let mut succ = Vec::from_iter(succ_map[block].iter().cloned());
+
+          stack.append(&mut succ);
+        }
+      }
+      if visited_blocks.len() as u32 != nBlocks {
+        return Err(AnalysisError::UnreachableBlocks);
       }
     }
 
