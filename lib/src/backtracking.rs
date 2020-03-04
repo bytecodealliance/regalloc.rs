@@ -8,14 +8,15 @@
 //! Core implementation of the backtracking allocator.
 
 use log::debug;
+use std::cmp::Ordering;
 use std::fmt;
 
 use crate::analysis::run_analysis;
 use crate::data_structures::{
-  BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx, RangeFragKind,
-  RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, RegClass, Set,
-  SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx,
-  VirtualReg, Writable,
+  cmp_range_frags, BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx,
+  RangeFragKind, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg,
+  RegClass, Set, SortedRangeFragIxs, SpillCost, SpillSlot, TypedIxVec,
+  VirtualRange, VirtualRangeIx, VirtualReg, Writable,
 };
 use crate::inst_stream::{
   edit_inst_stream, InstAndPoint, InstsAndPoints, RangeAllocations,
@@ -387,6 +388,11 @@ impl VirtualRangePrioQ {
     self.unallocated.is_empty()
   }
 
+  #[inline(never)]
+  fn len(&self) -> usize {
+    self.unallocated.len()
+  }
+
   // Add a VirtualRange index.
   #[inline(never)]
   fn add_VirtualRange(&mut self, vlr_ix: VirtualRangeIx) {
@@ -432,10 +438,212 @@ impl VirtualRangePrioQ {
     let mut resV = vec![];
     for vlrix in self.unallocated.iter() {
       let mut res = "TODO  ".to_string();
-      res += &format!("{:?}", &vlr_env[*vlrix]);
+      res += &format!("{:?} = {:?}", vlrix, &vlr_env[*vlrix]);
       resV.push(res);
     }
     resV
+  }
+}
+
+//=============================================================================
+// Per-real-register commitment maps
+//
+
+// Something that pairs a fragment index with the index of the virtual range
+// to which this fragment conceptually "belongs", at least for the purposes of
+// this commitment map.  Alternatively, the |vlrix| field may be None, which
+// indicates that the associated fragment belongs to a real-reg live range and
+// is therefore non-evictable.
+//
+// (A fragment merely denotes a sequence of instruction (points), but within
+// the context of a commitment map for a real register, obviously any
+// particular fragment can't be part of two different virtual live ranges.)
+#[derive(Clone, Copy)]
+struct FIxAndVLRIx {
+  fix: RangeFragIx,
+  mb_vlrix: Option<VirtualRangeIx>,
+}
+impl FIxAndVLRIx {
+  fn new(fix: RangeFragIx, mb_vlrix: Option<VirtualRangeIx>) -> Self {
+    Self { fix, mb_vlrix }
+  }
+}
+impl fmt::Debug for FIxAndVLRIx {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    let vlrix_string = match self.mb_vlrix {
+      None => "NONE".to_string(),
+      Some(vlrix) => format!("{:?}", vlrix),
+    };
+    write!(fmt, "(FnV {:?} {})", self.fix, vlrix_string)
+  }
+}
+
+// This indicates the current set of fragments to which some real register is
+// currently "committed".  The fragments *must* be non-overlapping.  Hence
+// they form a total order, and so they must appear in the vector sorted by
+// that order.
+//
+// Overall this is identical to SortedRangeFragIxs, except extended so that
+// each FragIx is tagged with an Option<VirtualRangeIx>.
+#[derive(Clone)]
+struct CommitmentMap {
+  pairs: Vec<FIxAndVLRIx>,
+}
+impl fmt::Debug for CommitmentMap {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    self.pairs.fmt(fmt)
+  }
+}
+impl CommitmentMap {
+  pub fn show_with_fenv(
+    &self, _fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+  ) -> String {
+    //let mut frags = TypedIxVec::<RangeFragIx, RangeFrag>::new();
+    //for fix in &self.frag_ixs {
+    //  frags.push(fenv[*fix]);
+    //}
+    format!("(CommitmentMap {:?})", &self.pairs)
+  }
+}
+
+impl CommitmentMap {
+  pub fn new() -> Self {
+    CommitmentMap { pairs: vec![] }
+  }
+
+  fn check(
+    &self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
+  ) {
+    let mut ok = true;
+    for i in 1..self.pairs.len() {
+      let prev_pair = &self.pairs[i - 1];
+      let this_pair = &self.pairs[i - 0];
+      let prev_fix = prev_pair.fix;
+      let this_fix = this_pair.fix;
+      let prev_frag = &fenv[prev_fix];
+      let this_frag = &fenv[this_fix];
+      // Check in-orderness
+      if cmp_range_frags(prev_frag, this_frag) != Some(Ordering::Less) {
+        ok = false;
+        break;
+      }
+      // Check that, if this frag specifies an owner VirtualRange, that the
+      // VirtualRange lists this frag as one of its components.
+      let this_mb_vlrix = this_pair.mb_vlrix;
+      if let Some(this_vlrix) = this_mb_vlrix {
+        ok = vlr_env[this_vlrix]
+          .sorted_frags
+          .frag_ixs
+          .iter()
+          .any(|fix| *fix == this_fix);
+        if !ok {
+          break;
+        }
+      }
+    }
+    // Also check the first entry for a correct back-link.
+    if ok && self.pairs.len() > 0 {
+      let this_pair = &self.pairs[0];
+      let this_fix = this_pair.fix;
+      let this_mb_vlrix = this_pair.mb_vlrix;
+      if let Some(this_vlrix) = this_mb_vlrix {
+        ok = vlr_env[this_vlrix]
+          .sorted_frags
+          .frag_ixs
+          .iter()
+          .any(|fix| *fix == this_fix);
+      }
+    }
+    if !ok {
+      panic!("CommitmentMap::check: vector not ok");
+    }
+  }
+
+  pub fn add(
+    &mut self, to_add_frags: &SortedRangeFragIxs,
+    to_add_mb_vlrix: Option<VirtualRangeIx>,
+    fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
+  ) {
+    self.check(fenv, vlr_env);
+    to_add_frags.check(fenv);
+    let pairs_x = &self;
+    let frags_y = &to_add_frags;
+    let mut ix = 0;
+    let mut iy = 0;
+    let mut res = Vec::<FIxAndVLRIx>::new();
+    while ix < pairs_x.pairs.len() && iy < frags_y.frag_ixs.len() {
+      let fx = fenv[pairs_x.pairs[ix].fix];
+      let fy = fenv[frags_y.frag_ixs[iy]];
+      match cmp_range_frags(&fx, &fy) {
+        Some(Ordering::Less) => {
+          res.push(pairs_x.pairs[ix]);
+          ix += 1;
+        }
+        Some(Ordering::Greater) => {
+          res.push(FIxAndVLRIx::new(frags_y.frag_ixs[iy], to_add_mb_vlrix));
+          iy += 1;
+        }
+        Some(Ordering::Equal) | None => {
+          panic!("CommitmentMap::add: vectors intersect")
+        }
+      }
+    }
+    // At this point, one or the other or both vectors are empty.  Hence
+    // it doesn't matter in which order the following two while-loops
+    // appear.
+    assert!(ix == pairs_x.pairs.len() || iy == frags_y.frag_ixs.len());
+    while ix < pairs_x.pairs.len() {
+      res.push(pairs_x.pairs[ix]);
+      ix += 1;
+    }
+    while iy < frags_y.frag_ixs.len() {
+      res.push(FIxAndVLRIx::new(frags_y.frag_ixs[iy], to_add_mb_vlrix));
+      iy += 1;
+    }
+    self.pairs = res;
+    self.check(fenv, vlr_env);
+  }
+
+  pub fn del(
+    &mut self, to_del_frags: &SortedRangeFragIxs,
+    fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
+  ) {
+    self.check(fenv, vlr_env);
+    to_del_frags.check(fenv);
+    let pairs_x = &self;
+    let frags_y = &to_del_frags;
+    let mut ix = 0;
+    let mut iy = 0;
+    let mut res = Vec::<FIxAndVLRIx>::new();
+    while ix < pairs_x.pairs.len() && iy < frags_y.frag_ixs.len() {
+      let fx = fenv[pairs_x.pairs[ix].fix];
+      let fy = fenv[frags_y.frag_ixs[iy]];
+      match cmp_range_frags(&fx, &fy) {
+        Some(Ordering::Less) => {
+          res.push(pairs_x.pairs[ix]);
+          ix += 1;
+        }
+        Some(Ordering::Equal) => {
+          ix += 1;
+          iy += 1;
+        }
+        Some(Ordering::Greater) => {
+          iy += 1;
+        }
+        None => panic!("CommitmentMap::del: partial overlap"),
+      }
+    }
+    assert!(ix == pairs_x.pairs.len() || iy == frags_y.frag_ixs.len());
+    // Handle leftovers
+    while ix < pairs_x.pairs.len() {
+      res.push(pairs_x.pairs[ix]);
+      ix += 1;
+    }
+    self.pairs = res;
+    self.check(fenv, vlr_env);
   }
 }
 
@@ -447,19 +655,19 @@ impl VirtualRangePrioQ {
 
 struct PerRealReg {
   // The current committed fragments for this RealReg.
-  frags_in_use: SortedRangeFragIxs,
+  committed: CommitmentMap,
 
   // The VirtualRanges which have been assigned to this RealReg, in no
   // particular order.  The union of their frags will be equal to
-  // |frags_in_use| only if this RealReg has no RealRanges.  If this RealReg
+  // |committed| only if this RealReg has no RealRanges.  If this RealReg
   // does have RealRanges the aforementioned union will be exactly the
-  // subset of |frags_in_use| not used by the RealRanges.
+  // subset of |committed| not used by the RealRanges.
   vlrixs_assigned: Vec<VirtualRangeIx>,
 }
 impl PerRealReg {
-  fn new(fenv: &TypedIxVec<RangeFragIx, RangeFrag>) -> Self {
+  fn new() -> Self {
     Self {
-      frags_in_use: SortedRangeFragIxs::new(&vec![], fenv),
+      committed: CommitmentMap::new(),
       vlrixs_assigned: Vec::<VirtualRangeIx>::new(),
     }
   }
@@ -467,38 +675,37 @@ impl PerRealReg {
   #[inline(never)]
   fn add_RealRange(
     &mut self, to_add: &RealRange, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
   ) {
     // Commit this register to |to_add|, irrevocably.  Don't add it to
     // |vlrixs_assigned| since we will never want to later evict the
     // assignment.
-    self.frags_in_use.add(&to_add.sorted_frags, fenv);
-  }
-
-  #[inline(never)]
-  fn can_add_VirtualRange_without_eviction(
-    &self, to_add: &VirtualRange, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
-  ) -> bool {
-    self.frags_in_use.can_add(&to_add.sorted_frags, fenv)
+    self.committed.add(&to_add.sorted_frags, None, fenv, vlr_env);
   }
 
   #[inline(never)]
   fn add_VirtualRange(
     &mut self, to_add_vlrix: VirtualRangeIx,
-    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
   ) {
-    let vlr = &vlr_env[to_add_vlrix];
-    self.frags_in_use.add(&vlr.sorted_frags, fenv);
+    let to_add_vlr = &vlr_env[to_add_vlrix];
+    self.committed.add(
+      &to_add_vlr.sorted_frags,
+      Some(to_add_vlrix),
+      fenv,
+      vlr_env,
+    );
     self.vlrixs_assigned.push(to_add_vlrix);
   }
 
   #[inline(never)]
   fn del_VirtualRange(
     &mut self, to_del_vlrix: VirtualRangeIx,
-    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
   ) {
-    debug_assert!(self.vlrixs_assigned.len() > 0);
+    assert!(self.vlrixs_assigned.len() > 0);
     // Remove it from |vlrixs_assigned|
     let mut found = None;
     for i in 0..self.vlrixs_assigned.len() {
@@ -514,94 +721,462 @@ impl PerRealReg {
     } else {
       panic!("PerRealReg: del_VirtualRange on VR not in vlrixs_assigned");
     }
-    // Remove it from |frags_in_use|
-    let vlr = &vlr_env[to_del_vlrix];
-    self.frags_in_use.del(&vlr.sorted_frags, fenv);
+    // Remove it from |committed|
+    let to_del_vlr = &vlr_env[to_del_vlrix];
+    self.committed.del(&to_del_vlr.sorted_frags, fenv, vlr_env);
   }
+}
 
+// HELPER FUNCTION
+// In order to allocate |would_like_to_add| for this real reg, we will
+// need to evict |pairs[pairs_ix]|.  That may or may not be possible,
+// given the rules of the game.  If it is possible, update |evict_set| and
+// |evict_cost| accordingly, and return |true|.  If it isn't possible,
+// return |false|; |evict_set| and |evict_cost| must not be changed.
+fn handle_CM_entry(
+  evict_set: &mut Set<VirtualRangeIx>, evict_cost: &mut SpillCost,
+  pairs: &Vec<FIxAndVLRIx>, pairs_ix: usize, spill_cost_budget: SpillCost,
+  do_not_evict: &Set<VirtualRangeIx>,
+  vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>, _who: &'static str,
+) -> bool {
+  let FIxAndVLRIx { fix: _fix_to_evict, mb_vlrix: mb_vlrix_to_evict } =
+    pairs[pairs_ix];
+  //debug!("handle_CM_entry({}): to_evict = {:?}, set = {:?}",
+  //       who, mb_vlrix_to_evict, evict_set);
+  // Work through our list of reasons why evicting this frag isn't
+  // possible or allowed.
+  if mb_vlrix_to_evict.is_none() {
+    // This frag has no associated VirtualRangeIx, so it is part of a
+    // RealRange, and hence not evictable.
+    return false;
+  }
+  // The |unwrap| is guarded by the previous |if|.
+  let vlrix_to_evict = mb_vlrix_to_evict.unwrap();
+  if do_not_evict.contains(vlrix_to_evict) {
+    // Our caller asks that we do not evict this one.
+    return false;
+  }
+  let vlr_to_evict = &vlr_env[vlrix_to_evict];
+  if vlr_to_evict.spill_cost.is_infinite() {
+    // This is a spill/reload range, so we can't evict it.
+    return false;
+  }
+  // It's at least plausible.  Check the costs.  Note that because a
+  // VirtualRange may contain arbitrarily many RangeFrags, and we're
+  // visiting RangeFrags here, the |evict_set| may well already contain
+  // |vlrix_to_evict|, in the case where we've already visited a different
+  // fragment that "belongs" to |vlrix_to_evict|.  Hence we must be sure
+  // not to add it again -- if only as as not to mess up the evict cost
+  // calculations.
+
+  if !evict_set.contains(vlrix_to_evict) {
+    let mut new_evict_cost = *evict_cost;
+    new_evict_cost.add(&vlr_to_evict.spill_cost);
+    // Are we still within our spill-cost "budget"?
+    if !new_evict_cost.is_less_than(&spill_cost_budget) {
+      // No.  Give up.
+      return false;
+    }
+    // We're committing to this entry.  So update the running state.
+    evict_set.insert(vlrix_to_evict);
+    *evict_cost = new_evict_cost;
+  }
+  true
+}
+
+impl PerRealReg {
+  // Find the set of VirtualRangeIxs that would need to be evicted in order to
+  // allocate |would_like_to_add| to this register.  Virtual ranges mentioned
+  // in |do_not_evict| must not be considered as candidates for eviction.
+  // Also returns the total associated spill cost.  That spill cost cannot be
+  // infinite.
+  //
+  // This can fail (return None) for four different reasons:
+  //
+  // - |would_like_to_add| interferes with a real-register-live-range
+  //   commitment, so the register would be unavailable even if we evicted
+  //   *all* virtual ranges assigned to it.
+  //
+  // - |would_like_to_add| interferes with a virtual range which is a spill
+  //   range (has infinite cost).  We cannot evict those without risking
+  //   non-termination of the overall allocation algorithm.
+  //
+  // - |would_like_to_add| interferes with a virtual range listed in
+  //   |do_not_evict|.  Our caller uses this mechanism when trying to do
+  //   coalesing, to avoid the nonsensicality of evicting some part of a
+  //   virtual live range group in order to allocate a member of the same
+  //   group.
+  //
+  // - The total spill cost of the candidate set exceeds the spill cost of
+  //   |would_like_to_add|.  This means that spilling them would be a net loss
+  //   per our cost model.  Note that |would_like_to_add| may have an infinite
+  //   spill cost, in which case it will "win" over all other
+  //   non-infinite-cost eviction candidates.  This is by design (so as to
+  //   guarantee that we can always allocate spill/reload bridges).
   #[inline(never)]
-  fn find_best_evict_VirtualRange(
+  fn find_Evict_Set_FAST(
     &self, would_like_to_add: VirtualRangeIx,
     do_not_evict: &Set<VirtualRangeIx>,
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-  ) -> Option<(VirtualRangeIx, f32)> {
-    // |would_like_to_add| presumably doesn't fit here.  See if eviction
-    // of any of the existing LRs would make it allocable, and if so
-    // return that LR and its cost.  Valid candidates VirtualRanges must
-    // meet the following criteria:
-    // - must be assigned to this register (obviously)
-    // - must not be a member of |do_not_evict|
-    //   (so the caller can arbitrary exclude candidates)
-    // - must have a non-infinite spill cost
-    //   (since we don't want to eject spill/reload LRs)
-    // - must have a spill cost less than that of |would_like_to_add|
-    //   (so as to guarantee forward progress)
-    // - removal of it must actually make |would_like_to_add| allocable
-    //   (otherwise all this is pointless)
-    let mut best_so_far: Option<(VirtualRangeIx, f32)> = None;
-    for cand_vlrix in &self.vlrixs_assigned {
-      if do_not_evict.contains(*cand_vlrix) {
-        continue;
-      }
-      let cand_vlr = &vlr_env[*cand_vlrix];
-      if cand_vlr.spill_cost.is_none() {
-        continue;
-      }
-      let cand_cost = cand_vlr.spill_cost.unwrap();
-      if !cost_is_less(Some(cand_cost), vlr_env[would_like_to_add].spill_cost) {
-        continue;
-      }
-      if !self.frags_in_use.can_add_if_we_first_del(
-        &cand_vlr.sorted_frags,
-        &vlr_env[would_like_to_add].sorted_frags,
-        frag_env,
-      ) {
-        continue;
-      }
-      // Ok, it's at least a valid candidate.  But is it better than
-      // any candidate we might already have?
-      let mut cand_is_better = true;
-      if let Some((_, best_cost)) = best_so_far {
-        if cost_is_less(Some(best_cost), Some(cand_cost)) {
-          cand_is_better = false;
-        }
-      }
-      if cand_is_better {
-        // Either this is the first possible candidate we've seen, or
-        // it's better than any previous one.  In either case, make
-        // note of it.
-        best_so_far = Some((*cand_vlrix, cand_cost));
+  ) -> Option<(Set<VirtualRangeIx>, SpillCost)> {
+    // Two cursors, one for the committment map (curCM), the other for the
+    // VirtualRange we would like to add (curVR).
+    //
+    // The key activity is to visit all parts (meaning, all RangeFrags) of CM
+    // that intersect with any part of VR.  By inspecting the VirtualRangeIx
+    // associated with each such fragment, we can build up the set of
+    // VirtualRangeIxs that would have to be evicted to make
+    // |would_like_to_add| be allocable.
+
+    fn step((curIx, curB): (usize, bool)) -> (usize, bool) {
+      if curB == false {
+        (curIx, true)
+      } else {
+        (curIx + 1, false)
       }
     }
-    best_so_far
+
+    // for the bools in the args:
+    //   false denotes the start of a frag
+    //    true denotes the end of a frag
+    fn frag_points_less_than(
+      (frag1, end1): (&RangeFrag, bool), (frag2, end2): (&RangeFrag, bool),
+    ) -> bool {
+      let ip1 = if end1 { frag1.last } else { frag1.first };
+      let ip2 = if end2 { frag2.last } else { frag2.first };
+      ip1 < ip2
+    }
+
+    // Useful constants for the loop
+    let would_like_to_add_vlr = &vlr_env[would_like_to_add];
+    let evict_cost_budget = would_like_to_add_vlr.spill_cost;
+    // Note that |evict_cost_budget| can be infinite because
+    // |would_like_to_add| might be a spill/reload range.
+
+    // number in commitment map
+    let numCM = self.committed.pairs.len();
+    // number in the vlr to add
+    let numVR = would_like_to_add_vlr.sorted_frags.frag_ixs.len();
+
+    // State updated by the loop
+    let mut evict_set = Set::<VirtualRangeIx>::empty();
+    let mut evict_cost = SpillCost::zero();
+
+    let mut curCM = (0, false); // false denotes the start of a frag
+    let mut curVR = (0, false); // true denotes the end of a frag
+
+    let mut inCM: Option<usize> = None;
+    let mut inVR = false;
+
+    // When entering CM, pay attention to the frag's VLRIx link and update
+    // |evict_set|/|evict_cost| accordingly.  We may also see a situation
+    // where there are unevictable uses in the range, in which case we exit
+    // early since further searching is pointless.
+    loop {
+      if curCM.0 >= numCM || curVR.0 >= numVR {
+        // We've fallen off the end of one or the other vector, so there are
+        // no more intersections possible, so quit.
+        break;
+      }
+      //
+      let curCM_frag = &frag_env[self.committed.pairs[curCM.0].fix];
+      let curVR_frag =
+        &frag_env[would_like_to_add_vlr.sorted_frags.frag_ixs[curVR.0]];
+      //
+      if frag_points_less_than((curCM_frag, curCM.1), (curVR_frag, curVR.1)) {
+        // Next event occurs for CM
+        if curCM.1 == false {
+          // curCM is at start.  Enter.
+          // ENTER curCM
+          assert!(inCM.is_none());
+          inCM = Some(curCM.0);
+          if inVR {
+            // **** We'll need to evict this CM entry. ****
+            //debug!("find1: must evict {:?}", curCM_frag);
+            let evict_possible = handle_CM_entry(
+              &mut evict_set,
+              &mut evict_cost,
+              &self.committed.pairs,
+              curCM.0,
+              evict_cost_budget,
+              &do_not_evict,
+              &vlr_env,
+              "F1",
+            );
+            if !evict_possible {
+              return None;
+            }
+          }
+        } else {
+          // curCM is at end.  Exit.
+          // EXIT curCM
+          assert!(inCM.is_some());
+          inCM = None;
+        }
+        curCM = step(curCM);
+      } else if frag_points_less_than(
+        (curVR_frag, curVR.1),
+        (curCM_frag, curCM.1),
+      ) {
+        // Next event occurs for VR
+        if curVR.1 == false {
+          // curVR is at start.  Enter.
+          // ENTER curVR
+          inVR = true;
+          if let Some(cm_vlrix) = inCM {
+            // **** We'll need to evict this CM entry. ****
+            //debug!("find1: must evict {:?}", curCM_frag);
+            let evict_possible = handle_CM_entry(
+              &mut evict_set,
+              &mut evict_cost,
+              &self.committed.pairs,
+              cm_vlrix,
+              evict_cost_budget,
+              &do_not_evict,
+              &vlr_env,
+              "F2",
+            );
+            if !evict_possible {
+              return None;
+            }
+          }
+        } else {
+          // curVR is at end.  Exit.
+          // EXIT curVR
+          inVR = false;
+        }
+        curVR = step(curVR);
+      } else {
+        // Next event for both CM and VM occurs at the same point.
+        if curCM.1 == false {
+          // ENTER CM
+          assert!(inCM.is_none());
+          inCM = Some(curCM.0);
+          if inVR {
+            // **** We'll need to evict this CM entry. ****
+            //debug!("find2: must evict {:?}", curCM_frag);
+            let evict_possible = handle_CM_entry(
+              &mut evict_set,
+              &mut evict_cost,
+              &self.committed.pairs,
+              curCM.0,
+              evict_cost_budget,
+              &do_not_evict,
+              &vlr_env,
+              "F3",
+            );
+            if !evict_possible {
+              return None;
+            }
+          }
+        }
+        // but don't deal with a CM exit .. yet
+        //
+        // and independently ..
+        if curVR.1 == false {
+          // ENTER VR
+          inVR = true;
+          if let Some(cm_vlrix) = inCM {
+            // **** We'll need to evict this CM entry. ****
+            //debug!("find1: must evict {:?}", curCM_frag);
+            let evict_possible = handle_CM_entry(
+              &mut evict_set,
+              &mut evict_cost,
+              &self.committed.pairs,
+              cm_vlrix,
+              evict_cost_budget,
+              &do_not_evict,
+              &vlr_env,
+              "F4",
+            );
+            if !evict_possible {
+              return None;
+            }
+          }
+        }
+        // but don't deal with a VR exit .. yet
+        //
+        // Deal with exits now
+        if curCM.1 == true {
+          // EXIT CM
+          assert!(inCM.is_some());
+          inCM = None;
+        }
+        if curVR.1 == true {
+          // EXIT VR
+          inVR = false;
+        }
+        curCM = step(curCM);
+        curVR = step(curVR);
+      }
+    }
+
+    // If we got this far, we at least found something usable.  It may not be
+    // very good, but it is at least usable.
+    assert!(evict_cost.is_finite());
+    assert!(evict_cost.is_less_than(&evict_cost_budget));
+    Some((evict_set, evict_cost))
+  }
+
+  // This should compute exactly the same results as find_Evict_Set_FAST,
+  // using a slow but much-easier-to-get-correct algorithm.  It has been used
+  // to debug find_Evict_Set_FAST.
+  #[inline(never)]
+  fn find_Evict_Set_CROSSCHECK(
+    &self, would_like_to_add: VirtualRangeIx,
+    do_not_evict: &Set<VirtualRangeIx>,
+    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
+    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+  ) -> Option<(Set<VirtualRangeIx>, SpillCost)> {
+    fn step_ip(ip: InstPoint) -> InstPoint {
+      match ip.pt {
+        Point::Reload => InstPoint::new(ip.iix, Point::Use),
+        Point::Use => InstPoint::new(ip.iix, Point::Def),
+        Point::Def => InstPoint::new(ip.iix, Point::Spill),
+        Point::Spill => InstPoint::new(ip.iix.plus(1), Point::Reload),
+      }
+    }
+
+    // Useful constants for the loop
+    let would_like_to_add_vlr = &vlr_env[would_like_to_add];
+    let evict_cost_budget = would_like_to_add_vlr.spill_cost;
+    // Note that |evict_cost_budget| can be infinite because
+    // |would_like_to_add| might be a spill/reload range.
+
+    let vr_ip_first =
+      frag_env[would_like_to_add_vlr.sorted_frags.frag_ixs[0]].first;
+    let vr_ip_last = frag_env[would_like_to_add_vlr.sorted_frags.frag_ixs
+      [would_like_to_add_vlr.sorted_frags.frag_ixs.len() - 1]]
+      .last;
+    // assert that wlta is in order
+    for fix in &would_like_to_add_vlr.sorted_frags.frag_ixs {
+      let frag = &frag_env[*fix];
+      assert!(vr_ip_first <= frag.first && frag.first <= vr_ip_last);
+      assert!(vr_ip_first <= frag.last && frag.last <= vr_ip_last);
+    }
+
+    // if the CM is empty, we can always accept the assignment.  Otherwise:
+
+    // State updated by the loop
+    let mut evict_set = Set::<VirtualRangeIx>::empty();
+    let mut evict_cost = SpillCost::zero();
+
+    if self.committed.pairs.len() > 0 {
+      // iterate over all points in wlta (the VR)
+      let mut vr_ip = vr_ip_first;
+      loop {
+        if vr_ip > vr_ip_last {
+          break;
+        }
+
+        // Find out any vr entry contains |vr_ip|, if any.  If not, move on.
+        let mut found_in_vr = false;
+        for fix in &would_like_to_add_vlr.sorted_frags.frag_ixs {
+          let frag = &frag_env[*fix];
+          if frag.first <= vr_ip && vr_ip <= frag.last {
+            found_in_vr = true;
+            break;
+          }
+        }
+        if !found_in_vr {
+          vr_ip = step_ip(vr_ip);
+          continue; // there can't be any intersection at |vr_ip|
+        }
+
+        // Find the cm entry containing |vr_ip|
+        let mut pair_ix = 0;
+        let mut found = false;
+        for pair in &self.committed.pairs {
+          let FIxAndVLRIx { fix, mb_vlrix: _ } = pair;
+          let frag = &frag_env[*fix];
+          if frag.first <= vr_ip && vr_ip <= frag.last {
+            found = true;
+            break;
+          }
+          pair_ix += 1;
+        }
+        if found {
+          //debug!("findXX: must evict {:?}", &self.committed.pairs[pair_ix]);
+          let evict_possible = handle_CM_entry(
+            &mut evict_set,
+            &mut evict_cost,
+            &self.committed.pairs,
+            pair_ix,
+            evict_cost_budget,
+            &do_not_evict,
+            &vlr_env,
+            "CX",
+          );
+          if !evict_possible {
+            return None;
+          }
+        }
+
+        vr_ip = step_ip(vr_ip);
+      }
+    } // if self.committed.pairs.len() > 0 {
+
+    assert!(evict_cost.is_finite());
+    assert!(evict_cost.is_less_than(&evict_cost_budget));
+    Some((evict_set, evict_cost))
+  }
+
+  #[inline(never)]
+  fn find_Evict_Set(
+    &self, would_like_to_add: VirtualRangeIx,
+    do_not_evict: &Set<VirtualRangeIx>,
+    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
+    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+  ) -> Option<(Set<VirtualRangeIx>, SpillCost)> {
+    let do_crosscheck = false;
+
+    let result_fast = self.find_Evict_Set_FAST(
+      would_like_to_add,
+      do_not_evict,
+      vlr_env,
+      frag_env,
+    );
+
+    if do_crosscheck {
+      let result_crosscheck = self.find_Evict_Set_CROSSCHECK(
+        would_like_to_add,
+        do_not_evict,
+        vlr_env,
+        frag_env,
+      );
+      // Big hack
+      let str_fast: String = format!("{:?}", result_fast);
+      let str_crosscheck: String = format!("{:?}", result_crosscheck);
+      if str_fast != str_crosscheck {
+        debug!(
+          "QQQQ find_Evict_Set: fast {}, crosscheck {}",
+          str_fast, str_crosscheck
+        );
+        debug!("");
+        debug!("self.commitments = {:?}", self.committed);
+        debug!("");
+        debug!("wlta = {:?}", vlr_env[would_like_to_add]);
+        debug!("");
+        debug!("");
+        panic!("find_Evict_Set");
+      }
+    }
+
+    result_fast
   }
 
   #[inline(never)]
   fn show1_with_envs(
     &self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> String {
-    "in_use:   ".to_string() + &self.frags_in_use.show_with_fenv(&fenv)
+    "in_use:   ".to_string() + &self.committed.show_with_fenv(&fenv)
   }
   #[inline(never)]
   fn show2_with_envs(
     &self, _fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> String {
     "assigned: ".to_string() + &format!("{:?}", &self.vlrixs_assigned)
-  }
-}
-
-// Helper function, to compare spill costs
-fn cost_is_less(cost1: Option<f32>, cost2: Option<f32>) -> bool {
-  // None denotes "infinity", while Some(_) is some number less than
-  // infinity.  No matter that the enclosed f32 can denote its own infinity
-  // :-/ (they never actually should be infinity, nor negative, nor any
-  // denormal either).
-  match (cost1, cost2) {
-    (None, None) => false,
-    (Some(_), None) => true,
-    (None, Some(_)) => false,
-    (Some(f1), Some(f2)) => f1 < f2,
   }
 }
 
@@ -622,7 +1197,7 @@ fn print_RA_state(
 ) {
   debug!("<<<<====---- RA state at '{}' ----====", who);
   for ix in 0..perRealReg.len() {
-    if !&perRealReg[ix].frags_in_use.frag_ixs.is_empty() {
+    if !&perRealReg[ix].committed.pairs.is_empty() {
       debug!(
         "{:<5}  {}",
         universe.regs[ix].1,
@@ -765,7 +1340,7 @@ pub fn alloc_main<F: Function>(
   for _ in 0..reg_universe.allocable {
     // Doing this instead of simply .resize avoids needing Clone for
     // PerRealReg
-    per_real_reg.push(PerRealReg::new(&frag_env));
+    per_real_reg.push(PerRealReg::new());
   }
   for rlr in rlr_env.iter() {
     let rregIndex = rlr.rreg.get_index();
@@ -775,7 +1350,7 @@ pub fn alloc_main<F: Function>(
     if rregIndex >= reg_universe.allocable {
       continue;
     }
-    per_real_reg[rregIndex].add_RealRange(&rlr, &frag_env);
+    per_real_reg[rregIndex].add_RealRange(&rlr, &frag_env, &vlr_env);
   }
 
   let mut edit_list = Vec::<EditListItem>::new();
@@ -812,12 +1387,31 @@ pub fn alloc_main<F: Function>(
   let empty_Set_VirtualRangeIx = Set::<VirtualRangeIx>::empty();
 
   // ======== BEGIN Main allocation loop ========
-  'main_allocation_loop: while let Some(curr_vlrix) =
-    prioQ.get_longest_VirtualRange(&vlr_env)
-  {
+  'main_allocation_loop: loop {
+    debug!("-- still TODO          {}", prioQ.len());
+    if false {
+      debug!("");
+      print_RA_state(
+        "Loop Top",
+        &reg_universe,
+        &prioQ,
+        &per_real_reg,
+        &edit_list,
+        &vlr_env,
+        &frag_env,
+      );
+      debug!("");
+    }
+
+    let mb_curr_vlrix = prioQ.get_longest_VirtualRange(&vlr_env);
+    if mb_curr_vlrix.is_none() {
+      break 'main_allocation_loop;
+    }
+
+    let curr_vlrix = mb_curr_vlrix.unwrap();
     let curr_vlr = &vlr_env[curr_vlrix];
 
-    debug!("-- considering         {:?}:  {:?}", curr_vlrix, curr_vlr);
+    debug!("--   considering       {:?}:  {:?}", curr_vlrix, curr_vlr);
 
     debug_assert!(curr_vlr.vreg.to_reg().is_virtual());
     let curr_vlr_rc = curr_vlr.vreg.get_class().rc_to_usize();
@@ -856,68 +1450,84 @@ pub fn alloc_main<F: Function>(
     // Now work through the list of preferences, to see if we can honour any
     // of them.
     for rreg in hinted_regs {
-      // Try for the easy case: the requested register is available without
-      // having to evict other range(s).
       let rregNo = rreg.get_index();
       debug!("--   CO candidate      {}", reg_universe.regs[rregNo].1);
-      if per_real_reg[rregNo]
-        .can_add_VirtualRange_without_eviction(curr_vlr, &frag_env)
-      {
-        debug!("--   CO alloc to       {}", reg_universe.regs[rregNo].1);
-        per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
-        debug_assert!(curr_vlr.rreg.is_none());
-        // Directly modify bits of vlr_env.  This means we have to abandon
-        // the immutable borrow for curr_vlr, but that's OK -- we won't
-        // need it again (in this loop iteration).
-        vlr_env[curr_vlrix].rreg = Some(rreg);
-        continue 'main_allocation_loop;
-      }
 
-      // Try for the not-so-easy case: the requested register is available,
-      // but only if we evict some other range.  We take care not to evict any
-      // range which is in the same equivalence class as |curr_vlr| since
-      // those are (by definition) connected to |curr_vlr| via V-V copies, and
-      // so evicting any of them would be counterproductive from the point of
-      // view of removing copies.
+      // Find the set of ranges which we'd have to evict in order to honour
+      // this hint.  In the best case the set will be empty.  In the worst
+      // case, we will get None either because (1) it would require evicting a
+      // spill range, which is disallowed so as to guarantee termination of
+      // the algorithm, or (2) because it would require evicting a real reg
+      // live range, which we can't do.
+      //
+      // We take care not to evict any range which is in the same equivalence
+      // class as |curr_vlr| since those are (by definition) connected to
+      // |curr_vlr| via V-V copies, and so evicting any of them would be
+      // counterproductive from the point of view of removing copies.
+
       let do_not_evict = vlrEquivClasses.find(curr_vlrix);
-      let mb_evict_cand: Option<(VirtualRangeIx, f32)> = per_real_reg[rregNo]
-        .find_best_evict_VirtualRange(
+      assert!(do_not_evict.contains(curr_vlrix));
+
+      let mb_evict_info: Option<(Set<VirtualRangeIx>, SpillCost)> =
+        per_real_reg[rregNo].find_Evict_Set(
           curr_vlrix,
           &do_not_evict,
           &vlr_env,
           &frag_env,
         );
-      if let Some((vlrix_to_evict, _)) = mb_evict_cand {
-        // Evict ..
-        debug!(
-          "--   CO evict          {:?}:  {:?}",
-          vlrix_to_evict, &vlr_env[vlrix_to_evict]
-        );
-        debug_assert!(vlrix_to_evict != curr_vlrix);
-        per_real_reg[rregNo].del_VirtualRange(
-          vlrix_to_evict,
-          &vlr_env,
-          &frag_env,
-        );
-        prioQ.add_VirtualRange(vlrix_to_evict);
-        debug_assert!(vlr_env[vlrix_to_evict].rreg.is_some());
+      if let Some((vlrixs_to_evict, total_evict_cost)) = mb_evict_info {
+        // Stay sane #1
+        assert!(curr_vlr.rreg.is_none());
+        // Stay sane #2
+        assert!(vlrixs_to_evict.is_empty() == total_evict_cost.is_zero());
+        // Can't evict if any in the set are spill ranges
+        assert!(total_evict_cost.is_finite());
+        // Ensure forward progress
+        assert!(total_evict_cost.is_less_than(&curr_vlr.spill_cost));
+        // Evict all evictees in the set
+        for vlrix_to_evict in vlrixs_to_evict.iter() {
+          // Ensure we're not evicting anything in |curr_vlrix|'s eclass.
+          // This should be guaranteed us by find_Evict_Set.
+          assert!(!do_not_evict.contains(*vlrix_to_evict));
+          // Evict ..
+          debug!(
+            "--   CO evict          {:?}:  {:?}",
+            *vlrix_to_evict, &vlr_env[*vlrix_to_evict]
+          );
+          per_real_reg[rregNo].del_VirtualRange(
+            *vlrix_to_evict,
+            &frag_env,
+            &vlr_env,
+          );
+          prioQ.add_VirtualRange(*vlrix_to_evict);
+          // Directly modify bits of vlr_env.  This means we have to abandon
+          // the immutable borrow for curr_vlr, but that's OK -- we won't need
+          // it again (in this loop iteration).
+          debug_assert!(vlr_env[*vlrix_to_evict].rreg.is_some());
+          vlr_env[*vlrix_to_evict].rreg = None;
+        }
         // .. and reassign.
-        debug!("--   CO then alloc to  {}", reg_universe.regs[rregNo].1);
-        per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
-        debug_assert!(curr_vlr.rreg.is_none());
-        // Again, directly modify vlr_env.
+        debug!("--   CO alloc to       {}", reg_universe.regs[rregNo].1);
+        per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &frag_env, &vlr_env);
         vlr_env[curr_vlrix].rreg = Some(rreg);
-        vlr_env[vlrix_to_evict].rreg = None;
+        // We're done!
         continue 'main_allocation_loop;
       }
-    }
+    } // for rreg in hinted_regs {
+
     // ==== END Try to do coalescing ====
 
     // We get here if we failed to find a viable assignment by the process of
     // looking at the coalescing hints.
     //
-    // See if we can find a RealReg to which we can assign this
-    // VirtualRange without evicting any previous assignment.
+    // So: do almost exactly as we did in the "try for coalescing" stage
+    // above.  Except, instead of trying each coalescing candidate
+    // individually, iterate over all the registers in the class, to find the
+    // one (if any) that has the lowest total evict cost.  If we find one that
+    // has zero cost -- that is, we can make the assignment without evicting
+    // anything -- then stop the search at that point, since searching further
+    // is pointless.
+
     let (first_in_rc, last_in_rc) =
       match &reg_universe.allocable_by_class[curr_vlr_rc] {
         &None => {
@@ -931,84 +1541,106 @@ pub fn alloc_main<F: Function>(
         &Some(ref info) => (info.first, info.last),
       };
 
-    for rregNo in first_in_rc..last_in_rc + 1 {
-      if per_real_reg[rregNo]
-        .can_add_VirtualRange_without_eviction(curr_vlr, &frag_env)
+    let mut best_so_far: Option<(
+      /*rreg index*/ usize,
+      Set<VirtualRangeIx>,
+      SpillCost,
+    )> = None;
+
+    'search_through_cand_rregs_loop: for rregNo in first_in_rc..last_in_rc + 1 {
+      //debug!("--   Cand              {} ...",
+      //       reg_universe.regs[rregNo].1);
+
+      let mb_evict_info: Option<(Set<VirtualRangeIx>, SpillCost)> =
+        per_real_reg[rregNo].find_Evict_Set(
+          curr_vlrix,
+          &empty_Set_VirtualRangeIx,
+          &vlr_env,
+          &frag_env,
+        );
+      //
+      //match mb_evict_info {
+      //  None => debug!("--   Cand              {}: Unavail",
+      //                 reg_universe.regs[rregNo].1),
+      //  Some((ref evict_set, ref evict_cost)) =>
+      //    debug!("--   Cand              {}: Avail, evict cost {:?}, set {:?}",
+      //            reg_universe.regs[rregNo].1, evict_cost, evict_set)
+      //}
+      //
+      if let Some((cand_vlrixs_to_evict, cand_total_evict_cost)) = mb_evict_info
       {
-        let rreg = reg_universe.regs[rregNo].0;
-        debug!("--   DI alloc to       {}", reg_universe.regs[rregNo].1);
-        per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
-        debug_assert!(curr_vlr.rreg.is_none());
-        // Again, directly modify vlr_env.
-        vlr_env[curr_vlrix].rreg = Some(rreg);
-        continue 'main_allocation_loop;
-      }
-    }
-
-    // That didn't work out.  Next, try to see if we can allocate it by
-    // evicting some existing allocation that has a lower spill weight.
-    // Search all RealRegs to find the candidate with the lowest spill
-    // weight.  This could be expensive.
-
-    // (rregNo for best cand, its VirtualRangeIx, and its spill cost)
-    let mut best_so_far: Option<(usize, VirtualRangeIx, f32)> = None;
-    for rregNo in first_in_rc..last_in_rc + 1 {
-      let mb_better_cand: Option<(VirtualRangeIx, f32)>;
-      mb_better_cand = per_real_reg[rregNo].find_best_evict_VirtualRange(
-        curr_vlrix,
-        &empty_Set_VirtualRangeIx,
-        &vlr_env,
-        &frag_env,
-      );
-      if let Some((cand_vlrix, cand_cost)) = mb_better_cand {
-        // See if this is better than the best so far, and if so take
-        // it.  First some sanity checks:
-        //
-        // If the cand to be evicted is the current one,
-        // something's seriously wrong.
-        debug_assert!(cand_vlrix != curr_vlrix);
-        // We can only evict a LR with lower spill cost than the LR
-        // we're trying to allocate.  This is really important, if only
-        // to show that the algorithm will actually terminate.
-        debug_assert!(cost_is_less(Some(cand_cost), curr_vlr.spill_cost));
-        let mut cand_is_better = true;
-        if let Some((_, _, best_cost)) = best_so_far {
-          if cost_is_less(Some(best_cost), Some(cand_cost)) {
-            cand_is_better = false;
+        // Stay sane ..
+        assert!(
+          cand_vlrixs_to_evict.is_empty() == cand_total_evict_cost.is_zero()
+        );
+        // We can't evict if any in the set are spill ranges, and
+        // find_Evict_Set should not offer us that possibility.
+        assert!(cand_total_evict_cost.is_finite());
+        // Ensure forward progress
+        assert!(cand_total_evict_cost.is_less_than(&curr_vlr.spill_cost));
+        // Update the "best so far".  First, if the evict set is empty, then
+        // the candidate is by definition better than all others, and we will
+        // quit searching just below.
+        let mut cand_is_better = cand_vlrixs_to_evict.is_empty();
+        if !cand_is_better {
+          if let Some((_, _, best_spill_cost)) = best_so_far {
+            // If we've already got a candidate, this one is better if it has
+            // a lower total spill cost.
+            if cand_total_evict_cost.is_less_than(&best_spill_cost) {
+              cand_is_better = true;
+            }
+          } else {
+            // We don't have any candidate so far, so what we just got is
+            // better (than nothing).
+            cand_is_better = true;
           }
         }
+        // Remember the candidate if required.
+        let cand_vlrixs_to_evict_is_empty = cand_vlrixs_to_evict.is_empty();
         if cand_is_better {
-          // Either this is the first possible candidate we've seen,
-          // or it's better than any previous one.  In either case,
-          // make note of it.
-          best_so_far = Some((rregNo, cand_vlrix, cand_cost));
+          best_so_far =
+            Some((rregNo, cand_vlrixs_to_evict, cand_total_evict_cost));
+        }
+        // If we've found a no-evictions-necessary candidate, quit searching
+        // immediately.  We won't find anything better.
+        if cand_vlrixs_to_evict_is_empty {
+          break 'search_through_cand_rregs_loop;
         }
       }
-    }
-    if let Some((rregNo, vlrix_to_evict, _)) = best_so_far {
-      // Evict ..
-      debug!(
-        "--   DI evict          {:?}:  {:?}",
-        vlrix_to_evict, &vlr_env[vlrix_to_evict]
-      );
-      debug_assert!(vlrix_to_evict != curr_vlrix);
-      per_real_reg[rregNo].del_VirtualRange(
-        vlrix_to_evict,
-        &vlr_env,
-        &frag_env,
-      );
-      prioQ.add_VirtualRange(vlrix_to_evict);
-      debug_assert!(vlr_env[vlrix_to_evict].rreg.is_some());
-      // .. and reassign.
-      let rreg = reg_universe.regs[rregNo].0;
-      debug!("--   DI then alloc to  {}", reg_universe.regs[rregNo].1);
-      per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &vlr_env, &frag_env);
+    } // for rregNo in first_in_rc..last_in_rc + 1 {
+
+    // Examine the results of the search.  Did we find any usable candidate?
+    if let Some((rregNo, vlrixs_to_evict, total_spill_cost)) = best_so_far {
+      // We are still Totally Paranoid (tm)
+      // Stay sane #1
       debug_assert!(curr_vlr.rreg.is_none());
-      // Directly modify bits of vlr_env.  This means we have to abandon
-      // the immutable borrow for curr_vlr, but that's OK -- we won't
-      // need it again again (in this loop iteration).
+      // Can't spill a spill range
+      assert!(total_spill_cost.is_finite());
+      // Ensure forward progress
+      assert!(total_spill_cost.is_less_than(&curr_vlr.spill_cost));
+      // Now the same evict-reassign section as with the coalescing logic above.
+      // Evict all evictees in the set
+      for vlrix_to_evict in vlrixs_to_evict.iter() {
+        // Evict ..
+        debug!(
+          "--   DI evict          {:?}:  {:?}",
+          *vlrix_to_evict, &vlr_env[*vlrix_to_evict]
+        );
+        per_real_reg[rregNo].del_VirtualRange(
+          *vlrix_to_evict,
+          &frag_env,
+          &vlr_env,
+        );
+        prioQ.add_VirtualRange(*vlrix_to_evict);
+        debug_assert!(vlr_env[*vlrix_to_evict].rreg.is_some());
+        vlr_env[*vlrix_to_evict].rreg = None;
+      }
+      // .. and reassign.
+      debug!("--   DI alloc to       {}", reg_universe.regs[rregNo].1);
+      per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &frag_env, &vlr_env);
+      let rreg = reg_universe.regs[rregNo].0;
       vlr_env[curr_vlrix].rreg = Some(rreg);
-      vlr_env[vlrix_to_evict].rreg = None;
+      // We're done!
       continue 'main_allocation_loop;
     }
 
@@ -1020,7 +1652,7 @@ pub fn alloc_main<F: Function>(
     // it's Game Over.  The constraints (availability of RealRegs vs
     // requirement for them) are impossible to fulfill, and so we cannot
     // generate any valid allocation for this function.
-    if curr_vlr.spill_cost.is_none() {
+    if curr_vlr.spill_cost.is_infinite() {
       return Err("out of registers".to_string());
     }
 
@@ -1156,7 +1788,7 @@ pub fn alloc_main<F: Function>(
         rreg: None,
         sorted_frags: new_vlr_sfixs,
         size: 1,
-        spill_cost: None, /*infinity*/
+        spill_cost: SpillCost::infinite(),
       };
       let new_vlrix = VirtualRangeIx::new(vlr_env.len() as u32);
       debug!("--     new VirtRange    {:?}  :=  {:?}", new_vlrix, &new_vlr);

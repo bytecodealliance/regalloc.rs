@@ -1375,7 +1375,7 @@ impl SortedRangeFragIxs {
     format!("(SRFIxs {:?})", &frags)
   }
 
-  fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
+  pub fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
     let mut ok = true;
     for i in 1..self.frag_ixs.len() {
       let prev_frag = &fenv[self.frag_ixs[i - 1]];
@@ -1419,132 +1419,89 @@ impl SortedRangeFragIxs {
 }
 
 //=============================================================================
-// Further methods on SortedRangeFragIxs.  These are needed by the core
-// algorithm.
+// Representing spill costs.  A spill cost can either be infinite, in which
+// case the associated VirtualRange may not be spilled, because it's already a
+// spill/reload range.  Or it can be finite, in which case it must be a 32-bit
+// floating point number, which is (in the IEEE754 meaning of the terms)
+// non-infinite, non-NaN and it must be non negative.  In fact it's
+// meaningless for a VLR to have a zero spill cost (how could that really be
+// the case?) but we allow it here for convenience.
 
-impl SortedRangeFragIxs {
-  pub fn add(
-    &mut self, to_add: &Self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
-  ) {
-    self.check(fenv);
-    to_add.check(fenv);
-    let sfixs_x = &self;
-    let sfixs_y = &to_add;
-    let mut ix = 0;
-    let mut iy = 0;
-    let mut res = Vec::<RangeFragIx>::new();
-    while ix < sfixs_x.frag_ixs.len() && iy < sfixs_y.frag_ixs.len() {
-      let fx = fenv[sfixs_x.frag_ixs[ix]];
-      let fy = fenv[sfixs_y.frag_ixs[iy]];
-      match cmp_range_frags(&fx, &fy) {
-        Some(Ordering::Less) => {
-          res.push(sfixs_x.frag_ixs[ix]);
-          ix += 1;
-        }
-        Some(Ordering::Greater) => {
-          res.push(sfixs_y.frag_ixs[iy]);
-          iy += 1;
-        }
-        Some(Ordering::Equal) | None => {
-          panic!("SortedRangeFragIxs::add: vectors intersect")
-        }
+#[derive(Copy, Clone)]
+pub enum SpillCost {
+  Infinite,    // Infinite, positive
+  Finite(f32), // Finite, non-negative
+}
+impl fmt::Debug for SpillCost {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      SpillCost::Infinite => write!(fmt, "INFIN"),
+      SpillCost::Finite(c) => write!(fmt, "{:<.2}", c),
+    }
+  }
+}
+impl SpillCost {
+  pub fn zero() -> Self {
+    SpillCost::Finite(0.0)
+  }
+  pub fn infinite() -> Self {
+    SpillCost::Infinite
+  }
+  pub fn finite(cost: f32) -> Self {
+    // "|is_normal| returns true if the number is neither zero, infinite,
+    // subnormal, or NaN."
+    assert!(cost.is_normal() || cost == 0.0);
+    // And also it can't be negative.
+    assert!(cost >= 0.0);
+    // Somewhat arbitrarily ..
+    assert!(cost < 1e18);
+    SpillCost::Finite(cost)
+  }
+  pub fn is_zero(&self) -> bool {
+    match self {
+      SpillCost::Infinite => false,
+      SpillCost::Finite(c) => *c == 0.0,
+    }
+  }
+  pub fn is_infinite(&self) -> bool {
+    match self {
+      SpillCost::Infinite => true,
+      SpillCost::Finite(_) => false,
+    }
+  }
+  pub fn is_finite(&self) -> bool {
+    !self.is_infinite()
+  }
+  pub fn unwrap(&self) -> f32 {
+    match self {
+      SpillCost::Infinite => panic!("SpillCost::unwrap"),
+      SpillCost::Finite(c) => *c,
+    }
+  }
+  pub fn is_less_than(&self, other: &Self) -> bool {
+    match (self, other) {
+      // Dubious .. both are infinity
+      (SpillCost::Infinite, SpillCost::Infinite) => false,
+      // finite < inf
+      (SpillCost::Finite(_), SpillCost::Infinite) => true,
+      // inf is not < finite
+      (SpillCost::Infinite, SpillCost::Finite(_)) => false,
+      // straightforward
+      (SpillCost::Finite(c1), SpillCost::Finite(c2)) => c1 < c2,
+    }
+  }
+  pub fn add(&mut self, other: &Self) {
+    match (*self, other) {
+      (SpillCost::Finite(c1), SpillCost::Finite(c2)) => {
+        // The 10^18 limit above gives us a lot of headroom here, since max
+        // f32 is around 10^37.
+        *self = SpillCost::Finite(c1 + c2);
+      }
+      (_, _) => {
+        // All other cases produce an infinity.
+        *self = SpillCost::Infinite;
       }
     }
-    // At this point, one or the other or both vectors are empty.  Hence
-    // it doesn't matter in which order the following two while-loops
-    // appear.
-    debug_assert!(ix == sfixs_x.frag_ixs.len() || iy == sfixs_y.frag_ixs.len());
-    while ix < sfixs_x.frag_ixs.len() {
-      res.push(sfixs_x.frag_ixs[ix]);
-      ix += 1;
-    }
-    while iy < sfixs_y.frag_ixs.len() {
-      res.push(sfixs_y.frag_ixs[iy]);
-      iy += 1;
-    }
-    self.frag_ixs = res;
-    self.check(fenv);
-  }
-
-  pub fn can_add(
-    &self, to_add: &Self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
-  ) -> bool {
-    // This is merely a partial evaluation of add() which returns |false|
-    // exactly in the cases where add() would have panic'd.
-    self.check(fenv);
-    to_add.check(fenv);
-    let sfixs_x = &self;
-    let sfixs_y = &to_add;
-    let mut ix = 0;
-    let mut iy = 0;
-    while ix < sfixs_x.frag_ixs.len() && iy < sfixs_y.frag_ixs.len() {
-      let fx = fenv[sfixs_x.frag_ixs[ix]];
-      let fy = fenv[sfixs_y.frag_ixs[iy]];
-      match cmp_range_frags(&fx, &fy) {
-        Some(Ordering::Less) => {
-          ix += 1;
-        }
-        Some(Ordering::Greater) => {
-          iy += 1;
-        }
-        Some(Ordering::Equal) | None => {
-          return false;
-        }
-      }
-    }
-    // At this point, one or the other or both vectors are empty.  So
-    // we're guaranteed to succeed.
-    debug_assert!(ix == sfixs_x.frag_ixs.len() || iy == sfixs_y.frag_ixs.len());
-    true
-  }
-
-  pub fn del(
-    &mut self, to_del: &Self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
-  ) {
-    self.check(fenv);
-    to_del.check(fenv);
-    let sfixs_x = &self;
-    let sfixs_y = &to_del;
-    let mut ix = 0;
-    let mut iy = 0;
-    let mut res = Vec::<RangeFragIx>::new();
-    while ix < sfixs_x.frag_ixs.len() && iy < sfixs_y.frag_ixs.len() {
-      let fx = fenv[sfixs_x.frag_ixs[ix]];
-      let fy = fenv[sfixs_y.frag_ixs[iy]];
-      match cmp_range_frags(&fx, &fy) {
-        Some(Ordering::Less) => {
-          res.push(sfixs_x.frag_ixs[ix]);
-          ix += 1;
-        }
-        Some(Ordering::Equal) => {
-          ix += 1;
-          iy += 1;
-        }
-        Some(Ordering::Greater) => {
-          iy += 1;
-        }
-        None => panic!("SortedRangeFragIxs::del: partial overlap"),
-      }
-    }
-    debug_assert!(ix == sfixs_x.frag_ixs.len() || iy == sfixs_y.frag_ixs.len());
-    // Handle leftovers
-    while ix < sfixs_x.frag_ixs.len() {
-      res.push(sfixs_x.frag_ixs[ix]);
-      ix += 1;
-    }
-    self.frag_ixs = res;
-    self.check(fenv);
-  }
-
-  pub fn can_add_if_we_first_del(
-    &self, to_del: &Self, to_add: &Self,
-    fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
-  ) -> bool {
-    // For now, just do this the stupid way.  It would be possible to do
-    // it without any allocation, but that sounds complex.
-    let mut after_del = self.clone();
-    after_del.del(&to_del, fenv);
-    return after_del.can_add(&to_add, fenv);
   }
 }
 
@@ -1601,9 +1558,11 @@ impl fmt::Debug for RealRange {
   }
 }
 
-// VirtualRanges are live ranges for virtual regs (VirtualRegs).  These do carry
-// metrics info and also the identity of the RealReg to which they eventually
-// got allocated.
+// VirtualRanges are live ranges for virtual regs (VirtualRegs).  This does
+// carry metrics info and also the identity of the RealReg to which it
+// eventually got allocated.  (Or in the backtracking allocator, the identity
+// of the RealReg to which it is *currently* assigned; that may be undone at
+// some later point.)
 
 #[derive(Clone)]
 pub struct VirtualRange {
@@ -1611,26 +1570,31 @@ pub struct VirtualRange {
   pub rreg: Option<RealReg>,
   pub sorted_frags: SortedRangeFragIxs,
   pub size: u16,
-  pub spill_cost: Option<f32>,
+  pub spill_cost: SpillCost,
 }
 
 impl fmt::Debug for VirtualRange {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    let cost_str = match self.spill_cost {
-      None => "INFIN".to_string(),
-      Some(c) => format!("{:<.2}", c),
-    };
     write!(fmt, "(VR: {:?},", self.vreg)?;
     if self.rreg.is_some() {
       write!(fmt, " -> {:?}", self.rreg.unwrap())?;
     }
-    write!(fmt, " s={}, c={}, {:?})", self.size, cost_str, self.sorted_frags)
+    write!(
+      fmt,
+      " s={}, c={:?}, {:?})",
+      self.size, self.spill_cost, self.sorted_frags
+    )
   }
 }
 
 //=============================================================================
 // Test cases
 
+// sewardj 2020Mar04: these are commented out for now, as they no longer
+// compile.  They may be useful later though, once BT acquires an interval
+// tree implementation for its CommitmentMap.
+
+/*
 #[test]
 fn test_sorted_frag_ranges() {
   // Create a RangeFrag and RangeFragIx from two InstPoints.
@@ -1890,3 +1854,4 @@ fn test_sorted_frag_ranges() {
         .can_add_if_we_first_del(/*d=*/ &smf_10_12, /*a=*/ &smf_7, &fenv)
   );
 }
+*/

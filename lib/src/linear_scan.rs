@@ -25,8 +25,8 @@ use crate::analysis::run_analysis;
 use crate::data_structures::{
   cmp_range_frags, BlockIx, InstPoint, Map, PlusOne, Point, RangeFrag,
   RangeFragIx, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, RegClass,
-  Set, SortedRangeFragIxs, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx,
-  VirtualReg, Writable,
+  Set, SortedRangeFragIxs, SpillCost, SpillSlot, TypedIxVec, VirtualRange,
+  VirtualRangeIx, VirtualReg, Writable,
 };
 use crate::inst_stream::{fill_memory_moves, InstAndPoint, InstsAndPoints};
 use crate::interface::{Function, RegAllocResult};
@@ -1136,7 +1136,7 @@ fn split<F: Function>(
     sorted_frags: child_sorted_frags,
     // These two fields are not used by linear scan.
     size: 0,
-    spill_cost: None,
+    spill_cost: SpillCost::infinite(),
   };
 
   // Insert child in virtual ranges and live intervals.

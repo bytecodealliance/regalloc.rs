@@ -11,8 +11,8 @@ use std::fmt;
 use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Map, Queue, RangeFrag, RangeFragIx,
   RangeFragKind, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg,
-  SanitizedInstRegUses, Set, SortedRangeFragIxs, TypedIxVec, VirtualRange,
-  VirtualRangeIx,
+  SanitizedInstRegUses, Set, SortedRangeFragIxs, SpillCost, TypedIxVec,
+  VirtualRange, VirtualRangeIx,
 };
 use crate::interface::Function;
 
@@ -859,7 +859,8 @@ fn merge_RangeFrags(
       }
       let sorted_frags = SortedRangeFragIxs::new(&frag_ixs.to_vec(), &frag_env);
       let size = 0;
-      let spill_cost = Some(0.0);
+      // Set zero spill cost for now.  We'll fill it in for real later.
+      let spill_cost = SpillCost::zero();
       if reg.is_virtual() {
         resV.push(VirtualRange {
           vreg: reg.to_virtual_reg(),
@@ -901,7 +902,7 @@ fn set_VirtualRange_metrics(
   estFreq: &TypedIxVec<BlockIx, u32>,
 ) {
   for vlr in vlrs.iter_mut() {
-    debug_assert!(vlr.size == 0 && vlr.spill_cost == Some(0.0));
+    debug_assert!(vlr.size == 0 && vlr.spill_cost.is_zero());
     debug_assert!(vlr.rreg.is_none());
     let mut tot_size: u32 = 0;
     let mut tot_cost: f32 = 0.0;
@@ -933,7 +934,7 @@ fn set_VirtualRange_metrics(
     // short LRs in competition for registers.  This seems a bit of a hack
     // to me, but hey ..
     tot_cost /= tot_size as f32;
-    vlr.spill_cost = Some(tot_cost);
+    vlr.spill_cost = SpillCost::finite(tot_cost);
   }
 }
 
