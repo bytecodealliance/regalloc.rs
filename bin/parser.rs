@@ -265,7 +265,7 @@ impl<'f, 'str> Parser<'f, 'str> {
     }
     Ok(Some(number))
   }
-  fn _read_number(&mut self) -> ParseResult<f64> {
+  fn read_number(&mut self) -> ParseResult<f64> {
     Ok(self.try_read_number()?.expect("expected number"))
   }
 
@@ -427,11 +427,29 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_addm(dst, src));
         }
 
+        "and" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src = parser.read_var()?;
+          parser.expect_char(',')?;
+          let op = parser.read_ri()?;
+          insts.push(i_and(dst, src, op));
+        }
+
         "copy" => {
           let dst = parser.read_var()?;
           parser.expect_char(',')?;
           let src = parser.read_var()?;
           insts.push(i_copy(dst, src));
+        }
+
+        "cmp_eq" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src = parser.read_var()?;
+          parser.expect_char(',')?;
+          let ri = parser.read_ri()?;
+          insts.push(i_cmp_eq(dst, src, ri));
         }
 
         "cmp_gt" => {
@@ -443,6 +461,29 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_cmp_gt(dst, src, ri));
         }
 
+        "cmp_gtm" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let ri = parser.read_ri()?;
+          insts.push(i_cmp_gtm(dst, ri));
+        }
+
+        "cmp_le" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src = parser.read_var()?;
+          parser.expect_char(',')?;
+          let ri = parser.read_ri()?;
+          insts.push(i_cmp_le(dst, src, ri));
+        }
+
+        "cmp_lem" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let ri = parser.read_ri()?;
+          insts.push(i_cmp_lem(dst, ri));
+        }
+
         "cmp_lt" => {
           let dst = parser.read_var()?;
           parser.expect_char(',')?;
@@ -450,6 +491,15 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           parser.expect_char(',')?;
           let ri = parser.read_ri()?;
           insts.push(i_cmp_lt(dst, src, ri));
+        }
+
+        "fdiv" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_left = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_right = parser.read_var()?;
+          insts.push(i_fdiv(dst, src_left, src_right));
         }
 
         "finish" => {
@@ -479,6 +529,13 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_imm(dst, value));
         }
 
+        "immf" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let value = parser.read_number()?;
+          insts.push(i_immf(dst, value as f32));
+        }
+
         "load" => {
           let dst = parser.read_var()?;
           parser.expect_char(',')?;
@@ -502,6 +559,15 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_mod(dst, src_left, src_right));
         }
 
+        "mul" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_left = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_right = parser.read_ri()?;
+          insts.push(i_mul(dst, src_left, src_right));
+        }
+
         "store" => {
           let addr = parser.read_am()?;
           parser.expect_char(',')?;
@@ -514,6 +580,15 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           parser.expect_char(',')?;
           let src = parser.read_var()?;
           insts.push(i_storef(addr, src));
+        }
+
+        "sub" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_left = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_right = parser.read_ri()?;
+          insts.push(i_sub(dst, src_left, src_right));
         }
 
         "printi" => {

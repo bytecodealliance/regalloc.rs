@@ -482,6 +482,14 @@ pub fn i_subm(dst: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
   Inst::BinOpM { op: BinOp::Sub, dst, src_right }
 }
+pub fn i_cmp_gtm(dst: Reg, src_right: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::BinOpM { op: BinOp::CmpGT, dst, src_right }
+}
+pub fn i_cmp_lem(dst: Reg, src_right: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::BinOpM { op: BinOp::CmpLE, dst, src_right }
+}
 
 pub fn i_fadd(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
   debug_assert!(dst.get_class() == RegClass::F32);
