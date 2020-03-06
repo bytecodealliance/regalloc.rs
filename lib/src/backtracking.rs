@@ -1413,19 +1413,27 @@ pub fn alloc_main<F: Function>(
 
     debug!("--   considering       {:?}:  {:?}", curr_vlrix, curr_vlr);
 
-    debug_assert!(curr_vlr.vreg.to_reg().is_virtual());
+    assert!(curr_vlr.vreg.to_reg().is_virtual());
+    assert!(curr_vlr.rreg.is_none());
     let curr_vlr_rc = curr_vlr.vreg.get_class().rc_to_usize();
 
-    // ==== BEGIN Try to do coalescing ====
+    // ====== BEGIN Try to do coalescing ======
     //
     // First, look through the hints for |curr_vlr|, collecting up candidate
-    // real regs, in decreasing order of preference, in |hinted_regs|.
+    // real regs, in decreasing order of preference, in |hinted_regs|.  Note
+    // that we don't have to consider the weights here, because the coalescing
+    // analysis phase has already sorted the hints for the VLR so as to
+    // present the most favoured (weighty) first, so we merely need to retain
+    // that ordering when copying into |hinted_regs|.
     // FIXME (very) SmallVec
     let mut hinted_regs = Vec::<RealReg>::new();
+    let mut mb_curr_vlr_eclass: Option<Set<VirtualRangeIx>> = None;
 
+    // === BEGIN collect all hints for |curr_vlr| ===
     // |hints| has one entry per VLR, but only for VLRs which existed
     // initially (viz, not for any created by spilling/splitting/whatever).
-    // Hence:
+    // Similarly, |vlrEquivClasses| can only map VLRs that existed initially,
+    // and will panic otherwise.  Hence the following check:
     if curr_vlrix.get() < hints.len() {
       for hint in &hints[curr_vlrix] {
         // BEGIN for each hint
@@ -1439,19 +1447,71 @@ pub fn alloc_main<F: Function>(
           Hint::Exactly(rreg, _weight) => Some(*rreg),
         };
         // So now |mb_cand| might have a preferred real reg.  If so, add it to
-        // the list of cands.
+        // the list of cands.  De-dup as we go, since that is way cheaper than
+        // effectively doing the same via repeated lookups in the
+        // CommitmentMaps.
         if let Some(rreg) = mb_cand {
-          hinted_regs.push(rreg);
+          if !hinted_regs.iter().any(|r| *r == rreg) {
+            hinted_regs.push(rreg);
+          }
         }
         // END for each hint
       }
-    }
 
+      // At this point, we have in |hinted_regs|, the hint candidates that
+      // arise from copies between |curr_vlr| and its immediate neighbouring
+      // VLRs or RLRs, in order of declining preference.  And that is a good
+      // start.  However, it may be the case that there is some other VLR
+      // which is in the same equivalence class as |curr_vlr|, but is not a
+      // direct neighbour, and which has already been assigned a register.  We
+      // really ought to take those into account too, as the least-preferred
+      // candidates.  Hence we need to iterate over the equivalence class and
+      // "round up the secondary candidates."
+      let n_primary_cands = hinted_regs.len();
+      let curr_vlr_eclass = vlrEquivClasses.find(curr_vlrix);
+      assert!(curr_vlr_eclass.contains(curr_vlrix));
+      for vlrix in curr_vlr_eclass.iter() {
+        if *vlrix != curr_vlrix {
+          if let Some(rreg) = vlr_env[*vlrix].rreg {
+            // Add |rreg| as a cand, if we don't already have it.
+            if !hinted_regs.iter().any(|r| *r == rreg) {
+              hinted_regs.push(rreg);
+            }
+          }
+        }
+      }
+      mb_curr_vlr_eclass = Some(curr_vlr_eclass);
+      // Sort the secondary cands, so as to try and impose more consistency
+      // across the group.  I don't know if this is worthwhile, but it seems
+      // sensible.
+      hinted_regs[n_primary_cands..].sort_by(|rreg1, rreg2| {
+        rreg1.get_index().partial_cmp(&rreg2.get_index()).unwrap()
+      });
+
+      //#[cfg(debug_assertions)]
+      {
+        if !hinted_regs.is_empty() {
+          let mut candStr = "pri {".to_string();
+          for (rreg, n) in hinted_regs.iter().zip(0..) {
+            if n == n_primary_cands {
+              candStr = candStr + &" } sec {".to_string();
+            }
+            candStr = candStr
+              + &" ".to_string()
+              + &reg_universe.regs[rreg.get_index()].1;
+          }
+          candStr = candStr + &" }";
+          debug!("--   CO candidates     {}", candStr);
+        }
+      }
+    }
+    // === END collect all hints for |curr_vlr| ===
+
+    // === BEGIN try to use the hints for |curr_vlr| ===
     // Now work through the list of preferences, to see if we can honour any
     // of them.
-    for rreg in hinted_regs {
+    for rreg in &hinted_regs {
       let rregNo = rreg.get_index();
-      debug!("--   CO candidate      {}", reg_universe.regs[rregNo].1);
 
       // Find the set of ranges which we'd have to evict in order to honour
       // this hint.  In the best case the set will be empty.  In the worst
@@ -1465,13 +1525,15 @@ pub fn alloc_main<F: Function>(
       // |curr_vlr| via V-V copies, and so evicting any of them would be
       // counterproductive from the point of view of removing copies.
 
-      let do_not_evict = vlrEquivClasses.find(curr_vlrix);
-      assert!(do_not_evict.contains(curr_vlrix));
-
+      let do_not_evict = if let Some(ref curr_vlr_eclass) = mb_curr_vlr_eclass {
+        curr_vlr_eclass
+      } else {
+        &empty_Set_VirtualRangeIx
+      };
       let mb_evict_info: Option<(Set<VirtualRangeIx>, SpillCost)> =
         per_real_reg[rregNo].find_Evict_Set(
           curr_vlrix,
-          &do_not_evict,
+          do_not_evict, // these are not to be considered for eviction
           &vlr_env,
           &frag_env,
         );
@@ -1509,13 +1571,14 @@ pub fn alloc_main<F: Function>(
         // .. and reassign.
         debug!("--   CO alloc to       {}", reg_universe.regs[rregNo].1);
         per_real_reg[rregNo].add_VirtualRange(curr_vlrix, &frag_env, &vlr_env);
-        vlr_env[curr_vlrix].rreg = Some(rreg);
+        vlr_env[curr_vlrix].rreg = Some(*rreg);
         // We're done!
         continue 'main_allocation_loop;
       }
     } // for rreg in hinted_regs {
+      // === END try to use the hints for |curr_vlr| ===
 
-    // ==== END Try to do coalescing ====
+    // ====== END Try to do coalescing ======
 
     // We get here if we failed to find a viable assignment by the process of
     // looking at the coalescing hints.
