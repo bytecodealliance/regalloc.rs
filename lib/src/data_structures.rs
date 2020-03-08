@@ -66,6 +66,10 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
     self.set.insert(item);
   }
 
+  pub fn delete(&mut self, item: T) {
+    self.set.remove(&item);
+  }
+
   pub fn is_empty(&self) -> bool {
     self.set.is_empty()
   }
