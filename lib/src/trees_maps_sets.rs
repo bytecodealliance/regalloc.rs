@@ -14,32 +14,36 @@ use std::cmp::Ordering;
 //=============================================================================
 // AVL trees with a private allocation pool
 
+// AVL tree internals are public, so that backtracking.rs can do custom
+// traversals of the tree as it wishes.
+
+// FIXME re-home this
 // First, we need this.  You can store anything you like in these trees, so
 // long as it is really a u32.  Reminds me of that old joke about the Model T
 // Ford being available in any colour you want, so long as it is black.
-pub trait ToFromU32<T: Sized = Self> {
-  fn to_u32(x: Self) -> u32;
-  fn from_u32(x: u32) -> Self;
-}
-impl ToFromU32 for i32 {
-  fn to_u32(x: i32) -> u32 {
-    x as u32
-  }
-  fn from_u32(x: u32) -> i32 {
-    x as i32
-  }
-}
-impl ToFromU32 for u32 {
-  fn to_u32(x: u32) -> u32 {
-    x
-  }
-  fn from_u32(x: u32) -> u32 {
-    x
-  }
-}
+//pub trait ToFromU32<T: Sized = Self> {
+//  fn to_u32(x: Self) -> u32;
+//  fn from_u32(x: u32) -> Self;
+//}
+//impl ToFromU32 for i32 {
+//  fn to_u32(x: i32) -> u32 {
+//    x as u32
+//  }
+//  fn from_u32(x: u32) -> i32 {
+//    x as i32
+//  }
+//}
+//impl ToFromU32 for u32 {
+//  fn to_u32(x: u32) -> u32 {
+//    x
+//  }
+//  fn from_u32(x: u32) -> u32 {
+//    x
+//  }
+//}
 
 #[derive(Clone, PartialEq)]
-enum AVLTag {
+pub enum AVLTag {
   Free,  // This pool entry is not in use
   None,  // This pool entry is in use.  Neither subtree is higher.
   Left,  // This pool entry is in use.  The left subtree is higher.
@@ -48,12 +52,12 @@ enum AVLTag {
 
 #[derive(Clone)]
 pub struct AVLNode<T> {
-  tag: AVLTag,
-  left: u32,
-  right: u32,
-  item: T,
+  pub tag: AVLTag,
+  pub left: u32,
+  pub right: u32,
+  pub item: T,
 }
-impl<T: ToFromU32> AVLNode<T> {
+impl<T> AVLNode<T> {
   fn new(tag: AVLTag, left: u32, right: u32, item: T) -> Self {
     Self { tag, left, right, item }
   }
@@ -64,7 +68,7 @@ pub const AVL_NULL: u32 = 0xFFFF_FFFF;
 pub struct AVLTree<T> {
   // The storage area.  There can be at most 2^32-2 entries, since AVL_NULL
   // (== 2^32-1) is used to mean "the null pointer".
-  pool: Vec<AVLNode<T>>,
+  pub pool: Vec<AVLNode<T>>,
   // A default value for the stored item.  We don't care what this is;
   // unfortunately Rust forces us to have one so that additions to the free
   // list will be fully initialised.
@@ -76,12 +80,12 @@ pub struct AVLTree<T> {
   // then the list is empty.
   freelist: u32,
   // Last but not least, the root node.
-  root: u32,
+  pub root: u32,
 }
 
 // ====== Storage management functions for AVLTree ======
 
-impl<T: Copy + ToFromU32> AVLTree<T> {
+impl<T: Copy> AVLTree<T> {
   // Create a new tree and its associated storage pool.  This requires knowing
   // the default item value.
   pub fn new(default: T) -> Self {
@@ -173,7 +177,7 @@ enum AVLRes {
   Balance,
 }
 
-impl<T: Copy + ToFromU32> AVLTree<T> {
+impl<T: Copy + PartialOrd> AVLTree<T> {
   // Private function: rotleft: perform counterclockwise rotation
   // Takes the root of the tree to rotate, returns the new root
   fn rotleft(&mut self, old_root: u32) -> u32 {
@@ -372,17 +376,11 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
       return (root, AVLRes::Balance);
     }
 
+    let cmpArgL: T = item;
+    let cmpArgR: T = self.pool[root as usize].item;
     let cmp_res = match mb_cmp {
-      None => {
-        let cmpArgL: u32 = ToFromU32::to_u32(item);
-        let cmpArgR: u32 = ToFromU32::to_u32(self.pool[root as usize].item);
-        cmpArgL.partial_cmp(&cmpArgR)
-      }
-      Some(cmp) => {
-        let cmpArgL: T = item;
-        let cmpArgR: T = self.pool[root as usize].item;
-        cmp(cmpArgL, cmpArgR)
-      }
+      None => cmpArgL.partial_cmp(&cmpArgR),
+      Some(cmp) => cmp(cmpArgL, cmpArgR),
     };
     match cmp_res {
       None => panic!("AVLTree::insert_wrk: unordered elements"),
@@ -682,17 +680,11 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
       return (root, AVLRes::Error);
     }
 
+    let cmpArgL: T = item;
+    let cmpArgR: T = self.pool[root as usize].item;
     let cmp_res = match mb_cmp {
-      None => {
-        let cmpArgL: u32 = ToFromU32::to_u32(item);
-        let cmpArgR: u32 = ToFromU32::to_u32(self.pool[root as usize].item);
-        cmpArgL.partial_cmp(&cmpArgR)
-      }
-      Some(cmp) => {
-        let cmpArgL: T = item;
-        let cmpArgR: T = self.pool[root as usize].item;
-        cmp(cmpArgL, cmpArgR)
-      }
+      None => cmpArgL.partial_cmp(&cmpArgR),
+      Some(cmp) => cmp(cmpArgL, cmpArgR),
     };
     match cmp_res {
       None => panic!("AVLTree::delete_wrk: unordered elements"),
@@ -781,7 +773,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
 
 // ====== Public interface for AVLTree ======
 
-impl<T: Copy + ToFromU32> AVLTree<T> {
+impl<T: Copy + PartialOrd> AVLTree<T> {
   // The core functions (insert, delete, contains) take a comparator argument
   //
   //   mb_cmp: Option<&F>
@@ -838,23 +830,25 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
     // for direct comparison, one for indirect.
     match mb_cmp {
       None => {
-        // Do comparisons directly on the 32-bit words.
+        // Do comparisons directly on the items.
         loop {
           if n == AVL_NULL {
             return false;
           }
-          let cmpArgL: u32 = ToFromU32::to_u32(item);
-          let cmpArgR: u32 = ToFromU32::to_u32(self.pool[n as usize].item);
-          // The unwrap can never fail, since we're u32s form a total order.
-          match cmpArgL.partial_cmp(&cmpArgR).unwrap() {
-            Ordering::Less => {
+          let cmpArgL: T = item;
+          let cmpArgR: T = self.pool[n as usize].item;
+          match cmpArgL.partial_cmp(&cmpArgR) {
+            Some(Ordering::Less) => {
               n = self.pool[n as usize].left;
             }
-            Ordering::Greater => {
+            Some(Ordering::Greater) => {
               n = self.pool[n as usize].right;
             }
-            Ordering::Equal => {
+            Some(Ordering::Equal) => {
               return true;
+            }
+            None => {
+              panic!("AVLTree::contains(1): unordered elements in search!");
             }
           }
         }
@@ -867,21 +861,18 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
           }
           let cmpArgL: T = item;
           let cmpArgR: T = self.pool[n as usize].item;
-          // Whereas this might fail.  Let's be noisy if it does.
           match cmp(cmpArgL, cmpArgR) {
-            Some(cmpRes) => match cmpRes {
-              Ordering::Less => {
-                n = self.pool[n as usize].left;
-              }
-              Ordering::Greater => {
-                n = self.pool[n as usize].right;
-              }
-              Ordering::Equal => {
-                return true;
-              }
-            },
+            Some(Ordering::Less) => {
+              n = self.pool[n as usize].left;
+            }
+            Some(Ordering::Greater) => {
+              n = self.pool[n as usize].right;
+            }
+            Some(Ordering::Equal) => {
+              return true;
+            }
             None => {
-              panic!("AVLTree::contains: unordered elements in search!");
+              panic!("AVLTree::contains(2): unordered elements in search!");
             }
           }
         }
@@ -897,6 +888,29 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
   // Private fn: find the max depth of the tree.  Warning: costs O(N) !
   pub fn depth(&self) -> usize {
     self.depth_wrk(self.root)
+  }
+
+  pub fn to_vec(&self) -> Vec<T> {
+    let mut res = Vec::<T>::new();
+    if self.root != AVL_NULL {
+      walk_dfs(&mut res, self.root, &self.pool);
+    }
+    return res;
+    /*NOTREACHED*/
+
+    pub fn walk_dfs<U: Copy>(
+      res: &mut Vec<U>, root: u32, pool: &Vec<AVLNode<U>>,
+    ) {
+      let root_left = pool[root as usize].left;
+      if root_left != AVL_NULL {
+        walk_dfs(res, root_left, pool);
+      }
+      res.push(pool[root as usize].item);
+      let root_right = pool[root as usize].right;
+      if root_right != AVL_NULL {
+        walk_dfs(res, root_right, pool);
+      }
+    }
   }
 
   // Show the tree.  (For debugging only.)

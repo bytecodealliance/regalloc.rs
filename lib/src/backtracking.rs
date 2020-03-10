@@ -22,7 +22,11 @@ use crate::inst_stream::{
   edit_inst_stream, InstAndPoint, InstsAndPoints, RangeAllocations,
 };
 use crate::interface::{Function, RegAllocResult};
-use crate::trees_maps_sets::AVLTree;
+use crate::trees_maps_sets::{AVLTag, AVLTree, AVL_NULL};
+
+// DEBUGGING: set to true to cross-check the CommitmentMap machinery.
+
+const CROSSCHECK_CM: bool = false;
 
 //=============================================================================
 // Union-find for sets of VirtualRangeIxs.  This is support of coalescing.
@@ -459,7 +463,16 @@ impl VirtualRangePrioQ {
 // (A fragment merely denotes a sequence of instruction (points), but within
 // the context of a commitment map for a real register, obviously any
 // particular fragment can't be part of two different virtual live ranges.)
-#[derive(Clone, Copy)]
+//
+// Note that we don't intend to actually use the PartialOrd methods for
+// FIxAndVLRix.  However, they need to exist since we want to construct an
+// AVLTree<FIxAndVLRix>, and that requires PartialOrd for its element type.
+// For working with such trees we will supply our own comparison function;
+// hence PartialOrd here serves only to placate the typechecker.  It should
+// never actually be used.
+//
+// FIXME: add a PartialOrd impl which panics if it does get used!
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
 struct FIxAndVLRIx {
   fix: RangeFragIx,
   mb_vlrix: Option<VirtualRangeIx>,
@@ -649,6 +662,86 @@ impl CommitmentMap {
 }
 
 //=============================================================================
+// Per-real-register commitment maps FAST
+//
+
+// This indicates the current set of fragments to which some real register is
+// currently "committed".  The fragments *must* be non-overlapping.  Hence
+// they form a total order, and so they must appear in the vector sorted by
+// that order.
+//
+// Overall this is identical to SortedRangeFragIxs, except extended so that
+// each FragIx is tagged with an Option<VirtualRangeIx>.
+struct CommitmentMapFAST {
+  tree: AVLTree<FIxAndVLRIx>,
+}
+impl fmt::Debug for CommitmentMapFAST {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    let as_vec = self.tree.to_vec();
+    as_vec.fmt(fmt)
+  }
+}
+
+// The custom comparator
+fn cmp_tree_entries(
+  e1: FIxAndVLRIx, e2: FIxAndVLRIx,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+) -> Option<Ordering> {
+  cmp_range_frags(&frag_env[e1.fix], &frag_env[e2.fix])
+}
+
+impl CommitmentMapFAST {
+  pub fn new() -> Self {
+    // The AVL tree constructor needs a default value for the elements.  It
+    // will never be used.  To be on the safe side, give it something that
+    // will show as obviously bogus if we ever try to "dereference" any part
+    // of it.
+    let dflt = FIxAndVLRIx::new(
+      RangeFragIx::new(0xFFFF_FFFF),
+      Some(VirtualRangeIx::new(0xFFFF_FFFF)),
+    );
+    Self { tree: AVLTree::<FIxAndVLRIx>::new(dflt) }
+  }
+
+  pub fn add(
+    &mut self, to_add_frags: &SortedRangeFragIxs,
+    to_add_mb_vlrix: Option<VirtualRangeIx>,
+    fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+    _vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
+  ) {
+    for fix in &to_add_frags.frag_ixs {
+      let to_add = FIxAndVLRIx::new(*fix, to_add_mb_vlrix);
+      let added = self.tree.insert(
+        to_add,
+        Some(&|pair1, pair2| cmp_tree_entries(pair1, pair2, fenv)),
+      );
+      // If this fails, it means the fragment overlaps one that has already
+      // been committed to.  That's a serious error.
+      assert!(added);
+    }
+  }
+
+  pub fn del(
+    &mut self, to_del_frags: &SortedRangeFragIxs,
+    fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+    _vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
+  ) {
+    for fix in &to_del_frags.frag_ixs {
+      // re None: we don't care what the VLRIx is, since we're deleting by
+      // RangeFrags alone.
+      let to_del = FIxAndVLRIx::new(*fix, None);
+      let deleted = self.tree.delete(
+        to_del,
+        Some(&|pair1, pair2| cmp_tree_entries(pair1, pair2, fenv)),
+      );
+      // If this fails, it means the fragment wasn't already committed to.
+      // That's also a serious error.
+      assert!(deleted);
+    }
+  }
+}
+
+//=============================================================================
 // The per-real-register state
 //
 // Relevant methods are expected to be parameterised by the same VirtualRange
@@ -657,18 +750,21 @@ impl CommitmentMap {
 struct PerRealReg {
   // The current committed fragments for this RealReg.
   committed: CommitmentMap,
+  committedFAST: CommitmentMapFAST,
 
   // The VirtualRanges which have been assigned to this RealReg, in no
   // particular order.  The union of their frags will be equal to
   // |committed| only if this RealReg has no RealRanges.  If this RealReg
   // does have RealRanges the aforementioned union will be exactly the
   // subset of |committed| not used by the RealRanges.
+  // FIXME shouldn't this be a Set?
   vlrixs_assigned: Vec<VirtualRangeIx>,
 }
 impl PerRealReg {
   fn new() -> Self {
     Self {
       committed: CommitmentMap::new(),
+      committedFAST: CommitmentMapFAST::new(),
       vlrixs_assigned: Vec::<VirtualRangeIx>::new(),
     }
   }
@@ -681,7 +777,10 @@ impl PerRealReg {
     // Commit this register to |to_add|, irrevocably.  Don't add it to
     // |vlrixs_assigned| since we will never want to later evict the
     // assignment.
-    self.committed.add(&to_add.sorted_frags, None, fenv, vlr_env);
+    self.committedFAST.add(&to_add.sorted_frags, None, fenv, vlr_env);
+    if CROSSCHECK_CM {
+      self.committed.add(&to_add.sorted_frags, None, fenv, vlr_env);
+    }
   }
 
   #[inline(never)]
@@ -691,12 +790,20 @@ impl PerRealReg {
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
   ) {
     let to_add_vlr = &vlr_env[to_add_vlrix];
-    self.committed.add(
+    self.committedFAST.add(
       &to_add_vlr.sorted_frags,
       Some(to_add_vlrix),
       fenv,
       vlr_env,
     );
+    if CROSSCHECK_CM {
+      self.committed.add(
+        &to_add_vlr.sorted_frags,
+        Some(to_add_vlrix),
+        fenv,
+        vlr_env,
+      );
+    }
     self.vlrixs_assigned.push(to_add_vlrix);
   }
 
@@ -724,7 +831,10 @@ impl PerRealReg {
     }
     // Remove it from |committed|
     let to_del_vlr = &vlr_env[to_del_vlrix];
-    self.committed.del(&to_del_vlr.sorted_frags, fenv, vlr_env);
+    self.committedFAST.del(&to_del_vlr.sorted_frags, fenv, vlr_env);
+    if CROSSCHECK_CM {
+      self.committed.del(&to_del_vlr.sorted_frags, fenv, vlr_env);
+    }
   }
 }
 
@@ -785,6 +895,127 @@ fn handle_CM_entry(
   true
 }
 
+// HELPER FUNCTION
+// For a given RangeFrag, traverse the commitment sub-tree rooted at |root|,
+// adding to |running_set| the set of VLRIxs that the frag intersects, and
+// adding their spill costs to |running_cost|.  Return false if, for one of
+// the 4 reasons documented below, the traversal has been abandoned, and true
+// if the search completed successfully.
+fn rec_helper(
+  // The running state, threaded through the tree traversal.  These accumulate
+  // ranges and costs as we traverse the tree.
+  running_set: &mut Set<VirtualRangeIx>,
+  running_cost: &mut SpillCost,
+  // The root of the subtree to search.  This change as we recurse down.
+  root: u32,
+  // === All the other args stay constant as we recurse ===
+  tree: &AVLTree<FIxAndVLRIx>,
+  // The FIxAndVLRIx we want to accommodate, in its components.
+  pair_frag: &RangeFrag,
+  spill_cost_budget: &SpillCost,
+  do_not_evict: &Set<VirtualRangeIx>,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+  vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
+) -> bool {
+  let root_node = &tree.pool[root as usize];
+  let root_node_FnV = &root_node.item;
+  assert!(root_node.tag != AVLTag::Free);
+  let root_frag = &frag_env[root_node_FnV.fix];
+  // Now figure out:
+  // - whether we need to search the left subtree
+  // - whether we need to search the right subtree
+  // - whether |pair_frag| overlaps the root of the subtree
+  let go_left = pair_frag.first < root_frag.first;
+  let go_right = pair_frag.last > root_frag.last;
+  let overlaps_root =
+    pair_frag.last >= root_frag.first && pair_frag.first <= root_frag.last;
+
+  // Let's first consider the root node.  If we need it but it's not
+  // evictable, we might as well stop now.
+  if overlaps_root {
+    // This frag has no associated VirtualRangeIx, so it is part of a
+    // RealRange, and hence not evictable.
+    if root_node_FnV.mb_vlrix.is_none() {
+      return false;
+    }
+    // Maybe this one is a spill range, in which case, it can't be evicted.
+    let vlrix_to_evict = root_node_FnV.mb_vlrix.unwrap();
+    let vlr_to_evict = &vlr_env[vlrix_to_evict];
+    if vlr_to_evict.spill_cost.is_infinite() {
+      return false;
+    }
+    // Check that this range alone doesn't exceed our total spill cost.
+    // NB: given the check XXX below, I don't think this is necessary.
+    if !vlr_to_evict.spill_cost.is_less_than(spill_cost_budget) {
+      return false;
+    }
+    // Maybe our caller asked us not to evict this one.
+    if do_not_evict.contains(vlrix_to_evict) {
+      return false;
+    }
+    // Ok!  We can evict the root node.  Update the running state accordingly.
+    // Note that we may be presented with the same VLRIx to evict multiple
+    // times, so we must be careful to add the cost of it only once.
+    if !running_set.contains(vlrix_to_evict) {
+      let mut tmp_cost = *running_cost;
+      tmp_cost.add(&vlr_to_evict.spill_cost);
+      // See above XXX
+      if !tmp_cost.is_less_than(spill_cost_budget) {
+        return false;
+      }
+      *running_cost = tmp_cost;
+      running_set.insert(vlrix_to_evict);
+    }
+  }
+
+  // Now consider contributions from the left subtree.  Whether we visit the
+  // left or right subtree first is unimportant.
+  let left_root = tree.pool[root as usize].left;
+  if go_left && left_root != AVL_NULL {
+    let ok_left = rec_helper(
+      running_set,
+      running_cost,
+      left_root,
+      tree,
+      pair_frag,
+      spill_cost_budget,
+      do_not_evict,
+      frag_env,
+      vlr_env,
+    );
+    if !ok_left {
+      return false;
+    }
+  }
+
+  let right_root = tree.pool[root as usize].right;
+  if go_right && right_root != AVL_NULL {
+    let ok_right = rec_helper(
+      running_set,
+      running_cost,
+      right_root,
+      tree,
+      pair_frag,
+      spill_cost_budget,
+      do_not_evict,
+      frag_env,
+      vlr_env,
+    );
+    if !ok_right {
+      return false;
+    }
+  }
+
+  // If we get here, it means that |pair_frag| can be accommodated if we evict
+  // all the frags it overlaps in the entire subtree rooted at |root|.
+  // Propagate that (good) news upwards.
+  //
+  // Stay sane ..
+  assert!(running_cost.is_finite());
+  assert!(running_cost.is_less_than(spill_cost_budget));
+  true
+}
+
 impl PerRealReg {
   // Find the set of VirtualRangeIxs that would need to be evicted in order to
   // allocate |would_like_to_add| to this register.  Virtual ranges mentioned
@@ -821,203 +1052,54 @@ impl PerRealReg {
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> Option<(Set<VirtualRangeIx>, SpillCost)> {
-    // Two cursors, one for the committment map (curCM), the other for the
-    // VirtualRange we would like to add (curVR).
-    //
-    // The key activity is to visit all parts (meaning, all RangeFrags) of CM
-    // that intersect with any part of VR.  By inspecting the VirtualRangeIx
-    // associated with each such fragment, we can build up the set of
-    // VirtualRangeIxs that would have to be evicted to make
-    // |would_like_to_add| be allocable.
-
-    fn step((curIx, curB): (usize, bool)) -> (usize, bool) {
-      if curB == false {
-        (curIx, true)
-      } else {
-        (curIx + 1, false)
-      }
+    // Firstly, if the commitment tree is for this reg is empty, we can
+    // declare success immediately.
+    if self.committedFAST.tree.root == AVL_NULL {
+      let evict_set = Set::<VirtualRangeIx>::empty();
+      let evict_cost = SpillCost::zero();
+      return Some((evict_set, evict_cost));
     }
 
-    // for the bools in the args:
-    //   false denotes the start of a frag
-    //    true denotes the end of a frag
-    fn frag_points_less_than(
-      (frag1, end1): (&RangeFrag, bool), (frag2, end2): (&RangeFrag, bool),
-    ) -> bool {
-      let ip1 = if end1 { frag1.last } else { frag1.first };
-      let ip2 = if end2 { frag2.last } else { frag2.first };
-      ip1 < ip2
-    }
+    // The tree isn't empty, so we will have to do this the hard way: iterate
+    // over all fragments in |would_like_to_add| and check them against the
+    // tree.
 
-    // Useful constants for the loop
+    // Useful constants for the main loop
     let would_like_to_add_vlr = &vlr_env[would_like_to_add];
     let evict_cost_budget = would_like_to_add_vlr.spill_cost;
     // Note that |evict_cost_budget| can be infinite because
     // |would_like_to_add| might be a spill/reload range.
 
-    // number in commitment map
-    let numCM = self.committed.pairs.len();
-    // number in the vlr to add
-    let numVR = would_like_to_add_vlr.sorted_frags.frag_ixs.len();
+    // The overall evict set and cost so far.  These are updated as we iterate
+    // over the fragments that make up |would_like_to_add|.
+    let mut running_set = Set::<VirtualRangeIx>::empty();
+    let mut running_cost = SpillCost::zero();
 
-    // State updated by the loop
-    let mut evict_set = Set::<VirtualRangeIx>::empty();
-    let mut evict_cost = SpillCost::zero();
-
-    let mut curCM = (0, false); // false denotes the start of a frag
-    let mut curVR = (0, false); // true denotes the end of a frag
-
-    let mut inCM: Option<usize> = None;
-    let mut inVR = false;
-
-    // When entering CM, pay attention to the frag's VLRIx link and update
-    // |evict_set|/|evict_cost| accordingly.  We may also see a situation
-    // where there are unevictable uses in the range, in which case we exit
-    // early since further searching is pointless.
-    loop {
-      if curCM.0 >= numCM || curVR.0 >= numVR {
-        // We've fallen off the end of one or the other vector, so there are
-        // no more intersections possible, so quit.
-        break;
+    // "wlta" = would like to add
+    for wlta_fix in &would_like_to_add_vlr.sorted_frags.frag_ixs {
+      //debug!("fESF: considering {:?}", *wlta_fix);
+      let wlta_frag = &frag_env[*wlta_fix];
+      let wlta_frag_ok = rec_helper(
+        &mut running_set,
+        &mut running_cost,
+        self.committedFAST.tree.root,
+        &self.committedFAST.tree,
+        &wlta_frag,
+        &evict_cost_budget,
+        do_not_evict,
+        frag_env,
+        vlr_env,
+      );
+      if !wlta_frag_ok {
+        return None;
       }
-      //
-      let curCM_frag = &frag_env[self.committed.pairs[curCM.0].fix];
-      let curVR_frag =
-        &frag_env[would_like_to_add_vlr.sorted_frags.frag_ixs[curVR.0]];
-      //
-      if frag_points_less_than((curCM_frag, curCM.1), (curVR_frag, curVR.1)) {
-        // Next event occurs for CM
-        if curCM.1 == false {
-          // curCM is at start.  Enter.
-          // ENTER curCM
-          assert!(inCM.is_none());
-          inCM = Some(curCM.0);
-          if inVR {
-            // **** We'll need to evict this CM entry. ****
-            //debug!("find1: must evict {:?}", curCM_frag);
-            let evict_possible = handle_CM_entry(
-              &mut evict_set,
-              &mut evict_cost,
-              &self.committed.pairs,
-              curCM.0,
-              evict_cost_budget,
-              &do_not_evict,
-              &vlr_env,
-              "F1",
-            );
-            if !evict_possible {
-              return None;
-            }
-          }
-        } else {
-          // curCM is at end.  Exit.
-          // EXIT curCM
-          assert!(inCM.is_some());
-          inCM = None;
-        }
-        curCM = step(curCM);
-      } else if frag_points_less_than(
-        (curVR_frag, curVR.1),
-        (curCM_frag, curCM.1),
-      ) {
-        // Next event occurs for VR
-        if curVR.1 == false {
-          // curVR is at start.  Enter.
-          // ENTER curVR
-          inVR = true;
-          if let Some(cm_vlrix) = inCM {
-            // **** We'll need to evict this CM entry. ****
-            //debug!("find1: must evict {:?}", curCM_frag);
-            let evict_possible = handle_CM_entry(
-              &mut evict_set,
-              &mut evict_cost,
-              &self.committed.pairs,
-              cm_vlrix,
-              evict_cost_budget,
-              &do_not_evict,
-              &vlr_env,
-              "F2",
-            );
-            if !evict_possible {
-              return None;
-            }
-          }
-        } else {
-          // curVR is at end.  Exit.
-          // EXIT curVR
-          inVR = false;
-        }
-        curVR = step(curVR);
-      } else {
-        // Next event for both CM and VM occurs at the same point.
-        if curCM.1 == false {
-          // ENTER CM
-          assert!(inCM.is_none());
-          inCM = Some(curCM.0);
-          if inVR {
-            // **** We'll need to evict this CM entry. ****
-            //debug!("find2: must evict {:?}", curCM_frag);
-            let evict_possible = handle_CM_entry(
-              &mut evict_set,
-              &mut evict_cost,
-              &self.committed.pairs,
-              curCM.0,
-              evict_cost_budget,
-              &do_not_evict,
-              &vlr_env,
-              "F3",
-            );
-            if !evict_possible {
-              return None;
-            }
-          }
-        }
-        // but don't deal with a CM exit .. yet
-        //
-        // and independently ..
-        if curVR.1 == false {
-          // ENTER VR
-          inVR = true;
-          if let Some(cm_vlrix) = inCM {
-            // **** We'll need to evict this CM entry. ****
-            //debug!("find1: must evict {:?}", curCM_frag);
-            let evict_possible = handle_CM_entry(
-              &mut evict_set,
-              &mut evict_cost,
-              &self.committed.pairs,
-              cm_vlrix,
-              evict_cost_budget,
-              &do_not_evict,
-              &vlr_env,
-              "F4",
-            );
-            if !evict_possible {
-              return None;
-            }
-          }
-        }
-        // but don't deal with a VR exit .. yet
-        //
-        // Deal with exits now
-        if curCM.1 == true {
-          // EXIT CM
-          assert!(inCM.is_some());
-          inCM = None;
-        }
-        if curVR.1 == true {
-          // EXIT VR
-          inVR = false;
-        }
-        curCM = step(curCM);
-        curVR = step(curVR);
-      }
+      // And move on to the next fragment.
     }
 
-    // If we got this far, we at least found something usable.  It may not be
-    // very good, but it is at least usable.
-    assert!(evict_cost.is_finite());
-    assert!(evict_cost.is_less_than(&evict_cost_budget));
-    Some((evict_set, evict_cost))
+    // If we got here, it means that |would_like_to_add| can be accommodated \o/
+    assert!(running_cost.is_finite());
+    assert!(running_cost.is_less_than(&evict_cost_budget));
+    Some((running_set, running_cost))
   }
 
   // This should compute exactly the same results as find_Evict_Set_FAST,
@@ -1130,7 +1212,11 @@ impl PerRealReg {
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> Option<(Set<VirtualRangeIx>, SpillCost)> {
-    let do_crosscheck = false;
+    //let s1 = format!("{:?}", self.committed);
+    //let s2 = format!("{:?}", self.committedFAST);
+    //debug!("fESF: self.cm  = {}", s1);
+    //debug!("fESF: self.cmF = {}", s2);
+    //assert!(s1 == s2);
 
     let result_fast = self.find_Evict_Set_FAST(
       would_like_to_add,
@@ -1139,7 +1225,7 @@ impl PerRealReg {
       frag_env,
     );
 
-    if do_crosscheck {
+    if CROSSCHECK_CM {
       let result_crosscheck = self.find_Evict_Set_CROSSCHECK(
         would_like_to_add,
         do_not_evict,
