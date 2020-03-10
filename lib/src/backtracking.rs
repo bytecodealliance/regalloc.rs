@@ -22,7 +22,7 @@ use crate::inst_stream::{
   edit_inst_stream, InstAndPoint, InstsAndPoints, RangeAllocations,
 };
 use crate::interface::{Function, RegAllocResult};
-use crate::trees_maps_sets::{AVLTree, AVL_NULL};
+use crate::trees_maps_sets::AVLTree;
 
 //=============================================================================
 // Union-find for sets of VirtualRangeIxs.  This is support of coalescing.
@@ -1320,11 +1320,10 @@ pub fn alloc_main<F: Function>(
   // compiler warnings.
   if false {
     let mut t = AVLTree::<u32>::new(0);
-    let _ = t.avlinsert(42);
-    let _ = t.avlremove(99);
-    let _ = t.avlcontains(1337);
-    let _ = t.avlcount() + t.avldepth();
-    let _ = t.avlshow(0, AVL_NULL);
+    let _ = t.insert::<fn(u32, u32) -> Option<Ordering>>(42, None);
+    let _ = t.delete::<fn(u32, u32) -> Option<Ordering>>(99, None);
+    let _ = t.contains::<fn(u32, u32) -> Option<Ordering>>(1337, None);
+    let _ = t.count() + t.depth();
   }
 
   // -------- Perform initial liveness analysis --------

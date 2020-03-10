@@ -15,8 +15,8 @@ use std::cmp::Ordering;
 // AVL trees with a private allocation pool
 
 // First, we need this.  You can store anything you like in these trees, so
-// long as it is really a u32.  (Reminds me of that old joke about the Model T
-// Ford being available in any colour you want, so long as it's black.)
+// long as it is really a u32.  Reminds me of that old joke about the Model T
+// Ford being available in any colour you want, so long as it is black.
 pub trait ToFromU32<T: Sized = Self> {
   fn to_u32(x: Self) -> u32;
   fn from_u32(x: u32) -> Self;
@@ -79,14 +79,20 @@ pub struct AVLTree<T> {
   root: u32,
 }
 
-// Storage management functions for AVLTree.
+// ====== Storage management functions for AVLTree ======
+
 impl<T: Copy + ToFromU32> AVLTree<T> {
+  // Create a new tree and its associated storage pool.  This requires knowing
+  // the default item value.
   pub fn new(default: T) -> Self {
     let pool = vec![];
     let freelist = AVL_NULL;
     let root = AVL_NULL;
     Self { pool, default, freelist, root }
   }
+
+  // Private function: free a tree node and put it back on the storage pool's
+  // freelist.
   fn free(&mut self, index: u32) {
     assert!(index != AVL_NULL);
     assert!(self.pool[index as usize].tag != AVLTag::Free);
@@ -94,6 +100,10 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
       AVLNode::new(AVLTag::Free, self.freelist, AVL_NULL, self.default);
     self.freelist = index;
   }
+
+  // Private function: allocate a tree node from the storage pool, resizing
+  // the pool if necessary.  This will decline to expand the tree past about
+  // 1.75 billion items.
   fn alloc(&mut self) -> u32 {
     // Check to see if the freelist is empty, and if so allocate a bunch more
     // slots.
@@ -135,12 +145,14 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
   }
 }
 
-// Tree-wrangling machinery for AVLTree.
+// ====== Tree-wrangling machinery for AVLTree (private) ======
 
-// The functions 'avlinsert' and 'avlremove', and all supporting functions
-// reachable from them, are derived from a public domain implementation by
-// Georg Kraml.  Unfortunately the relevant web site is long gone, and can
-// only be found on the Wayback Machine.
+// For the public interface, see below.
+
+// The functions 'insert' and 'delete', and all supporting functions reachable
+// from them, are derived from a public domain implementation by Georg Kraml.
+// Unfortunately the relevant web site is long gone, and can only be found on
+// the Wayback Machine.
 //
 // https://web.archive.org/web/20010419134337/
 //   http://www.kraml.at/georg/avltree/index.html
@@ -162,23 +174,25 @@ enum AVLRes {
 }
 
 impl<T: Copy + ToFromU32> AVLTree<T> {
-  // avlrotleft: perform counterclockwise rotation
+  // Private function: rotleft: perform counterclockwise rotation
   // Takes the root of the tree to rotate, returns the new root
-  fn avlrotleft(&mut self, old_root: u32) -> u32 {
+  fn rotleft(&mut self, old_root: u32) -> u32 {
     let new_root = self.pool[old_root as usize].right;
     self.pool[old_root as usize].right = self.pool[new_root as usize].left;
     self.pool[new_root as usize].left = old_root;
     new_root
   }
-  // avlrotright: perform clockwise rotation
+
+  // Private function: rotright: perform clockwise rotation
   // Takes the root of the tree to rotate, returns the new root
-  fn avlrotright(&mut self, old_root: u32) -> u32 {
+  fn rotright(&mut self, old_root: u32) -> u32 {
     let new_root = self.pool[old_root as usize].left;
     self.pool[old_root as usize].left = self.pool[new_root as usize].right;
     self.pool[new_root as usize].right = old_root;
     new_root
   }
-  //  avlleftgrown: helper function for avlinsert
+
+  // Private function: leftgrown: helper function for |insert|
   //
   //  Parameters:
   //
@@ -199,7 +213,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
   //    or
   //    BALANCE     The local tree was balanced, but has grown in height.
   //                Do not assume the entire tree is valid.
-  fn avlleftgrown(&mut self, mut root: u32) -> (u32, AVLRes) {
+  fn leftgrown(&mut self, mut root: u32) -> (u32, AVLRes) {
     match self.pool[root as usize].tag {
       AVLTag::Left => {
         if self.pool[self.pool[root as usize].left as usize].tag == AVLTag::Left
@@ -207,7 +221,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
           self.pool[root as usize].tag = AVLTag::None;
           let t = self.pool[root as usize].left;
           self.pool[t as usize].tag = AVLTag::None;
-          root = self.avlrotright(root);
+          root = self.rotright(root);
         } else {
           match self.pool
             [self.pool[self.pool[root as usize].left as usize].right as usize]
@@ -229,7 +243,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
               self.pool[t as usize].tag = AVLTag::None;
             }
             AVLTag::Free => {
-              panic!("AVLTree::avlleftgrown(1): unallocated node in tree")
+              panic!("AVLTree::leftgrown(1): unallocated node in tree")
             }
           }
           {
@@ -237,8 +251,8 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
             self.pool[t as usize].tag = AVLTag::None;
           }
           self.pool[root as usize].left =
-            self.avlrotleft(self.pool[root as usize].left);
-          root = self.avlrotright(root);
+            self.rotleft(self.pool[root as usize].left);
+          root = self.rotright(root);
         }
         return (root, AVLRes::OK);
       }
@@ -250,15 +264,14 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
         self.pool[root as usize].tag = AVLTag::Left;
         return (root, AVLRes::Balance);
       }
-      AVLTag::Free => {
-        panic!("AVLTree::avlleftgrown(2): unallocated node in tree")
-      }
+      AVLTag::Free => panic!("AVLTree::leftgrown(2): unallocated node in tree"),
     }
   }
-  //  avlrightgrown: helper function for avlinsert
+
+  // Private function: rightgrown: helper function for |insert|
   //
-  //  See avlleftgrown for details.
-  fn avlrightgrown(&mut self, mut root: u32) -> (u32, AVLRes) {
+  //  See leftgrown for details.
+  fn rightgrown(&mut self, mut root: u32) -> (u32, AVLRes) {
     match self.pool[root as usize].tag {
       AVLTag::Left => {
         self.pool[root as usize].tag = AVLTag::None;
@@ -271,7 +284,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
           self.pool[root as usize].tag = AVLTag::None;
           let t = self.pool[root as usize].right as usize;
           self.pool[t].tag = AVLTag::None;
-          root = self.avlrotleft(root);
+          root = self.rotleft(root);
         } else {
           match self.pool
             [self.pool[self.pool[root as usize].right as usize].left as usize]
@@ -293,7 +306,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
               self.pool[t as usize].tag = AVLTag::None;
             }
             AVLTag::Free => {
-              panic!("AVLTree::avlrightgrown(1): unallocated node in tree")
+              panic!("AVLTree::rightgrown(1): unallocated node in tree")
             }
           }
           {
@@ -301,8 +314,8 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
             self.pool[t as usize].tag = AVLTag::None;
           }
           self.pool[root as usize].right =
-            self.avlrotright(self.pool[root as usize].right);
-          root = self.avlrotleft(root);
+            self.rotright(self.pool[root as usize].right);
+          root = self.rotleft(root);
         }
         return (root, AVLRes::OK);
       }
@@ -311,11 +324,13 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
         return (root, AVLRes::Balance);
       }
       AVLTag::Free => {
-        panic!("AVLTree::avlrightgrown(2): unallocated node in tree")
+        panic!("AVLTree::rightgrown(2): unallocated node in tree")
       }
     }
   }
-  //  avlinsert: insert a node into the AVL tree.
+
+  // Private function: insert_wrk: insert a node into the AVL tree
+  // (worker function)
   //
   //  Parameters:
   //
@@ -344,51 +359,59 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
   //                to AVLKEY collision (the tree already contains another
   //                item with which the same AVLKEY is associated), or
   //                due to insufficient memory.
-  fn avlinsert_wrk(&mut self, mut root: u32, item: T) -> (u32, AVLRes) {
+  fn insert_wrk<F>(
+    &mut self, mut root: u32, item: T, mb_cmp: Option<&F>,
+  ) -> (u32, AVLRes)
+  where
+    F: Fn(T, T) -> Option<Ordering>,
+  {
     if root == AVL_NULL {
       root = self.alloc();
       self.pool[root as usize] =
         AVLNode::new(AVLTag::None, AVL_NULL, AVL_NULL, item);
       return (root, AVLRes::Balance);
     }
-    match ToFromU32::to_u32(item)
-      .partial_cmp(&ToFromU32::to_u32(self.pool[root as usize].item))
-      .unwrap()
-    {
-      Ordering::Less => {
+
+    let cmp_res = match mb_cmp {
+      None => {
+        let cmpArgL: u32 = ToFromU32::to_u32(item);
+        let cmpArgR: u32 = ToFromU32::to_u32(self.pool[root as usize].item);
+        cmpArgL.partial_cmp(&cmpArgR)
+      }
+      Some(cmp) => {
+        let cmpArgL: T = item;
+        let cmpArgR: T = self.pool[root as usize].item;
+        cmp(cmpArgL, cmpArgR)
+      }
+    };
+    match cmp_res {
+      None => panic!("AVLTree::insert_wrk: unordered elements"),
+      Some(Ordering::Less) => {
         let (new_left, res) =
-          self.avlinsert_wrk(self.pool[root as usize].left, item);
+          self.insert_wrk(self.pool[root as usize].left, item, mb_cmp);
         self.pool[root as usize].left = new_left;
         if res == AVLRes::Balance {
-          return self.avlleftgrown(root);
+          return self.leftgrown(root);
         }
         return (root, res);
       }
-      Ordering::Greater => {
+      Some(Ordering::Greater) => {
         let (new_right, res) =
-          self.avlinsert_wrk(self.pool[root as usize].right, item);
+          self.insert_wrk(self.pool[root as usize].right, item, mb_cmp);
         self.pool[root as usize].right = new_right;
         if res == AVLRes::Balance {
-          return self.avlrightgrown(root);
+          return self.rightgrown(root);
         }
         return (root, res);
       }
-      Ordering::Equal => {
+      Some(Ordering::Equal) => {
         return (root, AVLRes::Error);
       }
     }
   }
-  // insert.  Returns true if an insert happened.
-  pub fn avlinsert(&mut self, item: T) -> bool {
-    let (new_root, res) = self.avlinsert_wrk(self.root, item);
-    if res == AVLRes::Error {
-      return false; // already in tree
-    } else {
-      self.root = new_root;
-      return true;
-    }
-  }
-  //  avlleftshrunk: helper function for avlremove and avlfindlowest
+
+  // Private function: leftshrunk: helper function for delete and
+  // findlowest
   //
   //  Parameters:
   //
@@ -400,12 +423,12 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
   //
   //   Return values:
   //
-  //    OK          The parent activation of the avlremove activation
+  //    OK          The parent activation of the delete activation
   //                that called this function may assume the entire
   //                tree is valid.
   //
   //    BALANCE     Do not assume the entire tree is valid.
-  fn avlleftshrunk(&mut self, mut n: u32) -> (u32, AVLRes) {
+  fn leftshrunk(&mut self, mut n: u32) -> (u32, AVLRes) {
     match self.pool[n as usize].tag {
       AVLTag::Left => {
         self.pool[n as usize].tag = AVLTag::None;
@@ -417,7 +440,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
           self.pool[n as usize].tag = AVLTag::None;
           let t = self.pool[n as usize].right;
           self.pool[t as usize].tag = AVLTag::None;
-          n = self.avlrotleft(n);
+          n = self.rotleft(n);
           return (n, AVLRes::Balance);
         } else if self.pool[self.pool[n as usize].right as usize].tag
           == AVLTag::None
@@ -425,7 +448,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
           self.pool[n as usize].tag = AVLTag::Right;
           let t = self.pool[n as usize].right;
           self.pool[t as usize].tag = AVLTag::Left;
-          n = self.avlrotleft(n);
+          n = self.rotleft(n);
           return (n, AVLRes::OK);
         } else {
           match self.pool
@@ -448,7 +471,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
               self.pool[t as usize].tag = AVLTag::None;
             }
             AVLTag::Free => {
-              panic!("AVLTree::avlleftshrunk(1): unallocated node in tree");
+              panic!("AVLTree::leftshrunk(1): unallocated node in tree");
             }
           }
           {
@@ -456,10 +479,10 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
             self.pool[t as usize].tag = AVLTag::None;
           }
           {
-            let t = self.avlrotright(self.pool[n as usize].right);
+            let t = self.rotright(self.pool[n as usize].right);
             self.pool[n as usize].right = t;
           }
-          n = self.avlrotleft(n);
+          n = self.rotleft(n);
           return (n, AVLRes::Balance);
         }
       }
@@ -468,14 +491,16 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
         return (n, AVLRes::OK);
       }
       AVLTag::Free => {
-        panic!("AVLTree::avlleftshrunk(2): unallocated node in tree");
+        panic!("AVLTree::leftshrunk(2): unallocated node in tree");
       }
     }
   }
-  //  avlrightshrunk: helper function for avlremove and avlfindhighest
+
+  // Private function: rightshrunk: helper function for delete and
+  // findhighest
   //
-  //  See avlleftshrunk for details.
-  fn avlrightshrunk(&mut self, mut n: u32) -> (u32, AVLRes) {
+  //  See leftshrunk for details.
+  fn rightshrunk(&mut self, mut n: u32) -> (u32, AVLRes) {
     match self.pool[n as usize].tag {
       AVLTag::Right => {
         self.pool[n as usize].tag = AVLTag::None;
@@ -486,7 +511,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
           self.pool[n as usize].tag = AVLTag::None;
           let t = self.pool[n as usize].left;
           self.pool[t as usize].tag = AVLTag::None;
-          n = self.avlrotright(n);
+          n = self.rotright(n);
           return (n, AVLRes::Balance);
         } else if self.pool[self.pool[n as usize].left as usize].tag
           == AVLTag::None
@@ -494,7 +519,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
           self.pool[n as usize].tag = AVLTag::Left;
           let t = self.pool[n as usize].left;
           self.pool[t as usize].tag = AVLTag::Right;
-          n = self.avlrotright(n);
+          n = self.rotright(n);
           return (n, AVLRes::OK);
         } else {
           match self.pool
@@ -517,7 +542,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
               self.pool[t as usize].tag = AVLTag::None;
             }
             AVLTag::Free => {
-              panic!("AVLTree::avlrightshrunk(1): unallocated node in tree");
+              panic!("AVLTree::rightshrunk(1): unallocated node in tree");
             }
           }
           {
@@ -525,10 +550,10 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
             self.pool[t as usize].tag = AVLTag::None;
           }
           {
-            let t = self.avlrotleft(self.pool[n as usize].left);
+            let t = self.rotleft(self.pool[n as usize].left);
             self.pool[n as usize].left = t;
           }
-          n = self.avlrotright(n);
+          n = self.rotright(n);
           return (n, AVLRes::Balance);
         }
       }
@@ -537,11 +562,13 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
         return (n, AVLRes::OK);
       }
       AVLTag::Free => {
-        panic!("AVLTree::avlrightshrunk(2): unallocated node in tree");
+        panic!("AVLTree::rightshrunk(2): unallocated node in tree");
       }
     }
   }
-  //  avlfindhighest: replace a node with a subtree's highest-ranking item.
+
+  // Private function: findhighest: replace a node with a subtree's
+  // highest-ranking item.
   //
   //  Parameters:
   //
@@ -551,7 +578,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
   //
   //    res         Pointer to variable used to tell the caller whether
   //                further checks are necessary; analog to the return
-  //                values of avlleftgrown and avlleftshrunk (see there).
+  //                values of leftgrown and leftshrunk (see there).
   //
   //  Return values:
   //
@@ -560,20 +587,18 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
   //    False       The target node could not be replaced because
   //                the subtree provided was empty.
   //
-  fn avlfindhighest(
-    &mut self, target: u32, mut n: u32,
-  ) -> Option<(u32, AVLRes)> {
+  fn findhighest(&mut self, target: u32, mut n: u32) -> Option<(u32, AVLRes)> {
     if n == AVL_NULL {
       return None;
     }
     let mut res = AVLRes::Balance;
     if self.pool[n as usize].right != AVL_NULL {
-      let rec = self.avlfindhighest(target, self.pool[n as usize].right);
+      let rec = self.findhighest(target, self.pool[n as usize].right);
       if let Some((new_n_right, new_res)) = rec {
         self.pool[n as usize].right = new_n_right;
         res = new_res;
         if res == AVLRes::Balance {
-          let (new_n, new_res) = self.avlrightshrunk(n);
+          let (new_n, new_res) = self.rightshrunk(n);
           n = new_n;
           res = new_res;
         }
@@ -588,23 +613,23 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
     self.free(tmp);
     Some((n, res))
   }
-  //  avlfindlowest: replace node with a subtree's lowest-ranking item.
+
+  // Private function: findlowest: replace node with a subtree's
+  // lowest-ranking item.
   //
-  //  See avlfindhighest for the details.
-  fn avlfindlowest(
-    &mut self, target: u32, mut n: u32,
-  ) -> Option<(u32, AVLRes)> {
+  //  See findhighest for the details.
+  fn findlowest(&mut self, target: u32, mut n: u32) -> Option<(u32, AVLRes)> {
     if n == AVL_NULL {
       return None;
     }
     let mut res = AVLRes::Balance;
     if self.pool[n as usize].left != AVL_NULL {
-      let rec = self.avlfindlowest(target, self.pool[n as usize].left);
+      let rec = self.findlowest(target, self.pool[n as usize].left);
       if let Some((new_n_left, new_res)) = rec {
         self.pool[n as usize].left = new_n_left;
         res = new_res;
         if res == AVLRes::Balance {
-          let (new_n, new_res) = self.avlleftshrunk(n);
+          let (new_n, new_res) = self.leftshrunk(n);
           n = new_n;
           res = new_res;
         }
@@ -619,7 +644,9 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
     self.free(tmp);
     Some((n, res))
   }
-  //  avlremove: remove an item from the tree.
+
+  // Private function: delete_wrk: delete an item from the tree.
+  // (worker function)
   //
   //  Parameters:
   //
@@ -631,7 +658,7 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
   //
   //    nonzero     The item has been removed. The exact value of
   //                nonzero yields if of no concern to user code; when
-  //                avlremove recursively calls itself, the number
+  //                delete recursively calls itself, the number
   //                returned tells the parent activation if the AVL tree
   //                may have become unbalanced; specifically:
   //
@@ -644,76 +671,155 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
   //
   //   zero         The tree does not contain an item yielding the
   //                AVLKEY value provided by the caller.
-  fn avlremove_wrk(&mut self, mut n: u32, item: T) -> (u32, AVLRes) {
+  fn delete_wrk<F>(
+    &mut self, mut root: u32, item: T, mb_cmp: Option<&F>,
+  ) -> (u32, AVLRes)
+  where
+    F: Fn(T, T) -> Option<Ordering>,
+  {
     let mut tmp = AVLRes::Balance;
-    if n == AVL_NULL {
-      return (n, AVLRes::Error);
+    if root == AVL_NULL {
+      return (root, AVLRes::Error);
     }
-    match ToFromU32::to_u32(item)
-      .partial_cmp(&ToFromU32::to_u32(self.pool[n as usize as usize].item))
-      .unwrap()
-    {
-      Ordering::Less => {
-        let n_left = self.pool[n as usize].left;
-        let (new_n_left, new_tmp) = self.avlremove_wrk(n_left, item);
-        self.pool[n as usize].left = new_n_left;
+
+    let cmp_res = match mb_cmp {
+      None => {
+        let cmpArgL: u32 = ToFromU32::to_u32(item);
+        let cmpArgR: u32 = ToFromU32::to_u32(self.pool[root as usize].item);
+        cmpArgL.partial_cmp(&cmpArgR)
+      }
+      Some(cmp) => {
+        let cmpArgL: T = item;
+        let cmpArgR: T = self.pool[root as usize].item;
+        cmp(cmpArgL, cmpArgR)
+      }
+    };
+    match cmp_res {
+      None => panic!("AVLTree::delete_wrk: unordered elements"),
+      Some(Ordering::Less) => {
+        let root_left = self.pool[root as usize].left;
+        let (new_root_left, new_tmp) = self.delete_wrk(root_left, item, mb_cmp);
+        self.pool[root as usize].left = new_root_left;
         tmp = new_tmp;
         if tmp == AVLRes::Balance {
-          let (new_n, new_res) = self.avlleftshrunk(n);
-          n = new_n;
+          let (new_root, new_res) = self.leftshrunk(root);
+          root = new_root;
           tmp = new_res;
         }
-        return (n, tmp);
+        return (root, tmp);
       }
-      Ordering::Greater => {
-        let n_right = self.pool[n as usize].right;
-        let (new_n_right, new_tmp) = self.avlremove_wrk(n_right, item);
-        self.pool[n as usize].right = new_n_right;
+      Some(Ordering::Greater) => {
+        let root_right = self.pool[root as usize].right;
+        let (new_root_right, new_tmp) =
+          self.delete_wrk(root_right, item, mb_cmp);
+        self.pool[root as usize].right = new_root_right;
         tmp = new_tmp;
         if tmp == AVLRes::Balance {
-          let (new_n, new_res) = self.avlrightshrunk(n);
-          n = new_n;
+          let (new_root, new_res) = self.rightshrunk(root);
+          root = new_root;
           tmp = new_res;
         }
-        return (n, tmp);
+        return (root, tmp);
       }
-      Ordering::Equal => {
-        if self.pool[n as usize].left != AVL_NULL {
-          let n_left = self.pool[n as usize].left;
-          if let Some((new_n_left, new_tmp)) = self.avlfindhighest(n, n_left) {
-            self.pool[n as usize].left = new_n_left;
+      Some(Ordering::Equal) => {
+        if self.pool[root as usize].left != AVL_NULL {
+          let root_left = self.pool[root as usize].left;
+          if let Some((new_root_left, new_tmp)) =
+            self.findhighest(root, root_left)
+          {
+            self.pool[root as usize].left = new_root_left;
             tmp = new_tmp;
             if new_tmp == AVLRes::Balance {
-              let (new_n, new_res) = self.avlleftshrunk(n);
-              n = new_n;
+              let (new_root, new_res) = self.leftshrunk(root);
+              root = new_root;
               tmp = new_res;
             }
           }
-          return (n, tmp);
+          return (root, tmp);
         }
-        if self.pool[n as usize].right != AVL_NULL {
-          let n_right = self.pool[n as usize].right;
-          if let Some((new_n_right, new_tmp)) = self.avlfindlowest(n, n_right) {
-            self.pool[n as usize].right = new_n_right;
+        if self.pool[root as usize].right != AVL_NULL {
+          let root_right = self.pool[root as usize].right;
+          if let Some((new_root_right, new_tmp)) =
+            self.findlowest(root, root_right)
+          {
+            self.pool[root as usize].right = new_root_right;
             tmp = new_tmp;
             if new_tmp == AVLRes::Balance {
-              let (new_n, new_res) = self.avlrightshrunk(n);
-              n = new_n;
+              let (new_root, new_res) = self.rightshrunk(root);
+              root = new_root;
               tmp = new_res;
             }
           }
-          return (n, tmp);
+          return (root, tmp);
         }
-        self.free(n);
-        n = AVL_NULL;
-        return (n, AVLRes::Balance);
+        self.free(root);
+        root = AVL_NULL;
+        return (root, AVLRes::Balance);
       }
     }
   }
-  // remove.  Returns a bool which indicates whether the value was in there in
-  // the first place.  (meaning, true == a removal actually occurred).
-  pub fn avlremove(&mut self, item: T) -> bool {
-    let (new_root, res) = self.avlremove_wrk(self.root, item);
+
+  // Private fn: count the number of items in the tree.  Warning: costs O(N) !
+  fn count_wrk(&self, n: u32) -> usize {
+    if n == AVL_NULL {
+      return 0;
+    }
+    1 + self.count_wrk(self.pool[n as usize].left)
+      + self.count_wrk(self.pool[n as usize].right)
+  }
+
+  // Private fn: find the max depth of the tree.  Warning: costs O(N) !
+  fn depth_wrk(&self, n: u32) -> usize {
+    if n == AVL_NULL {
+      return 0;
+    }
+    let d_left = self.depth_wrk(self.pool[n as usize].left);
+    let d_right = self.depth_wrk(self.pool[n as usize].right);
+    1 + if d_left > d_right { d_left } else { d_right }
+  }
+}
+
+// ====== Public interface for AVLTree ======
+
+impl<T: Copy + ToFromU32> AVLTree<T> {
+  // The core functions (insert, delete, contains) take a comparator argument
+  //
+  //   mb_cmp: Option<&F>
+  //   where
+  //     T: ToFromU32,
+  //     F: Fn(T, T) -> Option<Ordering>
+  //
+  // which allows control over how node comparison is done.  If this is None,
+  // then comparison is done directly using the u32 values underlying the T
+  // values (after passing them through ToFromU32::to_u32).
+  //
+  // If this is Some(cmp), then comparison is done by passing the two T values
+  // to |cmp|.  In this case, the routines will complain (panic) if |cmp|
+  // indicates that its arguments are unordered.
+
+  // Insert a value in the tree.  Returns true if an insert happened, false if
+  // the item was already present.
+  pub fn insert<F>(&mut self, item: T, mb_cmp: Option<&F>) -> bool
+  where
+    F: Fn(T, T) -> Option<Ordering>,
+  {
+    let (new_root, res) = self.insert_wrk(self.root, item, mb_cmp);
+    if res == AVLRes::Error {
+      return false; // already in tree
+    } else {
+      self.root = new_root;
+      return true;
+    }
+  }
+
+  // Remove an item from the tree.  Returns a bool which indicates whether the
+  // value was in there in the first place.  (meaning, true == a removal
+  // actually occurred).
+  pub fn delete<F>(&mut self, item: T, mb_cmp: Option<&F>) -> bool
+  where
+    F: Fn(T, T) -> Option<Ordering>,
+  {
+    let (new_root, res) = self.delete_wrk(self.root, item, mb_cmp);
     if res == AVLRes::Error {
       return false;
     } else {
@@ -721,84 +827,111 @@ impl<T: Copy + ToFromU32> AVLTree<T> {
       return true;
     }
   }
-  // Find in the tree.
-  pub fn avlcontains(&self, item: T) -> bool {
+
+  // Determine whether an item is in the tree.
+  pub fn contains<F>(&self, item: T, mb_cmp: Option<&F>) -> bool
+  where
+    F: Fn(T, T) -> Option<Ordering>,
+  {
     let mut n = self.root;
-    loop {
-      if n == AVL_NULL {
-        return false;
+    // Lookup needs to be really fast, so have two versions of the loop, one
+    // for direct comparison, one for indirect.
+    match mb_cmp {
+      None => {
+        // Do comparisons directly on the 32-bit words.
+        loop {
+          if n == AVL_NULL {
+            return false;
+          }
+          let cmpArgL: u32 = ToFromU32::to_u32(item);
+          let cmpArgR: u32 = ToFromU32::to_u32(self.pool[n as usize].item);
+          // The unwrap can never fail, since we're u32s form a total order.
+          match cmpArgL.partial_cmp(&cmpArgR).unwrap() {
+            Ordering::Less => {
+              n = self.pool[n as usize].left;
+            }
+            Ordering::Greater => {
+              n = self.pool[n as usize].right;
+            }
+            Ordering::Equal => {
+              return true;
+            }
+          }
+        }
       }
-      match ToFromU32::to_u32(item)
-        .partial_cmp(&ToFromU32::to_u32(self.pool[n as usize as usize].item))
-        .unwrap()
-      {
-        Ordering::Less => {
-          n = self.pool[n as usize].left;
-        }
-        Ordering::Greater => {
-          n = self.pool[n as usize].right;
-        }
-        Ordering::Equal => {
-          return true;
+      Some(cmp) => {
+        // Do comparisons by handing off to the supplied function.
+        loop {
+          if n == AVL_NULL {
+            return false;
+          }
+          let cmpArgL: T = item;
+          let cmpArgR: T = self.pool[n as usize].item;
+          // Whereas this might fail.  Let's be noisy if it does.
+          match cmp(cmpArgL, cmpArgR) {
+            Some(cmpRes) => match cmpRes {
+              Ordering::Less => {
+                n = self.pool[n as usize].left;
+              }
+              Ordering::Greater => {
+                n = self.pool[n as usize].right;
+              }
+              Ordering::Equal => {
+                return true;
+              }
+            },
+            None => {
+              panic!("AVLTree::contains: unordered elements in search!");
+            }
+          }
         }
       }
     }
   }
 
-  ///////////////////////
-  // Show the tree.
-  pub fn avlshow(&self, depth: i32, node: u32) {
-    if node != AVL_NULL {
-      self.avlshow(depth + 1, self.pool[node as usize].left);
-      for _ in 0..depth {
-        print!("   ");
-      }
-      println!("{}", ToFromU32::to_u32(self.pool[node as usize].item));
-      self.avlshow(depth + 1, self.pool[node as usize].right);
-    }
+  // Count the number of items in the tree.  Warning: costs O(N) !
+  pub fn count(&self) -> usize {
+    self.count_wrk(self.root)
   }
-  // Count the number of items in the tree.
-  fn avlcount_wrk(&self, n: u32) -> usize {
-    if n == AVL_NULL {
-      return 0;
-    }
-    1 + self.avlcount_wrk(self.pool[n as usize].left)
-      + self.avlcount_wrk(self.pool[n as usize].right)
+
+  // Private fn: find the max depth of the tree.  Warning: costs O(N) !
+  pub fn depth(&self) -> usize {
+    self.depth_wrk(self.root)
   }
-  pub fn avlcount(&self) -> usize {
-    self.avlcount_wrk(self.root)
-  }
-  // Find the max depth of the tree.
-  fn avldepth_wrk(&self, n: u32) -> usize {
-    if n == AVL_NULL {
-      return 0;
-    }
-    let d_left = self.avldepth_wrk(self.pool[n as usize].left);
-    let d_right = self.avldepth_wrk(self.pool[n as usize].right);
-    1 + if d_left > d_right { d_left } else { d_right }
-  }
-  pub fn avldepth(&self) -> usize {
-    self.avldepth_wrk(self.root)
-  }
+
+  // Show the tree.  (For debugging only.)
+  //pub fn show(&self, depth: i32, node: u32) {
+  //  if node != AVL_NULL {
+  //    self.show(depth + 1, self.pool[node as usize].left);
+  //    for _ in 0..depth {
+  //      print!("   ");
+  //    }
+  //    println!("{}", ToFromU32::to_u32(self.pool[node as usize].item));
+  //    self.show(depth + 1, self.pool[node as usize].right);
+  //  }
+  //}
 }
+
+// ====== Testing machinery for AVLTree ======
 
 #[cfg(test)]
 mod test_utils {
   use crate::data_structures::Set;
+  use std::cmp::Ordering;
 
   // Perform various checks on the tree, and assert if it is not OK.
   pub fn check_tree(
-    tree: &super::AVLTree<u32>, should_be_in_tree: &Set<u32>,
-    univ_min: u32, univ_max: u32,
+    tree: &super::AVLTree<u32>, should_be_in_tree: &Set<u32>, univ_min: u32,
+    univ_max: u32,
   ) {
     // Same cardinality
     let n_in_set = should_be_in_tree.card();
-    let n_in_tree = tree.avlcount();
+    let n_in_tree = tree.count();
     assert!(n_in_set == n_in_tree);
 
     // Tree is not wildly out of balance.  Depth should not exceed 1.44 *
     // log2(size).
-    let tree_depth = tree.avldepth();
+    let tree_depth = tree.depth();
     let mut log2_size = 0;
     {
       let mut n: usize = n_in_tree;
@@ -816,8 +949,27 @@ mod test_utils {
     // versa.
     for i in univ_min..univ_max {
       let should_be_in = should_be_in_tree.contains(i);
-      let is_in = tree.avlcontains(i);
+
+      // Look it up with a null comparator (so |contains| compares
+      // directly)
+      let is_in = tree.contains::<fn(u32, u32) -> Option<Ordering>>(i, None);
       assert!(is_in == should_be_in);
+
+      // We should get the same result with a custom comparator that does the
+      // same as the null comparator.
+      let is_in_w_cmp =
+        tree.contains(i, Some(&(|xL: u32, xR: u32| xL.partial_cmp(&xR))));
+      assert!(is_in_w_cmp == is_in);
+
+      // And even when the comparator is actually a closure
+      let forty_two: u32 = 52;
+      let is_in_w_cmp_closure = tree.contains(
+        i,
+        Some(
+          &(|xL: u32, xR: u32| (xL + forty_two).partial_cmp(&(xR + forty_two))),
+        ),
+      );
+      assert!(is_in_w_cmp_closure == is_in);
     }
 
     // We could even test that the tree items are in-order, but it hardly
@@ -827,7 +979,7 @@ mod test_utils {
 }
 
 #[test]
-fn test_avl_tree() {
+fn test_avl_tree1() {
   use crate::data_structures::Set;
 
   // Perform tests on an AVL tree.  Use as values, every third number between
@@ -850,7 +1002,7 @@ fn test_avl_tree() {
     if i % 3 != 0 {
       continue;
     }
-    let was_added = tree.avlinsert(i);
+    let was_added = tree.insert::<fn(u32, u32) -> Option<Ordering>>(i, None);
     should_be_in_tree.insert(i);
     assert!(was_added == true);
     test_utils::check_tree(&tree, &should_be_in_tree, UNIV_MIN, UNIV_MAX);
@@ -860,7 +1012,7 @@ fn test_avl_tree() {
   for i in UNIV_MIN + UNIV_SIZE / 4..UNIV_MIN + 3 * (UNIV_SIZE / 4) {
     // Note that here, we're asking to delete a bunch of numbers that aren't
     // in the tree.  It should remain valid throughout.
-    let was_removed = tree.avlremove(i);
+    let was_removed = tree.delete::<fn(u32, u32) -> Option<Ordering>>(i, None);
     let should_have_been_removed = should_be_in_tree.contains(i);
     assert!(was_removed == should_have_been_removed);
     should_be_in_tree.delete(i);
@@ -872,7 +1024,7 @@ fn test_avl_tree() {
     if i % 3 != 0 {
       continue;
     }
-    let was_added = tree.avlinsert(i);
+    let was_added = tree.insert::<fn(u32, u32) -> Option<Ordering>>(i, None);
     let should_have_been_added = !should_be_in_tree.contains(i);
     assert!(was_added == should_have_been_added);
     should_be_in_tree.insert(i);
@@ -882,7 +1034,7 @@ fn test_avl_tree() {
   // Then remove all numbers from the tree, in reverse order.
   for ir in UNIV_MIN..UNIV_MAX {
     let i = UNIV_MIN + (UNIV_MAX - ir);
-    let was_removed = tree.avlremove(i);
+    let was_removed = tree.delete::<fn(u32, u32) -> Option<Ordering>>(i, None);
     let should_have_been_removed = should_be_in_tree.contains(i);
     assert!(was_removed == should_have_been_removed);
     should_be_in_tree.delete(i);
@@ -891,13 +1043,13 @@ fn test_avl_tree() {
 
   // Now the tree should be empty.
   assert!(should_be_in_tree.is_empty());
-  assert!(tree.avlcount() == 0);
+  assert!(tree.count() == 0);
 
   // Now delete some more stuff.  Tree should still be empty :-)
   for i in UNIV_MIN + 10..UNIV_MIN + 100 {
     assert!(should_be_in_tree.is_empty());
-    assert!(tree.avlcount() == 0);
-    tree.avlremove(i);
+    assert!(tree.count() == 0);
+    tree.delete::<fn(u32, u32) -> Option<Ordering>>(i, None);
     test_utils::check_tree(&tree, &should_be_in_tree, UNIV_MIN, UNIV_MAX);
   }
 
@@ -927,4 +1079,43 @@ fn test_avl_tree() {
 
   // All elements in the pool are on the freelist.
   assert!(n_in_freelist == tree.pool.len());
+}
+
+#[test]
+fn test_avl_tree2() {
+  use std::cmp::Ordering;
+
+  // Do some simple testing using a custom comparator, which inverts the order
+  // of items in the tree, so as to check custom comparators work right.
+  let mut tree = AVLTree::<u32>::new(0);
+
+  let nums = [31, 41, 59, 27, 14, 35, 62, 25, 18, 28, 45, 90, 61];
+
+  fn rCmp(x: u32, y: u32) -> Option<Ordering> {
+    y.partial_cmp(&x)
+  }
+
+  // Insert
+  for n in &nums {
+    let insert_happened = tree.insert(*n, Some(&rCmp));
+    assert!(insert_happened == true);
+  }
+
+  // Check membership
+  for n in 0..100 {
+    let is_in = tree.contains(n, Some(&rCmp));
+    let should_be_in = nums.iter().any(|m| n == *m);
+    assert!(is_in == should_be_in);
+  }
+
+  // Delete
+  for n in 0..100 {
+    let remove_happened = tree.delete(n, Some(&rCmp));
+    let remove_should_have_happened = nums.iter().any(|m| n == *m);
+    assert!(remove_happened == remove_should_have_happened);
+  }
+
+  // Final check
+  assert!(tree.root == AVL_NULL);
+  assert!(tree.count() == 0);
 }
