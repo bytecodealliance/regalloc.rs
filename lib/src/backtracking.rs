@@ -752,20 +752,19 @@ struct PerRealReg {
   committed: CommitmentMap,
   committedFAST: CommitmentMapFAST,
 
-  // The VirtualRanges which have been assigned to this RealReg, in no
-  // particular order.  The union of their frags will be equal to
-  // |committed| only if this RealReg has no RealRanges.  If this RealReg
-  // does have RealRanges the aforementioned union will be exactly the
-  // subset of |committed| not used by the RealRanges.
-  // FIXME shouldn't this be a Set?
-  vlrixs_assigned: Vec<VirtualRangeIx>,
+  // The set of VirtualRanges which have been assigned to this RealReg.  The
+  // union of their frags will be equal to |committed| only if this RealReg
+  // has no RealRanges.  If this RealReg does have RealRanges the
+  // aforementioned union will be exactly the subset of |committed| not used
+  // by the RealRanges.
+  vlrixs_assigned: Set<VirtualRangeIx>,
 }
 impl PerRealReg {
   fn new() -> Self {
     Self {
       committed: CommitmentMap::new(),
       committedFAST: CommitmentMapFAST::new(),
-      vlrixs_assigned: Vec::<VirtualRangeIx>::new(),
+      vlrixs_assigned: Set::<VirtualRangeIx>::empty(),
     }
   }
 
@@ -804,7 +803,8 @@ impl PerRealReg {
         vlr_env,
       );
     }
-    self.vlrixs_assigned.push(to_add_vlrix);
+    assert!(!self.vlrixs_assigned.contains(to_add_vlrix));
+    self.vlrixs_assigned.insert(to_add_vlrix);
   }
 
   #[inline(never)]
@@ -813,19 +813,9 @@ impl PerRealReg {
     fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
   ) {
-    assert!(self.vlrixs_assigned.len() > 0);
     // Remove it from |vlrixs_assigned|
-    let mut found = None;
-    for i in 0..self.vlrixs_assigned.len() {
-      if self.vlrixs_assigned[i] == to_del_vlrix {
-        found = Some(i);
-        break;
-      }
-    }
-    if let Some(i) = found {
-      self.vlrixs_assigned[i] =
-        self.vlrixs_assigned[self.vlrixs_assigned.len() - 1];
-      self.vlrixs_assigned.remove(self.vlrixs_assigned.len() - 1);
+    if self.vlrixs_assigned.contains(to_del_vlrix) {
+      self.vlrixs_assigned.delete(to_del_vlrix);
     } else {
       panic!("PerRealReg: del_VirtualRange on VR not in vlrixs_assigned");
     }
@@ -906,7 +896,7 @@ fn rec_helper(
   // ranges and costs as we traverse the tree.
   running_set: &mut Set<VirtualRangeIx>,
   running_cost: &mut SpillCost,
-  // The root of the subtree to search.  This change as we recurse down.
+  // The root of the subtree to search.  This changes as we recurse down.
   root: u32,
   // === All the other args stay constant as we recurse ===
   tree: &AVLTree<FIxAndVLRIx>,
@@ -2039,7 +2029,7 @@ pub fn alloc_main<F: Function>(
     let rreg = reg_universe.regs[i].0;
     // .. look at all the VirtualRanges assigned to it.  And for each such
     // VirtualRange ..
-    for vlrix_assigned in &per_real_reg[i].vlrixs_assigned {
+    for vlrix_assigned in per_real_reg[i].vlrixs_assigned.iter() {
       let VirtualRange { vreg, sorted_frags, .. } = &vlr_env[*vlrix_assigned];
       // All the RangeFrags in |vlr_assigned| require |vlr_assigned.reg|
       // to be mapped to the real reg |i|
