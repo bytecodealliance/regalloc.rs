@@ -916,10 +916,7 @@ fn test_avl_tree() {
   // Check the freelist: all entries are of the expected form.
   for e in &tree.pool {
     assert!(e.tag == AVLTag::Free);
-    assert!(
-      e.left == AVL_NULL
-        || (e.left >= 0 && (e.left as usize) < tree.pool.len())
-    );
+    assert!(e.left == AVL_NULL || (e.left as usize) < tree.pool.len());
     assert!(e.right == AVL_NULL);
     assert!(e.item == 0);
   }
@@ -2232,6 +2229,17 @@ impl fmt::Debug for EditListItem {
 pub fn alloc_main<F: Function>(
   func: &mut F, reg_universe: &RealRegUniverse,
 ) -> Result<RegAllocResult<F>, String> {
+  // Tmp kludge: create dummy uses for the AVL functions to silence
+  // compiler warnings.
+  if false {
+    let mut t = AVLTree::<u32>::new(0);
+    let _ = t.avlinsert(42);
+    let _ = t.avlremove(99);
+    let _ = t.avlcontains(1337);
+    let _ = t.avlcount() + t.avldepth();
+    let _ = t.avlshow(0, AVL_NULL);
+  }
+
   // -------- Perform initial liveness analysis --------
   // Note that the analysis phase can fail; hence we propagate any error.
   let (san_reg_uses, rlr_env, mut vlr_env, mut frag_env, _liveouts, est_freqs) =
