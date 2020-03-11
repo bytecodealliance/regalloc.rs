@@ -120,7 +120,7 @@ mod test_cases;
 mod test_framework;
 mod validator;
 
-use regalloc::{allocate_registers, RegAllocAlgorithm};
+use regalloc::{allocate_registers, RegAllocAlgorithm, RegAllocError};
 use test_framework::{make_universe, run_func, RunStage};
 use validator::check_results;
 
@@ -250,23 +250,38 @@ mod test_utils {
   use crate::test_framework::Func;
 
   pub fn check_bt(func_name: &str, num_gpr: usize, num_fpu: usize) {
+    check_bt_internal(
+      func_name, num_gpr, num_fpu, /* use_checker = */ false,
+    );
+  }
+
+  pub fn check_bt_checked(func_name: &str, num_gpr: usize, num_fpu: usize) {
+    check_bt_internal(
+      func_name, num_gpr, num_fpu, /* use_checker = */ true,
+    );
+  }
+
+  fn check_bt_internal(
+    func_name: &str, num_gpr: usize, num_fpu: usize, use_checker: bool,
+  ) {
     let _ = pretty_env_logger::try_init();
     let mut func = test_cases::find_func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
+    let algo = if use_checker {
+      RegAllocAlgorithm::BacktrackingChecked
+    } else {
+      RegAllocAlgorithm::Backtracking
+    };
     let before_regalloc_result = run_func(
       &func,
       "Before allocation",
       &reg_universe,
       RunStage::BeforeRegalloc,
     );
-    let result = allocate_registers(
-      &mut func,
-      RegAllocAlgorithm::Backtracking,
-      &reg_universe,
-    )
-    .unwrap_or_else(|err| {
-      panic!("allocation failed: {}", err);
-    });
+    let result = allocate_registers(&mut func, algo, &reg_universe)
+      .unwrap_or_else(|err| {
+        panic!("allocation failed: {}", err);
+      });
     func.update_from_alloc(result);
     let after_regalloc_result = run_func(
       &func,
@@ -280,7 +295,7 @@ mod test_utils {
   // Note: num_gpr/num_fpu: must include the scratch register.
   pub fn run_lsra(
     func_name: &str, num_gpr: usize, num_fpu: usize,
-  ) -> Result<RegAllocResult<Func>, String> {
+  ) -> Result<RegAllocResult<Func>, RegAllocError> {
     let _ = pretty_env_logger::try_init();
     let mut func = test_cases::find_func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
@@ -498,6 +513,12 @@ fn lsra_needs_splitting2() {
 fn bt_qsort() {
   test_utils::check_bt("qsort", 8, 8);
 }
+
+#[test]
+fn btc_qsort() {
+  test_utils::check_bt_checked("qsort", 8, 8);
+}
+
 #[test]
 fn lsra_qsort_cant() {
   assert!(test_utils::run_lsra("qsort", 1, 0).is_err());
@@ -517,6 +538,7 @@ fn lsra_qsort_4() {
 fn lsra_qsort_6() {
   test_utils::check_lsra("qsort", 6, 0);
 }
+
 #[test]
 fn lsra_qsort_7() {
   test_utils::check_lsra("qsort", 7, 0);

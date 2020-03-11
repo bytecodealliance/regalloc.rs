@@ -11,6 +11,7 @@ pub mod analysis;
 mod analysis;
 
 mod backtracking;
+mod checker;
 mod data_structures;
 mod inst_stream;
 pub mod interface;

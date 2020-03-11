@@ -30,7 +30,9 @@ use crate::data_structures::{
   TypedIxVec, VirtualRange, VirtualRangeIx, VirtualReg, Writable,
   NUM_REG_CLASSES,
 };
-use crate::inst_stream::{fill_memory_moves, InstAndPoint, InstsAndPoints};
+use crate::inst_stream::{
+  fill_memory_moves, InstAndPoint, InstToInsert, InstsAndPoints,
+};
 use crate::interface::{Function, RegAllocResult};
 
 // Local shorthands.
@@ -1452,7 +1454,7 @@ fn resolve_moves<F: Function>(
   virtual_intervals: &Vec<&LiveInterval>, fragments: &Fragments,
   liveouts: &TypedIxVec<BlockIx, Set<Reg>>, spill_slot: &mut u32,
   scratches_by_rc: &[Option<RealReg>],
-) -> InstsAndPoints<F> {
+) -> InstsAndPoints {
   let mut memory_moves = HashMap::default();
 
   let mut parallel_reloads = HashMap::default();
@@ -1560,10 +1562,13 @@ fn resolve_moves<F: Function>(
               spill,
               at_inst
             );
-            spills
-              .entry(at_inst)
-              .or_insert(Vec::new())
-              .push(func.gen_spill(spill, rreg, vreg));
+            spills.entry(at_inst).or_insert(Vec::new()).push(
+              InstToInsert::Spill {
+                to_slot: spill,
+                from_reg: rreg,
+                for_vreg: vreg,
+              },
+            );
           }
 
           Location::Stack(parent_spill) => {
@@ -1845,18 +1850,26 @@ impl MoveOp {
     }
   }
 
-  fn gen_inst<F: Function>(&self, func: &F) -> F::Inst {
+  fn gen_inst(&self) -> InstToInsert {
     match self.from {
       MoveOperand::Reg(from) => match self.to {
-        MoveOperand::Reg(to) => {
-          func.gen_move(Writable::from_reg(to), from, self.vreg)
-        }
-        MoveOperand::Stack(to) => func.gen_spill(to, from, self.vreg),
+        MoveOperand::Reg(to) => InstToInsert::Move {
+          to_reg: Writable::from_reg(to),
+          from_reg: from,
+          for_vreg: self.vreg,
+        },
+        MoveOperand::Stack(to) => InstToInsert::Spill {
+          to_slot: to,
+          from_reg: from,
+          for_vreg: self.vreg,
+        },
       },
       MoveOperand::Stack(from) => match self.to {
-        MoveOperand::Reg(to) => {
-          func.gen_reload(Writable::from_reg(to), from, self.vreg)
-        }
+        MoveOperand::Reg(to) => InstToInsert::Reload {
+          to_reg: Writable::from_reg(to),
+          from_slot: from,
+          for_vreg: self.vreg,
+        },
         MoveOperand::Stack(_to) => unreachable!("stack to stack move"),
       },
     }
@@ -1975,7 +1988,7 @@ fn schedule_moves(pending: &mut Vec<MoveOp>) -> Vec<MoveOp> {
 fn emit_moves<F: Function>(
   ordered_moves: Vec<MoveOp>, func: &F, num_spill_slots: &mut u32,
   scratches_by_rc: &[Option<RealReg>],
-) -> Vec<F::Inst> {
+) -> Vec<InstToInsert> {
   let mut spill_slot = None;
   let mut in_cycle = false;
 
@@ -1997,11 +2010,11 @@ fn emit_moves<F: Function>(
       // the saved value of B, to A.
       match mov.to {
         MoveOperand::Reg(dst_reg) => {
-          let inst = func.gen_reload(
-            Writable::from_reg(dst_reg),
-            spill_slot.expect("should have a cycle spill slot"),
-            mov.vreg,
-          );
+          let inst = InstToInsert::Reload {
+            to_reg: Writable::from_reg(dst_reg),
+            from_slot: spill_slot.expect("should have a cycle spill slot"),
+            for_vreg: mov.vreg,
+          };
           insts.push(inst);
           if show_debug {
             trace!(
@@ -2014,13 +2027,17 @@ fn emit_moves<F: Function>(
         MoveOperand::Stack(dst_spill) => {
           let scratch = scratches_by_rc[mov.vreg.get_class() as usize]
             .expect("missing scratch reg");
-          let inst = func.gen_reload(
-            Writable::from_reg(scratch),
-            spill_slot.expect("should have a cycle spill slot"),
-            mov.vreg,
-          );
+          let inst = InstToInsert::Reload {
+            to_reg: Writable::from_reg(scratch),
+            from_slot: spill_slot.expect("should have a cycle spill slot"),
+            for_vreg: mov.vreg,
+          };
           insts.push(inst);
-          let inst = func.gen_spill(dst_spill, scratch, mov.vreg);
+          let inst = InstToInsert::Spill {
+            to_slot: dst_spill,
+            from_reg: scratch,
+            for_vreg: mov.vreg,
+          };
           insts.push(inst);
           if show_debug {
             trace!(
@@ -2055,7 +2072,11 @@ fn emit_moves<F: Function>(
 
       match mov.to {
         MoveOperand::Reg(src_reg) => {
-          let inst = func.gen_spill(spill_slot.unwrap(), src_reg, mov.vreg);
+          let inst = InstToInsert::Spill {
+            to_slot: spill_slot.unwrap(),
+            from_reg: src_reg,
+            for_vreg: mov.vreg,
+          };
           insts.push(inst);
           if show_debug {
             trace!(
@@ -2068,14 +2089,17 @@ fn emit_moves<F: Function>(
         MoveOperand::Stack(src_spill) => {
           let scratch = scratches_by_rc[mov.vreg.get_class() as usize]
             .expect("missing scratch reg");
-          let inst =
-            func.gen_reload(Writable::from_reg(scratch), src_spill, mov.vreg);
+          let inst = InstToInsert::Reload {
+            to_reg: Writable::from_reg(scratch),
+            from_slot: src_spill,
+            for_vreg: mov.vreg,
+          };
           insts.push(inst);
-          let inst = func.gen_spill(
-            spill_slot.expect("should have a cycle spill slot"),
-            scratch,
-            mov.vreg,
-          );
+          let inst = InstToInsert::Spill {
+            to_slot: spill_slot.expect("should have a cycle spill slot"),
+            from_reg: scratch,
+            for_vreg: mov.vreg,
+          };
           insts.push(inst);
           if show_debug {
             trace!(
@@ -2092,7 +2116,7 @@ fn emit_moves<F: Function>(
     }
 
     // A normal move which is not part of a cycle.
-    insts.push(mov.gen_inst(func));
+    insts.push(mov.gen_inst());
     if show_debug {
       trace!("moving {:?} -> {:?}", mov.from, mov.to);
     }

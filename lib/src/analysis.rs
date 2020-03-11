@@ -17,6 +17,7 @@ use crate::data_structures::{
 };
 use crate::interface::Function;
 
+#[derive(Clone, Debug)]
 pub enum AnalysisError {
   /// A critical edge from "from" to "to" has been found, and should have been
   /// removed by the caller in the first place.
