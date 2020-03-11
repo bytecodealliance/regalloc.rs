@@ -24,6 +24,7 @@ mod bt_spillslot_allocator;
 mod bt_vlr_priority_queue;
 mod checker;
 mod data_structures;
+mod dense_set;
 mod inst_stream;
 mod linear_scan;
 mod reg_maps;
