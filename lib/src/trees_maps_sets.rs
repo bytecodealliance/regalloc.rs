@@ -10,21 +10,20 @@
 //! maps.
 
 use std::cmp::Ordering;
+//use std::marker::PhantomData;
 
 //=============================================================================
-// AVL trees with a private allocation pool
+// Sets
 
-// AVL tree internals are public, so that backtracking.rs can do custom
-// traversals of the tree as it wishes.
+/*
 
-// FIXME re-home this
-// First, we need this.  You can store anything you like in these trees, so
+//First, we need this.  You can store anything you like in these sets, so
 // long as it is really a u32.  Reminds me of that old joke about the Model T
 // Ford being available in any colour you want, so long as it is black.
-//pub trait ToFromU32<T: Sized = Self> {
-//  fn to_u32(x: Self) -> u32;
-//  fn from_u32(x: u32) -> Self;
-//}
+pub trait ToFromU32<T: Sized = Self> {
+  fn to_u32(x: Self) -> u32;
+  fn from_u32(x: u32) -> Self;
+}
 //impl ToFromU32 for i32 {
 //  fn to_u32(x: i32) -> u32 {
 //    x as u32
@@ -41,6 +40,72 @@ use std::cmp::Ordering;
 //    x
 //  }
 //}
+
+fn roundup64(x: u32) -> u32 {
+  (x + 63) & (! 0x3F)
+}
+
+struct DenseSet<T> {
+  phantom: PhantomData<T>,
+  univ_size: u32,
+  words: Vec::<u64>
+}
+impl<T: ToFromU32> DenseSet<T> {
+  pub fn empty(univ_size: u32) -> Self {
+    let n_w64s = roundup64(univ_size) >> 6;
+    let mut words = Vec::<u64>::new();
+    words.resize(n_w64s as usize, 0u64);
+    Self { phantom: PhantomData, univ_size, words }
+  }
+
+  // unit
+  // two
+  // card
+
+  pub fn insert(&mut self, item: T) {
+    let ix = ToFromU32::to_u32(item);
+    assert!(ix < self.univ_size);
+    let wNo = ix >> 6;
+    let wOffs = ix & 0x3F;
+    self.words[wNo as usize] |= 1u64 << wOffs;
+  }
+
+  pub fn delete(&mut self, item: T) {
+    let ix = ToFromU32::to_u32(item);
+    assert!(ix < self.univ_size);
+    let wNo = ix >> 6;
+    let wOffs = ix & 0x3F;
+    self.words[wNo as usize] &= !(1u64 << wOffs);
+  }
+
+  // is_empty
+
+  pub fn contains(&mut self, item: T) -> bool {
+    let ix = ToFromU32::to_u32(item);
+    assert!(ix < self.univ_size);
+    let wNo = ix >> 6;
+    let wOffs = ix & 0x3F;
+    ((self.words[wNo as usize] >> wOffs) & 1) != 0
+  }
+
+  // intersect
+  // union
+  // remove
+  // intersects
+  // is_subset_of
+  // to_vec
+  // from_vec
+  // equals
+
+}
+
+*/
+
+//=============================================================================
+// AVL trees with a private allocation pool
+
+// AVL tree internals are public, so that backtracking.rs can do custom
+// traversals of the tree as it wishes.
 
 #[derive(Clone, PartialEq)]
 pub enum AVLTag {
