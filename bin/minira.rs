@@ -120,7 +120,7 @@ mod test_cases;
 mod test_framework;
 mod validator;
 
-use regalloc::{allocate_registers, RegAllocAlgorithm, RegAllocError};
+use regalloc::{allocate_registers, RegAllocAlgorithm};
 use test_framework::{make_universe, run_func, RunStage};
 use validator::check_results;
 
@@ -244,7 +244,7 @@ fn main() {
 
 #[cfg(test)]
 mod test_utils {
-  use regalloc::RegAllocResult;
+  use regalloc::{RegAllocError, RegAllocResult};
 
   use super::*;
   use crate::test_framework::Func;
@@ -304,9 +304,29 @@ mod test_utils {
 
   // Note: num_gpr/num_fpu: must include the scratch register.
   pub fn check_lsra(func_name: &str, num_gpr: usize, num_fpu: usize) {
+    check_lsra_internal(
+      func_name, num_gpr, num_fpu, /* use_checker = */ false,
+    );
+  }
+
+  pub fn check_lsra_checked(func_name: &str, num_gpr: usize, num_fpu: usize) {
+    check_lsra_internal(
+      func_name, num_gpr, num_fpu, /* use_checker = */ true,
+    );
+  }
+
+  fn check_lsra_internal(
+    func_name: &str, num_gpr: usize, num_fpu: usize, use_checker: bool,
+  ) {
     let _ = pretty_env_logger::try_init();
     let mut func = test_cases::find_func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
+    let algo = if use_checker {
+      RegAllocAlgorithm::LinearScanChecked
+    } else {
+      RegAllocAlgorithm::LinearScan
+    };
+
     let before_regalloc_result = run_func(
       &func,
       "Before allocation",
@@ -314,14 +334,10 @@ mod test_utils {
       RunStage::BeforeRegalloc,
     );
     func.print("BEFORE");
-    let result = allocate_registers(
-      &mut func,
-      RegAllocAlgorithm::LinearScan,
-      &reg_universe,
-    )
-    .unwrap_or_else(|err| {
-      panic!("allocation failed: {}", err);
-    });
+    let result = allocate_registers(&mut func, algo, &reg_universe)
+      .unwrap_or_else(|err| {
+        panic!("allocation failed: {}", err);
+      });
     func.update_from_alloc(result);
     func.print("AFTER");
     let after_regalloc_result = run_func(
@@ -427,6 +443,10 @@ fn bt_ssort() {
   test_utils::check_bt("ssort", 8, 8);
 }
 #[test]
+fn btc_ssort() {
+  test_utils::check_bt_checked("ssort", 8, 8);
+}
+#[test]
 fn lsra_ssort_3() {
   test_utils::check_lsra("ssort", 3, 0);
 }
@@ -455,6 +475,10 @@ fn lsra_ssort_8() {
 #[test]
 fn lsra_ssort2() {
   test_utils::loop_lsra("ssort2", 3);
+}
+#[test]
+fn lsrac_ssort() {
+  test_utils::check_lsra_checked("ssort", 8, 8);
 }
 
 // 3_loops requires at least 2 registers.

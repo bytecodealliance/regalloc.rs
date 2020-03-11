@@ -6,14 +6,14 @@
 #![allow(non_camel_case_types)]
 
 use crate::checker::Inst as CheckerInst;
-use crate::checker::{Checker, CheckerErrors};
+use crate::checker::{CheckerContext, CheckerErrors};
 use crate::data_structures::{
-  BlockIx, InstIx, InstPoint, Map, Point, RangeFrag, RangeFragIx, RealReg,
+  BlockIx, InstIx, InstPoint, Map, RangeFrag, RangeFragIx, RealReg,
   RealRegUniverse, SanitizedInstRegUses, Set, SpillSlot, TypedIxVec,
   VirtualReg, Writable,
 };
 use crate::interface::{Function, RegAllocError, RegAllocResult};
-use log::{debug, trace};
+use log::trace;
 
 use std::result::Result;
 
@@ -42,7 +42,7 @@ pub(crate) enum InstToInsert {
 }
 
 impl InstToInsert {
-  fn construct<F: Function>(&self, f: &F) -> F::Inst {
+  pub(crate) fn construct<F: Function>(&self, f: &F) -> F::Inst {
     match self {
       &InstToInsert::Spill { to_slot, from_reg, for_vreg } => {
         f.gen_spill(to_slot, from_reg, for_vreg)
@@ -56,7 +56,7 @@ impl InstToInsert {
     }
   }
 
-  fn to_checker_inst(&self) -> CheckerInst {
+  pub(crate) fn to_checker_inst(&self) -> CheckerInst {
     match self {
       &InstToInsert::Spill { to_slot, from_reg, .. } => {
         CheckerInst::Spill { into: to_slot, from: from_reg }
@@ -72,8 +72,8 @@ impl InstToInsert {
 }
 
 pub(crate) struct InstAndPoint {
-  at: InstPoint,
-  inst: InstToInsert,
+  pub(crate) at: InstPoint,
+  pub(crate) inst: InstToInsert,
 }
 
 impl InstAndPoint {
@@ -108,15 +108,9 @@ pub(crate) fn apply_reg_uses<F: Function>(
   reg_universe: &RealRegUniverse, use_checker: bool,
 ) -> Result<(), CheckerErrors> {
   // Set up checker state, if indicated by our configuration.
-  let mut checker: Option<Checker> = None;
-  let mut checker_inst_map: Map<InstPoint, Vec<CheckerInst>> = Map::default();
+  let mut checker: Option<CheckerContext> = None;
   if use_checker {
-    checker = Some(Checker::new(func));
-    for &InstAndPoint { ref at, ref inst } in insts_to_add {
-      let checker_insts =
-        checker_inst_map.entry(at.clone()).or_insert_with(|| vec![]);
-      checker_insts.push(inst.to_checker_inst());
-    }
+    checker = Some(CheckerContext::new(func, insts_to_add));
   }
 
   // Make two copies of the fragment mapping, one sorted by the fragment start
@@ -374,30 +368,14 @@ pub(crate) fn apply_reg_uses<F: Function>(
       // If we have a checker, update it with spills, reloads, moves, and this
       // instruction, while we have `map_uses` and `map_defs` available.
       if let &mut Some(ref mut checker) = &mut checker {
-        let empty = vec![];
-        let pre_point = InstPoint { iix: insnIx, pt: Point::Reload };
-        let post_point = InstPoint { iix: insnIx, pt: Point::Spill };
-
-        for checker_inst in checker_inst_map.get(&pre_point).unwrap_or(&empty) {
-          debug!("at inst {:?}: pre checker_inst: {:?}", insnIx, checker_inst);
-          checker.add_inst(blockIx, checker_inst.clone());
-        }
-
-        let iru = func.get_regs(func.get_insn(insnIx)); // AUDITED
-        let sru =
-          SanitizedInstRegUses::create_by_sanitizing(&iru, &reg_universe)
-            .expect("only existing real registers at this point");
-        debug!(
-          "at inst {:?}: sru {:?} use-map {:?} def-map {:?}",
-          insnIx, sru, map_uses, map_defs
+        checker.handle_insn(
+          reg_universe,
+          func,
+          blockIx,
+          insnIx,
+          &map_uses,
+          &map_defs,
         );
-        checker.add_op(blockIx, insnIx, &sru, &map_uses, &map_defs);
-
-        for checker_inst in checker_inst_map.get(&post_point).unwrap_or(&empty)
-        {
-          debug!("at inst {:?}: post checker_inst: {:?}", insnIx, checker_inst);
-          checker.add_inst(blockIx, checker_inst.clone());
-        }
       }
 
       // Finally, we have map_uses/map_defs set correctly for this instruction.

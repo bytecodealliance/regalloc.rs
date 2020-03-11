@@ -234,6 +234,7 @@ pub enum RegAllocAlgorithm {
   Backtracking,
   BacktrackingChecked,
   LinearScan,
+  LinearScanChecked,
 }
 
 pub use crate::analysis::AnalysisError;
@@ -274,8 +275,9 @@ pub fn allocate_registers<F: Function>(
       let use_checker = algorithm == RegAllocAlgorithm::BacktrackingChecked;
       backtracking::alloc_main(func, rreg_universe, use_checker)
     }
-    RegAllocAlgorithm::LinearScan => {
-      linear_scan::run(func, rreg_universe).map_err(|e| RegAllocError::Other(e))
+    RegAllocAlgorithm::LinearScan | RegAllocAlgorithm::LinearScanChecked => {
+      let use_checker = algorithm == RegAllocAlgorithm::LinearScanChecked;
+      linear_scan::run(func, rreg_universe, use_checker)
     }
   }
 }

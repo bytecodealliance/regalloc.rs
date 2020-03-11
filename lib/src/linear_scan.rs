@@ -23,6 +23,7 @@ use std::env;
 use std::fmt;
 
 use crate::analysis::run_analysis;
+use crate::checker::{CheckerContext, CheckerErrors};
 use crate::data_structures::{
   cmp_range_frags, BlockIx, InstIx, InstPoint, Map, PlusOne, Point, RangeFrag,
   RangeFragIx, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, RegClass,
@@ -33,7 +34,7 @@ use crate::data_structures::{
 use crate::inst_stream::{
   fill_memory_moves, InstAndPoint, InstToInsert, InstsAndPoints,
 };
-use crate::interface::{Function, RegAllocResult};
+use crate::interface::{Function, RegAllocError, RegAllocResult};
 
 // Local shorthands.
 type Fragments = TypedIxVec<RangeFragIx, RangeFrag>;
@@ -665,7 +666,7 @@ fn next_use(
 
 fn allocate_blocked_reg<F: Function>(
   cur_id: IntId, state: &mut State<F>, reg_universe: &RealRegUniverse,
-) -> Result<(), String> {
+) -> Result<(), RegAllocError> {
   // If the current interval has no uses, spill it directly.
   let first_use = match next_use(
     &state.intervals,
@@ -772,10 +773,7 @@ fn allocate_blocked_reg<F: Function>(
     match best {
       Some(best) => *best.0,
       None => {
-        return Err(format!(
-          "no register available in this class: {:?}",
-          reg_class
-        ))
+        return Err(RegAllocError::OutOfRegisters(reg_class));
       }
     }
   };
@@ -794,7 +792,7 @@ fn allocate_blocked_reg<F: Function>(
 
   if first_use >= next_use_pos[best_reg] {
     if first_use == start_pos {
-      return Err("running out of registers".into());
+      return Err(RegAllocError::OutOfRegisters(reg_class));
     }
     debug!("spill current interval");
     let new_int = split(state, cur_id, first_use);
@@ -1291,17 +1289,17 @@ impl<T> std::ops::IndexMut<RealReg> for RegisterMapping<T> {
 // function appears to have any undefined VirtualReg/RealReg uses.
 #[inline(never)]
 pub fn run<F: Function>(
-  func: &mut F, reg_universe: &RealRegUniverse,
-) -> Result<RegAllocResult<F>, String> {
+  func: &mut F, reg_universe: &RealRegUniverse, use_checker: bool,
+) -> Result<RegAllocResult<F>, RegAllocError> {
   let (reg_uses, rlrs, vlrs, fragments, liveouts, _est_freqs) =
-    run_analysis(func, reg_universe).map_err(|err| err.to_string())?;
+    run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
 
   let scratches_by_rc = {
     let mut scratches_by_rc = vec![None; NUM_REG_CLASSES];
     for i in 0..NUM_REG_CLASSES {
       if let Some(info) = &reg_universe.allocable_by_class[i] {
         if info.first == info.last {
-          return Err("at least 2 registers required for linear scan".into());
+          return Err(RegAllocError::Other("at least 2 registers required for linear scan".into()));
         }
         let scratch = reg_universe.regs[info.suggested_scratch.unwrap()].0;
         scratches_by_rc[i] = Some(scratch);
@@ -1409,9 +1407,19 @@ pub fn run<F: Function>(
     &scratches_by_rc,
   );
 
-  apply_registers(func, &intervals, virtual_intervals, &fragments);
+  apply_registers(
+    func,
+    &intervals,
+    virtual_intervals,
+    &fragments,
+    &memory_moves,
+    reg_universe,
+    use_checker,
+  )
+  .map_err(|e| RegAllocError::RegChecker(e))?;
 
   fill_memory_moves(func, memory_moves, reg_universe, num_spill_slots)
+    .map_err(|e| RegAllocError::Other(e))
 }
 
 fn is_block_start<F: Function>(func: &F, pos: InstPoint) -> bool {
@@ -1586,7 +1594,7 @@ fn resolve_moves<F: Function>(
   // the parallel assignments have been done, push forward all the spills.
   for (at_inst, mut parallel_moves) in parallel_reloads {
     let ordered_moves = schedule_moves(&mut parallel_moves);
-    let insts = emit_moves(ordered_moves, func, spill_slot, scratches_by_rc);
+    let insts = emit_moves(ordered_moves, spill_slot, scratches_by_rc);
     memory_moves.insert(at_inst, insts);
   }
   for (at_inst, mut spills) in spills {
@@ -1755,7 +1763,7 @@ fn resolve_moves<F: Function>(
     for (at_inst, parallel_moves) in parallel_move_map.iter_mut() {
       let ordered_moves = schedule_moves(&mut parallel_moves.0);
       let mut insts =
-        emit_moves(ordered_moves, func, spill_slot, scratches_by_rc);
+        emit_moves(ordered_moves, spill_slot, scratches_by_rc);
 
       // If at_inst pointed to a block start, then insert block fixups *before*
       // inblock fixups;
@@ -1985,8 +1993,8 @@ fn schedule_moves(pending: &mut Vec<MoveOp>) -> Vec<MoveOp> {
   ordered_moves
 }
 
-fn emit_moves<F: Function>(
-  ordered_moves: Vec<MoveOp>, func: &F, num_spill_slots: &mut u32,
+fn emit_moves(
+  ordered_moves: Vec<MoveOp>, num_spill_slots: &mut u32,
   scratches_by_rc: &[Option<RealReg>],
 ) -> Vec<InstToInsert> {
   let mut spill_slot = None;
@@ -2129,85 +2137,112 @@ fn emit_moves<F: Function>(
 fn apply_registers<F: Function>(
   func: &mut F, intervals: &Intervals, virtual_intervals: Vec<&LiveInterval>,
   fragments: &Fragments,
-) {
+  memory_moves: &InstsAndPoints,
+  reg_universe: &RealRegUniverse,
+  use_checker: bool,
+) -> Result<(), CheckerErrors> {
   let show_traces = env::var("MAP_REGS").is_ok();
+  let mut checker: Option<CheckerContext> = None;
+  if use_checker {
+    checker = Some(CheckerContext::new(func, memory_moves));
+  }
 
-  for inst_id in func.insn_indices() {
-    let inst_use = InstPoint::new_use(inst_id);
-    let inst_def = InstPoint::new_def(inst_id);
+  for block_id in func.blocks() {
+    for inst_id in func.block_insns(block_id) {
+      let inst_use = InstPoint::new_use(inst_id);
+      let inst_def = InstPoint::new_def(inst_id);
 
-    // TODO optimize this by maintaining sorted lists of active and unhandled
-    // intervals.
-    let mut map_uses = Map::<VirtualReg, RealReg>::default();
-    let mut map_defs = Map::<VirtualReg, RealReg>::default();
+      // TODO optimize this by maintaining sorted lists of active and unhandled
+      // intervals.
+      let mut map_uses = Map::<VirtualReg, RealReg>::default();
+      let mut map_defs = Map::<VirtualReg, RealReg>::default();
 
-    for &interval in &virtual_intervals {
-      let id = interval.id;
-      if intervals.is_fixed(id) {
-        continue;
-      }
+      for &interval in &virtual_intervals {
+        let id = interval.id;
+        if intervals.is_fixed(id) {
+          continue;
+        }
 
-      if intervals.covers(id, &inst_def, &fragments) {
-        if let Some(rreg) = intervals.location(id).reg() {
-          let vreg = intervals.vreg(id);
-          let prev_entry = map_defs.insert(vreg, rreg);
-          debug_assert!(
-            prev_entry.is_none() || prev_entry.unwrap() == rreg,
-            "def vreg {:?} already mapped to {:?}",
-            vreg,
-            prev_entry.unwrap()
-          );
+        if intervals.covers(id, &inst_def, &fragments) {
+          if let Some(rreg) = intervals.location(id).reg() {
+            let vreg = intervals.vreg(id);
+            let prev_entry = map_defs.insert(vreg, rreg);
+            debug_assert!(
+              prev_entry.is_none() || prev_entry.unwrap() == rreg,
+              "def vreg {:?} already mapped to {:?}",
+              vreg,
+              prev_entry.unwrap()
+            );
+          }
+        }
+
+        if intervals.covers(id, &inst_use, &fragments) {
+          if let Some(rreg) = intervals.location(id).reg() {
+            let vreg = intervals.vreg(id);
+            let prev_entry = map_uses.insert(vreg, rreg);
+            debug_assert!(
+              prev_entry.is_none() || prev_entry.unwrap() == rreg,
+              "use vreg {:?} already mapped to {:?}",
+              vreg,
+              prev_entry.unwrap()
+            );
+          }
         }
       }
 
-      if intervals.covers(id, &inst_use, &fragments) {
-        if let Some(rreg) = intervals.location(id).reg() {
-          let vreg = intervals.vreg(id);
-          let prev_entry = map_uses.insert(vreg, rreg);
-          debug_assert!(
-            prev_entry.is_none() || prev_entry.unwrap() == rreg,
-            "use vreg {:?} already mapped to {:?}",
-            vreg,
-            prev_entry.unwrap()
-          );
+      #[cfg(debug_assertions)]
+      {
+        // Two different virtual registers can't share the same real register at a
+        // use point, otherwise it's an allocation bug.
+        let mut reverse_mapping = HashMap::default();
+        for (k, v) in &map_uses {
+          if let Some(prev_vreg) = reverse_mapping.insert(v, *k) {
+            debug_assert_eq!(prev_vreg, *k);
+          }
+        }
+
+        // Ditto when we have multiple results.
+        let mut reverse_mapping = HashMap::default();
+        for (k, v) in &map_defs {
+          if let Some(prev_vreg) = reverse_mapping.insert(v, *k) {
+            debug_assert_eq!(prev_vreg, *k);
+          }
         }
       }
+
+      if show_traces {
+        trace!("map_regs for {:?}", inst_id);
+        trace!("uses");
+        for (k, v) in &map_uses {
+          trace!("- {:?} -> {:?}", k, v);
+        }
+        trace!("defs");
+        for (k, v) in &map_defs {
+          trace!("- {:?} -> {:?}", k, v);
+        }
+
+        trace!("");
+      }
+
+      if let &mut Some(ref mut checker) = &mut checker {
+        checker.handle_insn(
+          reg_universe,
+          func,
+          block_id,
+          inst_id,
+          &map_uses,
+          &map_defs,
+        );
+      }
+
+      let mut inst = func.get_insn_mut(inst_id);
+      F::map_regs(&mut inst, &map_uses, &map_defs);
     }
+  }
 
-    #[cfg(debug_assertions)]
-    {
-      // Two different virtual registers can't share the same real register at a
-      // use point, otherwise it's an allocation bug.
-      let mut reverse_mapping = HashMap::default();
-      for (k, v) in &map_uses {
-        if let Some(prev_vreg) = reverse_mapping.insert(v, *k) {
-          debug_assert_eq!(prev_vreg, *k);
-        }
-      }
-
-      // Ditto when we have multiple results.
-      let mut reverse_mapping = HashMap::default();
-      for (k, v) in &map_defs {
-        if let Some(prev_vreg) = reverse_mapping.insert(v, *k) {
-          debug_assert_eq!(prev_vreg, *k);
-        }
-      }
-    }
-
-    if show_traces {
-      trace!("map_regs for {:?}", inst_id);
-      trace!("uses");
-      for (k, v) in &map_uses {
-        trace!("- {:?} -> {:?}", k, v);
-      }
-      trace!("defs");
-      for (k, v) in &map_defs {
-        trace!("- {:?} -> {:?}", k, v);
-      }
-      trace!("");
-    }
-
-    let mut inst = func.get_insn_mut(inst_id);
-    F::map_regs(&mut inst, &map_uses, &map_defs);
+  if checker.is_some() {
+    checker.unwrap().run()
+  } else {
+    Ok(())
   }
 }

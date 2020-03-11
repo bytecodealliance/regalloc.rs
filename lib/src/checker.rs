@@ -56,9 +56,10 @@
 #![allow(dead_code)]
 
 use crate::data_structures::{
-  BlockIx, InstIx, Map, RealReg, Reg, SanitizedInstRegUses, SpillSlot,
-  VirtualReg, Writable,
+  BlockIx, InstIx, InstPoint, Map, Point, RealReg, RealRegUniverse, Reg,
+  SanitizedInstRegUses, SpillSlot, VirtualReg, Writable,
 };
+use crate::inst_stream::{InstAndPoint, InstsAndPoints};
 use crate::interface::Function;
 
 use std::collections::VecDeque;
@@ -204,7 +205,7 @@ impl CheckerState {
   }
 
   /// Update according to instruction.
-  pub fn update(&mut self, inst: &Inst) {
+  pub(crate) fn update(&mut self, inst: &Inst) {
     match inst {
       &Inst::Op { ref defs_orig, ref defs, .. } => {
         // For each def, set the symbolic value of the mapped RealReg to a
@@ -237,7 +238,7 @@ impl CheckerState {
 
 /// An instruction representation in the checker's BB summary.
 #[derive(Clone, Debug)]
-pub enum Inst {
+pub(crate) enum Inst {
   /// A register spill into memory.
   Spill { into: SpillSlot, from: RealReg },
   /// A register reload from memory.
@@ -256,7 +257,7 @@ pub enum Inst {
 }
 
 #[derive(Debug)]
-pub struct Checker {
+pub(crate) struct Checker {
   bb_entry: BlockIx,
   bb_in: Map<BlockIx, CheckerState>,
   bb_succs: Map<BlockIx, Vec<BlockIx>>,
@@ -280,7 +281,7 @@ impl Checker {
   /// Create a new checker for the given function, initializing CFG info immediately.
   /// The client should call the `add_*()` methods to add abstract instructions to each
   /// BB before invoking `run()` to check for errors.
-  pub fn new<F: Function>(f: &F) -> Checker {
+  pub(crate) fn new<F: Function>(f: &F) -> Checker {
     let mut bb_in = Map::default();
     let mut bb_succs = Map::default();
     let mut bb_insts = Map::default();
@@ -298,7 +299,7 @@ impl Checker {
   ///
   /// Can also accept an `Inst::Op`, but `add_op()` is better-suited
   /// for this.
-  pub fn add_inst(&mut self, block: BlockIx, inst: Inst) {
+  pub(crate) fn add_inst(&mut self, block: BlockIx, inst: Inst) {
     let insts = self.bb_insts.get_mut(&block).unwrap();
     insts.push(inst);
   }
@@ -307,7 +308,7 @@ impl Checker {
   /// `SanitizedInstRegUses` must be the pre-allocation state; the `pre_map` and `post_map` must be
   /// provided to give the virtual -> real mappings at the program points immediately before and
   /// after this instruction.
-  pub fn add_op(
+  pub(crate) fn add_op(
     &mut self, block: BlockIx, inst_ix: InstIx, iru: &SanitizedInstRegUses,
     pre_map: &Map<VirtualReg, RealReg>, post_map: &Map<VirtualReg, RealReg>,
   ) {
@@ -376,8 +377,68 @@ impl Checker {
 
   /// Find any errors, returning `Err(CheckerErrors)` with all errors found
   /// or `Ok(())` otherwise.
-  pub fn run(mut self) -> Result<(), CheckerErrors> {
+  pub(crate) fn run(mut self) -> Result<(), CheckerErrors> {
     self.analyze();
     self.find_errors()
+  }
+}
+
+/// A wrapper around `Checker` that assists its use with `InstsAndPoints` and `Function` together.
+pub(crate) struct CheckerContext {
+  checker: Checker,
+  checker_inst_map: Map<InstPoint, Vec<Inst>>,
+}
+
+impl CheckerContext {
+  /// Create a new checker context for the given function, which is about to be edited with the
+  /// given instruction insertions.
+  pub(crate) fn new<F: Function>(
+    f: &F, insts_to_add: &InstsAndPoints,
+  ) -> CheckerContext {
+    let mut checker_inst_map: Map<InstPoint, Vec<Inst>> = Map::default();
+    for &InstAndPoint { ref at, ref inst } in insts_to_add {
+      let checker_insts =
+        checker_inst_map.entry(at.clone()).or_insert_with(|| vec![]);
+      checker_insts.push(inst.to_checker_inst());
+    }
+    let checker = Checker::new(f);
+    CheckerContext { checker, checker_inst_map }
+  }
+
+  /// Update the checker with the given instruction and the given pre- and post-maps. Instructions
+  /// within a block must be visited in program order.
+  pub(crate) fn handle_insn<F: Function>(
+    &mut self, ru: &RealRegUniverse, func: &F, bix: BlockIx, iix: InstIx,
+    pre_map: &Map<VirtualReg, RealReg>, post_map: &Map<VirtualReg, RealReg>,
+  ) {
+    let empty = vec![];
+    let pre_point = InstPoint { iix, pt: Point::Reload };
+    let post_point = InstPoint { iix, pt: Point::Spill };
+
+    for checker_inst in self.checker_inst_map.get(&pre_point).unwrap_or(&empty)
+    {
+      debug!("at inst {:?}: pre checker_inst: {:?}", iix, checker_inst);
+      self.checker.add_inst(bix, checker_inst.clone());
+    }
+
+    let iru = func.get_regs(func.get_insn(iix)); // AUDITED
+    let sru = SanitizedInstRegUses::create_by_sanitizing(&iru, ru)
+      .expect("only existing real registers at this point");
+    debug!(
+      "at inst {:?}: sru {:?} use-map {:?} def-map {:?}",
+      iix, sru, pre_map, post_map
+    );
+    self.checker.add_op(bix, iix, &sru, pre_map, post_map);
+
+    for checker_inst in self.checker_inst_map.get(&post_point).unwrap_or(&empty)
+    {
+      debug!("at inst {:?}: post checker_inst: {:?}", iix, checker_inst);
+      self.checker.add_inst(bix, checker_inst.clone());
+    }
+  }
+
+  /// Run the underlying checker, once all instructions have been added.
+  pub(crate) fn run(self) -> Result<(), CheckerErrors> {
+    self.checker.run()
   }
 }
