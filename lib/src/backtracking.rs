@@ -419,6 +419,8 @@ fn do_coalescing_analysis<F: Function>(
 // Wrap up a VirtualRangeIx and its size, so that we can implement Ord for it
 // on the basis of the |size| and |tiebreaker| fields.
 //
+// NB! Do not derive {,Partial}{Eq,Ord} for this.  It has its own custom
+// implementations.
 struct VirtualRangeIxAndSize {
   vlrix: VirtualRangeIx,
   size: u16,
@@ -550,9 +552,7 @@ impl VirtualRangePrioQ {
 // For working with such trees we will supply our own comparison function;
 // hence PartialOrd here serves only to placate the typechecker.  It should
 // never actually be used.
-//
-// FIXME: add a PartialOrd impl which panics if it does get used!
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Clone, Copy)]
 struct FIxAndVLRIx {
   fix: RangeFragIx,
   mb_vlrix: Option<VirtualRangeIx>,
@@ -560,6 +560,18 @@ struct FIxAndVLRIx {
 impl FIxAndVLRIx {
   fn new(fix: RangeFragIx, mb_vlrix: Option<VirtualRangeIx>) -> Self {
     Self { fix, mb_vlrix }
+  }
+}
+impl PartialEq for FIxAndVLRIx {
+  fn eq(&self, _other: &Self) -> bool {
+    // See comments above.
+    panic!("impl PartialEq for FIxAndVLRIx: should never be used");
+  }
+}
+impl PartialOrd for FIxAndVLRIx {
+  fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+    // See comments above.
+    panic!("impl PartialOrd for FIxAndVLRIx: should never be used");
   }
 }
 impl fmt::Debug for FIxAndVLRIx {
