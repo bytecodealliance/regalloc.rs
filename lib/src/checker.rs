@@ -16,7 +16,7 @@
 //! And the transfer functions for each statement type are:
 //!
 //!   - spill (inserted by RA):    [ store spill_i, R_j ]
-//!       
+//!
 //!       S[spill_i] := R[R_j]
 //!
 //!   - reload (inserted by RA):   [ load R_i, spill_j ]
@@ -53,7 +53,41 @@
 //! program point, and check that the real reg for each op arg (input/use) contains the symbol
 //! corresponding to the original (usually virtual) register specified for this arg.
 
-use crate::data_structures::{Map, RealReg, Reg, VirtualReg, Writable};
+#![allow(dead_code)]
+
+use crate::data_structures::{
+  BlockIx, InstIx, Map, RealReg, Reg, SanitizedInstRegUses, SpillSlot,
+  VirtualReg, Writable,
+};
+use crate::interface::Function;
+
+use std::collections::VecDeque;
+use std::default::Default;
+use std::hash::Hash;
+use std::result::Result;
+
+use log::debug;
+
+/// A set of errors detected by the regalloc checker.
+#[derive(Clone, Debug)]
+pub struct CheckerErrors {
+  errors: Vec<CheckerError>,
+}
+
+/// A single error detected by the regalloc checker.
+#[derive(Clone, Debug)]
+pub enum CheckerError {
+  UnknownValueInReg {
+    real_reg: RealReg,
+    inst: InstIx,
+  },
+  IncorrectValueInReg {
+    actual: Reg,
+    expected: Reg,
+    real_reg: RealReg,
+    inst: InstIx,
+  },
+}
 
 /// Abstract state for a storage slot (real register or spill slot).
 ///
@@ -61,7 +95,7 @@ use crate::data_structures::{Map, RealReg, Reg, VirtualReg, Writable};
 /// value-points in between, one per real or virtual register. Any two different registers
 /// meet to \bot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CheckerValue {
+enum CheckerValue {
   /// "top" value: this storage slot has no known value.
   Unknown,
   /// "bottom" value: this storage slot has a conflicted value.
@@ -72,9 +106,15 @@ pub enum CheckerValue {
   Reg(Reg),
 }
 
+impl Default for CheckerValue {
+  fn default() -> CheckerValue {
+    CheckerValue::Unknown
+  }
+}
+
 impl CheckerValue {
   /// Meet function of the abstract-interpretation value lattice.
-  pub fn meet(&self, other: &CheckerValue) -> CheckerValue {
+  fn meet(&self, other: &CheckerValue) -> CheckerValue {
     match (self, other) {
       (&CheckerValue::Unknown, _) => *other,
       (_, &CheckerValue::Unknown) => *self,
@@ -88,46 +128,256 @@ impl CheckerValue {
 
 /// State that steps through program points as we scan over the instruction stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CheckerState {
-  /// For each RealReg or VReg, abstract state.
-  reg_values: Map<Reg, CheckerValue>,
+struct CheckerState {
+  /// For each RealReg, abstract state.
+  reg_values: Map<RealReg, CheckerValue>,
   /// For each spill slot, abstract state.
   spill_slots: Map<SpillSlot, CheckerValue>,
 }
 
+impl Default for CheckerState {
+  fn default() -> CheckerState {
+    CheckerState { reg_values: Map::default(), spill_slots: Map::default() }
+  }
+}
+
+fn merge_map<K: Copy + Clone + PartialEq + Eq + Hash>(
+  into: &mut Map<K, CheckerValue>, from: &Map<K, CheckerValue>,
+) {
+  for (k, v) in from {
+    let into_v = into.entry(*k).or_insert(Default::default());
+    let merged = into_v.meet(v);
+    *into_v = merged;
+  }
+}
+
 impl CheckerState {
   /// Create a new checker state.
-  pub fn new() -> CheckerState {
-    CheckerState { reg_values: Map::empty(), spill_slots: Map::empty() }
+  fn new() -> CheckerState {
+    Default::default()
   }
 
   /// Merge this checker state with another at a CFG join-point.
-  pub fn meet_with(&mut self, other: &CheckerState) {
-      unimplemented!()
+  fn meet_with(&mut self, other: &CheckerState) {
+    merge_map(&mut self.reg_values, &other.reg_values);
+    merge_map(&mut self.spill_slots, &other.spill_slots);
   }
 
-  /// Update with a RegAlloc-inserted reload.
-  pub fn process_reload(
-    &mut self, into_reg: Writable<Reg>, from_slot: SpillSlot,
+  /// Check an instruction against this state.
+  fn check(&self, inst: &Inst) -> Result<(), CheckerError> {
+    match inst {
+      &Inst::Op { inst_ix, ref uses_orig, ref uses, .. } => {
+        // For each use, check the mapped RealReg's symbolic value; it must
+        // be the original reg.
+        assert!(uses_orig.len() == uses.len());
+        for (orig, mapped) in
+          uses_orig.iter().cloned().zip(uses.iter().cloned())
+        {
+          let val =
+            self.reg_values.get(&mapped).cloned().unwrap_or(Default::default());
+          debug!(
+            "checker: inst {:?}: orig {:?}, mapped {:?}, checker state {:?}",
+            inst, orig, mapped, val
+          );
+          match val {
+            CheckerValue::Unknown | CheckerValue::Conflicted => {
+              return Err(CheckerError::UnknownValueInReg {
+                real_reg: mapped,
+                inst: inst_ix,
+              });
+            }
+            CheckerValue::Reg(r) if r != orig => {
+              return Err(CheckerError::IncorrectValueInReg {
+                actual: r,
+                expected: orig,
+                real_reg: mapped,
+                inst: inst_ix,
+              });
+            }
+            _ => {}
+          }
+        }
+      }
+      _ => {}
+    }
+    Ok(())
+  }
+
+  /// Update according to instruction.
+  pub fn update(&mut self, inst: &Inst) {
+    match inst {
+      &Inst::Op { ref defs_orig, ref defs, .. } => {
+        // For each def, set the symbolic value of the mapped RealReg to a
+        // symbol corresponding to the original def.
+        assert!(defs_orig.len() == defs.len());
+        for (orig, mapped) in
+          defs_orig.iter().cloned().zip(defs.iter().cloned())
+        {
+          self.reg_values.insert(mapped, CheckerValue::Reg(orig));
+        }
+      }
+      &Inst::Move { into, from } => {
+        let val =
+          self.reg_values.get(&from).cloned().unwrap_or(Default::default());
+        self.reg_values.insert(into.to_reg(), val);
+      }
+      &Inst::Spill { into, from } => {
+        let val =
+          self.reg_values.get(&from).cloned().unwrap_or(Default::default());
+        self.spill_slots.insert(into, val);
+      }
+      &Inst::Reload { into, from } => {
+        let val =
+          self.spill_slots.get(&from).cloned().unwrap_or(Default::default());
+        self.reg_values.insert(into.to_reg(), val);
+      }
+    }
+  }
+}
+
+/// An instruction representation in the checker's BB summary.
+#[derive(Clone, Debug)]
+pub enum Inst {
+  /// A register spill into memory.
+  Spill { into: SpillSlot, from: RealReg },
+  /// A register reload from memory.
+  Reload { into: Writable<RealReg>, from: SpillSlot },
+  /// A regalloc-inserted move (not a move in the original program!)
+  Move { into: Writable<RealReg>, from: RealReg },
+  /// A regular instruction with fixed use and def slots. Contains both
+  /// the original registers (as given to the regalloc) and the allocated ones.
+  Op {
+    inst_ix: InstIx,
+    defs_orig: Vec<Reg>,
+    uses_orig: Vec<Reg>,
+    defs: Vec<RealReg>,
+    uses: Vec<RealReg>,
+  },
+}
+
+#[derive(Debug)]
+pub struct Checker {
+  bb_entry: BlockIx,
+  bb_in: Map<BlockIx, CheckerState>,
+  bb_succs: Map<BlockIx, Vec<BlockIx>>,
+  bb_insts: Map<BlockIx, Vec<Inst>>,
+}
+
+fn map_regs(map: &Map<VirtualReg, RealReg>, regs: &[Reg]) -> Vec<RealReg> {
+  regs
+    .iter()
+    .map(|r| {
+      if r.is_virtual() {
+        map.get(&r.to_virtual_reg()).cloned().unwrap()
+      } else {
+        r.to_real_reg()
+      }
+    })
+    .collect()
+}
+
+impl Checker {
+  /// Create a new checker for the given function, initializing CFG info immediately.
+  /// The client should call the `add_*()` methods to add abstract instructions to each
+  /// BB before invoking `run()` to check for errors.
+  pub fn new<F: Function>(f: &F) -> Checker {
+    let mut bb_in = Map::default();
+    let mut bb_succs = Map::default();
+    let mut bb_insts = Map::default();
+
+    for block in f.blocks() {
+      bb_in.insert(block, Default::default());
+      bb_succs.insert(block, f.block_succs(block));
+      bb_insts.insert(block, vec![]);
+    }
+
+    Checker { bb_entry: f.entry_block(), bb_in, bb_succs, bb_insts }
+  }
+
+  /// Add an abstract instruction (spill, reload, oor move) to a BB.
+  ///
+  /// Can also accept an `Inst::Op`, but `add_op()` is better-suited
+  /// for this.
+  pub fn add_inst(&mut self, block: BlockIx, inst: Inst) {
+    let insts = self.bb_insts.get_mut(&block).unwrap();
+    insts.push(inst);
+  }
+
+  /// Add a "normal" instruction that uses, modifies, and/or defines certain registers. The
+  /// `SanitizedInstRegUses` must be the pre-allocation state; the `pre_map` and `post_map` must be
+  /// provided to give the virtual -> real mappings at the program points immediately before and
+  /// after this instruction.
+  pub fn add_op(
+    &mut self, block: BlockIx, inst_ix: InstIx, iru: &SanitizedInstRegUses,
+    pre_map: &Map<VirtualReg, RealReg>, post_map: &Map<VirtualReg, RealReg>,
   ) {
-    let val = self.spill_slots.get(&from_slot).unwrap_or(CheckerValue::Unknown);
-    self.reg_values.insert(into_reg.to_reg(), val);
+    let mut uses_set = iru.san_used.clone();
+    let mut defs_set = iru.san_defined.clone();
+    uses_set.union(&iru.san_modified);
+    defs_set.union(&iru.san_modified);
+    if uses_set.is_empty() && defs_set.is_empty() {
+      return;
+    }
+
+    let uses_orig = uses_set.to_vec();
+    let defs_orig = defs_set.to_vec();
+    let uses = map_regs(pre_map, &uses_orig[..]);
+    let defs = map_regs(post_map, &defs_orig[..]);
+    let insts = self.bb_insts.get_mut(&block).unwrap();
+    insts.push(Inst::Op { inst_ix, uses_orig, defs_orig, uses, defs });
   }
 
-  /// Update with a RegAlloc-inserted spill.
-  pub fn process_spill(&mut self, into_slot: SpillSlot, from_reg: Reg) {
-    let val = self.reg_values.get(&from_reg).unwrap_or(CheckerValue::Unknown);
-    self.spill_slots.insert(into_slot, val);
+  /// Perform the dataflow analysis to compute checker state at each BB entry.
+  fn analyze(&mut self) {
+    let mut queue = VecDeque::new();
+    queue.push_back(self.bb_entry);
+
+    while !queue.is_empty() {
+      let block = queue.pop_front().unwrap();
+      let mut state = self.bb_in.get(&block).cloned().unwrap();
+      for inst in self.bb_insts.get(&block).unwrap() {
+        state.update(inst);
+      }
+
+      for succ in self.bb_succs.get(&block).unwrap() {
+        let cur_succ_in = self.bb_in.get(succ).unwrap();
+        state.meet_with(cur_succ_in);
+        let changed = &state != cur_succ_in;
+        if changed {
+          self.bb_in.insert(*succ, state.clone());
+          queue.push_back(*succ);
+        }
+      }
+    }
   }
 
-  /// Update with a reg-reg move.
-  pub fn process_move(&mut self, into_reg: Writable<Reg>, from_reg: Reg) {
-    let val = self.reg_values.get(&from_reg).unwrap_or(CheckerValue::Unknown);
-    self.reg_values.insert(into_reg.to_reg(), val);
+  /// Using BB-start state computed by `analyze()`, step the checker state
+  /// through each BB and check each instruction's register allocations
+  /// for errors.
+  fn find_errors(&self) -> Result<(), CheckerErrors> {
+    let mut errors = vec![];
+    for (block, input) in &self.bb_in {
+      let mut state = input.clone();
+      for inst in self.bb_insts.get(block).unwrap() {
+        if let Err(e) = state.check(inst) {
+          debug!("Checker error: {:?}", e);
+          errors.push(e);
+        }
+        state.update(inst);
+      }
+    }
+
+    if errors.is_empty() {
+      Ok(())
+    } else {
+      Err(CheckerErrors { errors })
+    }
   }
 
-  /// Get the checker value in a given real register.
-  pub fn get_reg_value(&self, reg: RealReg) -> CheckerValue {
-    self.reg_values.get(&reg).unwrap_or(CheckerValue::Unknown)
+  /// Find any errors, returning `Err(CheckerErrors)` with all errors found
+  /// or `Ok(())` otherwise.
+  pub fn run(mut self) -> Result<(), CheckerErrors> {
+    self.analyze();
+    self.find_errors()
   }
 }

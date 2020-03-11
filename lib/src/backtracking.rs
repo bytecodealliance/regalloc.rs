@@ -15,14 +15,15 @@ use std::fmt;
 use crate::analysis::run_analysis;
 use crate::data_structures::{
   cmp_range_frags, BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx,
-  RangeFragKind, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg,
-  RegClass, Set, SortedRangeFragIxs, SpillCost, SpillSlot, TypedIxVec,
-  VirtualRange, VirtualRangeIx, VirtualReg, Writable,
+  RangeFragKind, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, Set,
+  SortedRangeFragIxs, SpillCost, SpillSlot, TypedIxVec, VirtualRange,
+  VirtualRangeIx, VirtualReg, Writable,
 };
 use crate::inst_stream::{
-  edit_inst_stream, InstAndPoint, InstsAndPoints, RangeAllocations,
+  edit_inst_stream, InstAndPoint, InstToInsert, InstsAndPoints,
+  RangeAllocations,
 };
-use crate::interface::{Function, RegAllocResult};
+use crate::interface::{Function, RegAllocError, RegAllocResult};
 use crate::trees_maps_sets::{AVLTag, AVLTree, AVL_NULL};
 
 // DEBUGGING: set to true to cross-check the CommitmentMap machinery.
@@ -1485,8 +1486,8 @@ impl fmt::Debug for EditListItem {
 
 #[inline(never)]
 pub fn alloc_main<F: Function>(
-  func: &mut F, reg_universe: &RealRegUniverse,
-) -> Result<RegAllocResult<F>, String> {
+  func: &mut F, reg_universe: &RealRegUniverse, use_checker: bool,
+) -> Result<RegAllocResult<F>, RegAllocError> {
   // Tmp kludge: create dummy uses for the AVL functions to silence
   // compiler warnings.
   if false {
@@ -1500,7 +1501,8 @@ pub fn alloc_main<F: Function>(
   // -------- Perform initial liveness analysis --------
   // Note that the analysis phase can fail; hence we propagate any error.
   let (san_reg_uses, rlr_env, mut vlr_env, mut frag_env, _liveouts, est_freqs) =
-    run_analysis(func, reg_universe).map_err(|err| err.to_string())?;
+    run_analysis(func, reg_universe)
+      .map_err(|err| RegAllocError::Analysis(err))?;
 
   // Also perform analysis that finds all coalesing opportunities.
   let coalescing_info =
@@ -1597,7 +1599,8 @@ pub fn alloc_main<F: Function>(
 
     assert!(curr_vlr.vreg.to_reg().is_virtual());
     assert!(curr_vlr.rreg.is_none());
-    let curr_vlr_rc = curr_vlr.vreg.get_class().rc_to_usize();
+    let curr_vlr_regclass = curr_vlr.vreg.get_class();
+    let curr_vlr_rc = curr_vlr_regclass.rc_to_usize();
 
     // ====== BEGIN Try to do coalescing ======
     //
@@ -1776,12 +1779,7 @@ pub fn alloc_main<F: Function>(
     let (first_in_rc, last_in_rc) =
       match &reg_universe.allocable_by_class[curr_vlr_rc] {
         &None => {
-          // Urk.  This is very ungood.  Game over.
-          let s = format!(
-            "no available registers for class {:?}",
-            RegClass::rc_from_u32(curr_vlr_rc as u32)
-          );
-          return Err(s);
+          return Err(RegAllocError::OutOfRegisters(curr_vlr_regclass));
         }
         &Some(ref info) => (info.first, info.last),
       };
@@ -1898,7 +1896,7 @@ pub fn alloc_main<F: Function>(
     // requirement for them) are impossible to fulfill, and so we cannot
     // generate any valid allocation for this function.
     if curr_vlr.spill_cost.is_infinite() {
-      return Err("out of registers".to_string());
+      return Err(RegAllocError::OutOfRegisters(curr_vlr_regclass));
     }
 
     // Generate a new spill slot number, S
@@ -2071,7 +2069,11 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.is_reload());
         debug_assert!(vlr_frag.last.pt.is_use());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR = func.gen_reload(Writable::from_reg(rreg), eli.slot, vreg);
+        let insnR = InstToInsert::Reload {
+          to_reg: Writable::from_reg(rreg),
+          from_slot: eli.slot,
+          for_vreg: vreg,
+        };
         let whereToR = vlr_frag.first;
         spills_n_reloads.push(InstAndPoint::new(whereToR, insnR));
       }
@@ -2079,9 +2081,17 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.is_reload());
         debug_assert!(vlr_frag.last.pt.is_spill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnR = func.gen_reload(Writable::from_reg(rreg), eli.slot, vreg);
+        let insnR = InstToInsert::Reload {
+          to_reg: Writable::from_reg(rreg),
+          from_slot: eli.slot,
+          for_vreg: vreg,
+        };
         let whereToR = vlr_frag.first;
-        let insnS = func.gen_spill(eli.slot, rreg, vreg);
+        let insnS = InstToInsert::Spill {
+          to_slot: eli.slot,
+          from_reg: rreg,
+          for_vreg: vreg,
+        };
         let whereToS = vlr_frag.last;
         spills_n_reloads.push(InstAndPoint::new(whereToR, insnR));
         spills_n_reloads.push(InstAndPoint::new(whereToS, insnS));
@@ -2090,7 +2100,11 @@ pub fn alloc_main<F: Function>(
         debug_assert!(vlr_frag.first.pt.is_def());
         debug_assert!(vlr_frag.last.pt.is_spill());
         debug_assert!(vlr_frag.first.iix == vlr_frag.last.iix);
-        let insnS = func.gen_spill(eli.slot, rreg, vreg);
+        let insnS = InstToInsert::Spill {
+          to_slot: eli.slot,
+          from_reg: rreg,
+          for_vreg: vreg,
+        };
         let whereToS = vlr_frag.last;
         spills_n_reloads.push(InstAndPoint::new(whereToS, insnS));
       }
@@ -2142,5 +2156,6 @@ pub fn alloc_main<F: Function>(
     &frag_env,
     &reg_universe,
     next_spill_slot.get(),
+    use_checker,
   )
 }

@@ -761,7 +761,7 @@ impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug>
   }
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub enum SpillSlot {
   SpillSlot(u32),
 }
@@ -827,7 +827,7 @@ impl InstRegUses {
   }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SanitizedInstRegUses {
   // These names are different from their unsanitized counterparts so as to
   // make it more difficult to get the two types mixed up.

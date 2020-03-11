@@ -7,6 +7,8 @@
 
 //! This is the top level interface for the regalloc library.
 
+use std::fmt;
+
 use crate::backtracking;
 use crate::linear_scan;
 
@@ -227,9 +229,29 @@ pub struct RegAllocResult<F: Function> {
 }
 
 /// A choice of register allocation algorithm to run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegAllocAlgorithm {
   Backtracking,
+  BacktrackingChecked,
   LinearScan,
+}
+
+pub use crate::analysis::AnalysisError;
+pub use crate::checker::{CheckerError, CheckerErrors};
+
+/// An error from the register allocator.
+#[derive(Clone, Debug)]
+pub enum RegAllocError {
+  OutOfRegisters(RegClass),
+  Analysis(AnalysisError),
+  RegChecker(CheckerErrors),
+  Other(String),
+}
+
+impl fmt::Display for RegAllocError {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "{:?}", self)
+  }
 }
 
 /// Allocate registers for a function's code, given a universe of real
@@ -242,17 +264,18 @@ pub enum RegAllocAlgorithm {
 /// be returned.
 ///
 /// Allocate may succeed, returning a `RegAllocResult` with the new instruction
-/// sequence, or it may fail, returning an error string.
-///
-/// TODO: better error type? Are there a few canonical errors we return (out
-/// of regs, ...)?
+/// sequence, or it may fail, returning an error.
 pub fn allocate_registers<F: Function>(
   func: &mut F, algorithm: RegAllocAlgorithm, rreg_universe: &RealRegUniverse,
-) -> Result<RegAllocResult<F>, String> {
+) -> Result<RegAllocResult<F>, RegAllocError> {
   match algorithm {
-    RegAllocAlgorithm::Backtracking => {
-      backtracking::alloc_main(func, rreg_universe)
+    RegAllocAlgorithm::Backtracking
+    | RegAllocAlgorithm::BacktrackingChecked => {
+      let use_checker = algorithm == RegAllocAlgorithm::BacktrackingChecked;
+      backtracking::alloc_main(func, rreg_universe, use_checker)
     }
-    RegAllocAlgorithm::LinearScan => linear_scan::run(func, rreg_universe),
+    RegAllocAlgorithm::LinearScan => {
+      linear_scan::run(func, rreg_universe).map_err(|e| RegAllocError::Other(e))
+    }
   }
 }
