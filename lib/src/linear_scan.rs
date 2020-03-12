@@ -580,7 +580,7 @@ fn try_allocate_reg<F: Function>(
   if state.intervals.end(id, &state.fragments) >= best_pos {
     // Partial solution: the register is available until best_pos, and is
     // unavailable later. It must be split before the best position.
-    let split_pos = match find_last_use_before(
+    let split_pos = match last_use(
       &state.intervals,
       id,
       best_pos,
@@ -611,7 +611,7 @@ fn try_allocate_reg<F: Function>(
 /// `pos` (included), in a broad sense of use (any of use, def or mod).
 ///
 /// Extends to the left, that is, "modified" means "used".
-fn find_next_use_after(
+fn next_use(
   int: &Intervals, id: IntId, pos: InstPoint, reg_uses: &RegUses,
   fragments: &Fragments,
 ) -> Option<InstPoint> {
@@ -665,7 +665,7 @@ fn allocate_blocked_reg<F: Function>(
   cur_id: IntId, state: &mut State<F>, reg_universe: &RealRegUniverse,
 ) -> Result<(), String> {
   // If the current interval has no uses, spill it directly.
-  let first_use = match find_next_use_after(
+  let first_use = match next_use(
     &state.intervals,
     cur_id,
     InstPoint::min_value(),
@@ -718,22 +718,14 @@ fn allocate_blocked_reg<F: Function>(
       continue;
     }
     if let Some(reg) = int.fixed_reg(id) {
-      let start = int.start(id, &state.fragments);
-      if start < block_pos[reg] {
-        block_pos[reg] = start;
-      }
+      block_pos[reg] =
+        InstPoint::min(int.start(id, &state.fragments), block_pos[reg]);
       next_use_pos[reg] = InstPoint::min_value();
     } else if let Some(reg) = int.location(id).reg() {
-      if let Some(next_use) = find_next_use_after(
-        int,
-        id,
-        start_pos,
-        &state.reg_uses,
-        &state.fragments,
-      ) {
-        if next_use < next_use_pos[reg] {
-          next_use_pos[reg] = next_use;
-        }
+      if let Some(next_use) =
+        next_use(int, id, start_pos, &state.reg_uses, &state.fragments)
+      {
+        next_use_pos[reg] = InstPoint::min(next_use_pos[reg], next_use);
       }
     }
   }
@@ -749,23 +741,13 @@ fn allocate_blocked_reg<F: Function>(
       None => continue,
     };
     if let Some(reg) = int.fixed_reg(id) {
-      if intersect_pos < block_pos[reg] {
-        block_pos[reg] = intersect_pos;
-      }
-      if intersect_pos < next_use_pos[reg] {
-        next_use_pos[reg] = intersect_pos;
-      }
+      block_pos[reg] = InstPoint::min(block_pos[reg], intersect_pos);
+      next_use_pos[reg] = InstPoint::min(next_use_pos[reg], intersect_pos);
     } else if let Some(reg) = int.location(id).reg() {
-      if let Some(next_use) = find_next_use_after(
-        int,
-        id,
-        start_pos,
-        &state.reg_uses,
-        &state.fragments,
-      ) {
-        if next_use < next_use_pos[reg] {
-          next_use_pos[reg] = next_use;
-        }
+      if let Some(next_use) =
+        next_use(int, id, start_pos, &state.reg_uses, &state.fragments)
+      {
+        next_use_pos[reg] = InstPoint::min(next_use_pos[reg], next_use);
       }
     }
   }
@@ -874,7 +856,7 @@ fn allocate_blocked_reg<F: Function>(
 /// Finds the last use of a vreg before a given target, including it in possible
 /// return values.
 /// Extends to the right, that is, modified means "def".
-fn find_last_use_before(
+fn last_use(
   int: &Intervals, id: IntId, pos: InstPoint, reg_uses: &RegUses,
   fragments: &Fragments,
 ) -> Option<InstPoint> {
@@ -1182,7 +1164,7 @@ fn next_pos(mut pos: InstPoint) -> InstPoint {
 fn split_and_spill<F: Function>(
   state: &mut State<F>, id: IntId, split_pos: InstPoint,
 ) {
-  let last_use = find_last_use_before(
+  let last_use = last_use(
     &state.intervals,
     id,
     split_pos,
@@ -1199,7 +1181,7 @@ fn split_and_spill<F: Function>(
   state.spill(child);
 
   // Split until the next register use.
-  match find_next_use_after(
+  match next_use(
     &state.intervals,
     child,
     split_pos,
@@ -1504,13 +1486,8 @@ fn resolve_moves<F: Function>(
 
       Location::Reg(rreg) => {
         // Reconnect with the parent location, by adding a move if needed.
-        match find_next_use_after(
-          intervals,
-          interval.id,
-          child_start,
-          reg_uses,
-          fragments,
-        ) {
+        match next_use(intervals, interval.id, child_start, reg_uses, fragments)
+        {
           Some(next_use) => {
             // No need to reload before a new definition.
             if next_use.pt == Point::Def {
