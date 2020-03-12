@@ -1524,24 +1524,18 @@ fn resolve_moves<F: Function>(
 
           Location::Reg(from_rreg) => {
             if from_rreg != rreg {
-              trace!(
+              debug!(
                 "inblock fixup: {:?} move {:?} -> {:?} at {:?}",
-                interval.id,
-                from_rreg,
-                rreg,
-                at_inst
+                interval.id, from_rreg, rreg, at_inst
               );
               entry.push(MoveOp::new_move(from_rreg, rreg, vreg));
             }
           }
 
           Location::Stack(spill) => {
-            trace!(
+            debug!(
               "inblock fixup: {:?} reload {:?} -> {:?} at {:?}",
-              interval.id,
-              spill,
-              rreg,
-              at_inst
+              interval.id, spill, rreg, at_inst
             );
             entry.push(MoveOp::new_reload(spill, rreg, vreg));
           }
@@ -1563,12 +1557,9 @@ fn resolve_moves<F: Function>(
           Location::None => unreachable!(),
 
           Location::Reg(rreg) => {
-            trace!(
+            debug!(
               "inblock fixup: {:?} spill {:?} -> {:?} at {:?}",
-              interval.id,
-              rreg,
-              spill,
-              at_inst
+              interval.id, rreg, spill, at_inst
             );
             spills.entry(at_inst).or_insert(Vec::new()).push(
               InstToInsert::Spill {
@@ -1700,7 +1691,7 @@ fn resolve_moves<F: Function>(
             if cur_rreg == succ_rreg {
               continue;
             }
-            trace!(
+            debug!(
               "boundary fixup: move {:?} -> {:?} at {:?} for {:?} between {:?} and {:?}",
               cur_rreg,
               succ_rreg,
@@ -1713,7 +1704,7 @@ fn resolve_moves<F: Function>(
           }
 
           (Location::Reg(cur_rreg), Location::Stack(spillslot)) => {
-            trace!(
+            debug!(
               "boundary fixup: spill {:?} -> {:?} at {:?} for {:?} between {:?} and {:?}",
               cur_rreg,
               spillslot,
@@ -1726,7 +1717,7 @@ fn resolve_moves<F: Function>(
           }
 
           (Location::Stack(spillslot), Location::Reg(rreg)) => {
-            trace!(
+            debug!(
               "boundary fixup: reload {:?} -> {:?} at {:?} for {:?} between {:?} and {:?}",
               spillslot,
               rreg,
