@@ -1918,10 +1918,15 @@ fn schedule_moves(pending: &mut Vec<MoveOp>) -> Vec<MoveOp> {
   let mut num_cycles = 0;
   let mut cur_cycles = 0;
 
-  trace!("pending moves: {:#?}", pending);
+  let show_debug = env::var("MOVES").is_ok();
+  if show_debug {
+    trace!("pending moves: {:#?}", pending);
+  }
 
   while let Some(pm) = pending.pop() {
-    trace!("handling pending move {:?}", pm);
+    if show_debug {
+      trace!("handling pending move {:?}", pm);
+    }
     debug_assert!(
       pm.from != pm.to,
       "spurious moves should not have been inserted"
@@ -1933,13 +1938,17 @@ fn schedule_moves(pending: &mut Vec<MoveOp>) -> Vec<MoveOp> {
       let blocking_pair = find_blocking_move(pending, stack.last().unwrap());
 
       if let Some((blocking_idx, blocking)) = blocking_pair {
-        trace!("found blocker: {:?}", blocking);
+        if show_debug {
+          trace!("found blocker: {:?}", blocking);
+        }
         let mut stack_cur = 0;
 
         let has_cycles = if let Some(mut cycled) =
           find_cycled_move(&mut stack, &mut stack_cur, blocking)
         {
-          trace!("found cycle: {:?}", cycled);
+          if show_debug {
+            trace!("found cycle: {:?}", cycled);
+          }
           debug_assert!(cycled.cycle_end.is_none());
           cycled.cycle_end = Some(cur_cycles);
           true
@@ -1951,7 +1960,9 @@ fn schedule_moves(pending: &mut Vec<MoveOp>) -> Vec<MoveOp> {
           loop {
             match find_cycled_move(&mut stack, &mut stack_cur, blocking) {
               Some(ref mut cycled) => {
-                trace!("found more cycles ending on blocker: {:?}", cycled);
+                if show_debug {
+                  trace!("found more cycles ending on blocker: {:?}", cycled);
+                }
                 debug_assert!(cycled.cycle_end.is_none());
                 cycled.cycle_end = Some(cur_cycles);
               }
@@ -1993,7 +2004,10 @@ fn emit_moves<F: Function>(
 
   let mut insts = Vec::new();
 
-  trace!("emit_moves");
+  let show_debug = env::var("MOVES").is_ok();
+  if show_debug {
+    trace!("emit_moves");
+  }
 
   for mov in ordered_moves {
     if let Some(_) = &mov.cycle_end {
@@ -2012,7 +2026,13 @@ fn emit_moves<F: Function>(
             mov.vreg,
           );
           insts.push(inst);
-          trace!("finishing cycle: {:?} -> {:?}", spill_slot.unwrap(), dst_reg);
+          if show_debug {
+            trace!(
+              "finishing cycle: {:?} -> {:?}",
+              spill_slot.unwrap(),
+              dst_reg
+            );
+          }
         }
         MoveOperand::Stack(dst_spill) => {
           let scratch = scratches_by_rc[mov.vreg.get_class() as usize]
@@ -2025,12 +2045,14 @@ fn emit_moves<F: Function>(
           insts.push(inst);
           let inst = func.gen_spill(dst_spill, scratch, mov.vreg);
           insts.push(inst);
-          trace!(
-            "finishing cycle: {:?} -> {:?} -> {:?}",
-            spill_slot.unwrap(),
-            scratch,
-            dst_spill
-          );
+          if show_debug {
+            trace!(
+              "finishing cycle: {:?} -> {:?} -> {:?}",
+              spill_slot.unwrap(),
+              scratch,
+              dst_spill
+            );
+          }
         }
       };
 
@@ -2058,7 +2080,13 @@ fn emit_moves<F: Function>(
         MoveOperand::Reg(src_reg) => {
           let inst = func.gen_spill(spill_slot.unwrap(), src_reg, mov.vreg);
           insts.push(inst);
-          trace!("starting cycle: {:?} -> {:?}", src_reg, spill_slot.unwrap());
+          if show_debug {
+            trace!(
+              "starting cycle: {:?} -> {:?}",
+              src_reg,
+              spill_slot.unwrap()
+            );
+          }
         }
         MoveOperand::Stack(src_spill) => {
           let scratch = scratches_by_rc[mov.vreg.get_class() as usize]
@@ -2072,12 +2100,14 @@ fn emit_moves<F: Function>(
             mov.vreg,
           );
           insts.push(inst);
-          trace!(
-            "starting cycle: {:?} -> {:?} -> {:?}",
-            src_spill,
-            scratch,
-            spill_slot.unwrap()
-          );
+          if show_debug {
+            trace!(
+              "starting cycle: {:?} -> {:?} -> {:?}",
+              src_spill,
+              scratch,
+              spill_slot.unwrap()
+            );
+          }
         }
       };
 
@@ -2086,7 +2116,9 @@ fn emit_moves<F: Function>(
 
     // A normal move which is not part of a cycle.
     insts.push(mov.gen_inst(func));
-    trace!("moving {:?} -> {:?}", mov.from, mov.to);
+    if show_debug {
+      trace!("moving {:?} -> {:?}", mov.from, mov.to);
+    }
   }
 
   insts
@@ -2097,6 +2129,8 @@ fn apply_registers<F: Function>(
   func: &mut F, intervals: &Intervals, virtual_intervals: Vec<&LiveInterval>,
   fragments: &Fragments,
 ) {
+  let show_traces = env::var("MAP_REGS").is_ok();
+
   for inst_id in func.insn_indices() {
     let inst_use = InstPoint::new_use(inst_id);
     let inst_def = InstPoint::new_def(inst_id);
@@ -2159,18 +2193,20 @@ fn apply_registers<F: Function>(
       }
     }
 
-    trace!("map_regs for {:?}", inst_id);
-    trace!("uses");
-    for (k, v) in &map_uses {
-      trace!("- {:?} -> {:?}", k, v);
-    }
-    trace!("defs");
-    for (k, v) in &map_defs {
-      trace!("- {:?} -> {:?}", k, v);
+    if show_traces {
+      trace!("map_regs for {:?}", inst_id);
+      trace!("uses");
+      for (k, v) in &map_uses {
+        trace!("- {:?} -> {:?}", k, v);
+      }
+      trace!("defs");
+      for (k, v) in &map_defs {
+        trace!("- {:?} -> {:?}", k, v);
+      }
+      trace!("");
     }
 
     let mut inst = func.get_insn_mut(inst_id);
     F::map_regs(&mut inst, &map_uses, &map_defs);
-    trace!("");
   }
 }
