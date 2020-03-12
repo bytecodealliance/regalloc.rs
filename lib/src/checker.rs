@@ -158,6 +158,15 @@ impl CheckerState {
     Default::default()
   }
 
+  /// Produce an entry checker state with all real regs holding themselves, symbolically.
+  fn entry_state(ru: &RealRegUniverse) -> CheckerState {
+    let mut state = CheckerState::new();
+    for &(rreg, _) in &ru.regs {
+      state.reg_values.insert(rreg, CheckerValue::Reg(rreg.to_reg()));
+    }
+    state
+  }
+
   /// Merge this checker state with another at a CFG join-point.
   fn meet_with(&mut self, other: &CheckerState) {
     merge_map(&mut self.reg_values, &other.reg_values);
@@ -281,7 +290,7 @@ impl Checker {
   /// Create a new checker for the given function, initializing CFG info immediately.
   /// The client should call the `add_*()` methods to add abstract instructions to each
   /// BB before invoking `run()` to check for errors.
-  pub(crate) fn new<F: Function>(f: &F) -> Checker {
+  pub(crate) fn new<F: Function>(f: &F, ru: &RealRegUniverse) -> Checker {
     let mut bb_in = Map::default();
     let mut bb_succs = Map::default();
     let mut bb_insts = Map::default();
@@ -291,6 +300,8 @@ impl Checker {
       bb_succs.insert(block, f.block_succs(block));
       bb_insts.insert(block, vec![]);
     }
+
+    bb_in.insert(f.entry_block(), CheckerState::entry_state(ru));
 
     Checker { bb_entry: f.entry_block(), bb_in, bb_succs, bb_insts }
   }
@@ -393,7 +404,7 @@ impl CheckerContext {
   /// Create a new checker context for the given function, which is about to be edited with the
   /// given instruction insertions.
   pub(crate) fn new<F: Function>(
-    f: &F, insts_to_add: &InstsAndPoints,
+    f: &F, ru: &RealRegUniverse, insts_to_add: &InstsAndPoints,
   ) -> CheckerContext {
     let mut checker_inst_map: Map<InstPoint, Vec<Inst>> = Map::default();
     for &InstAndPoint { ref at, ref inst } in insts_to_add {
@@ -401,7 +412,7 @@ impl CheckerContext {
         checker_inst_map.entry(at.clone()).or_insert_with(|| vec![]);
       checker_insts.push(inst.to_checker_inst());
     }
-    let checker = Checker::new(f);
+    let checker = Checker::new(f, ru);
     CheckerContext { checker, checker_inst_map }
   }
 
