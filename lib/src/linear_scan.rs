@@ -806,7 +806,7 @@ fn allocate_blocked_reg<F: Function>(
 
     // If there's an interference with a fixed interval, split at the
     // intersection.
-    if block_pos[best_reg] < state.intervals.end(cur_id, &state.fragments) {
+    if block_pos[best_reg] <= state.intervals.end(cur_id, &state.fragments) {
       debug!("allocate_blocked_reg: fixed conflict! blocked at {:?}, while ending at {:?}",
           block_pos[best_reg], state.intervals.end(cur_id, &state.fragments));
       split_and_spill(state, cur_id, block_pos[best_reg]);
