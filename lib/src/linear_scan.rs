@@ -2144,7 +2144,7 @@ fn apply_registers<F: Function>(
   let show_traces = env::var("MAP_REGS").is_ok();
   let mut checker: Option<CheckerContext> = None;
   if use_checker {
-    checker = Some(CheckerContext::new(func, memory_moves));
+    checker = Some(CheckerContext::new(func, reg_universe, memory_moves));
   }
 
   for block_id in func.blocks() {

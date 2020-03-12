@@ -110,7 +110,7 @@ pub(crate) fn apply_reg_uses<F: Function>(
   // Set up checker state, if indicated by our configuration.
   let mut checker: Option<CheckerContext> = None;
   if use_checker {
-    checker = Some(CheckerContext::new(func, insts_to_add));
+    checker = Some(CheckerContext::new(func, reg_universe, insts_to_add));
   }
 
   // Make two copies of the fragment mapping, one sorted by the fragment start
