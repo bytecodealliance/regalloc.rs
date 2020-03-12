@@ -750,8 +750,29 @@ fn get_RangeFrags_for_block<F: Function>(
   // TODO: do this as we go along, so as to avoid the use of a temporary
   // vector.
   for (r, frag) in tmpResultVec {
-    outFEnv.push(frag);
-    let new_fix = RangeFragIx::new(outFEnv.len() as u32 - 1);
+    // Allocate a new RangeFragIx for |frag|, except, make some minimal effort
+    // to avoid huge numbers of duplicates by inspecting the previous two
+    // entries, and using them if possible.
+    let outFEnv_len = outFEnv.len();
+    let new_fix: RangeFragIx;
+    if outFEnv_len >= 2 {
+      let back_0 = RangeFragIx::new(outFEnv_len - 1);
+      let back_1 = RangeFragIx::new(outFEnv_len - 2);
+      if outFEnv[back_0] == frag {
+        new_fix = back_0;
+      } else if outFEnv[back_1] == frag {
+        new_fix = back_1;
+      } else {
+        // No match; create a new one.
+        outFEnv.push(frag);
+        new_fix = RangeFragIx::new(outFEnv.len() as u32 - 1);
+      }
+    } else {
+      // We can't look back; create a new one.
+      outFEnv.push(frag);
+      new_fix = RangeFragIx::new(outFEnv.len() as u32 - 1);
+    }
+    // And use the new RangeFragIx.
     match outMap.get_mut(&r) {
       None => {
         outMap.insert(r, vec![new_fix]);
