@@ -135,6 +135,8 @@ fn do_coalescing_analysis<F: Function>(
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
   est_freqs: &TypedIxVec<BlockIx, u32>,
 ) -> (TypedIxVec<VirtualRangeIx, Vec<Hint>>, UnionFindVLRIx) {
+  debug!("");
+  debug!("do_coalescing_analysis: begin");
   // We have in hand the virtual live ranges.  Each of these carries its
   // associated vreg.  So in effect we have a VLR -> VReg mapping.  We now
   // invert that, so as to generate a mapping from VRegs to their containing
@@ -348,6 +350,7 @@ fn do_coalescing_analysis<F: Function>(
       .sort_by(|h1, h2| h2.get_weight().partial_cmp(&h1.get_weight()).unwrap());
   }
 
+  debug!("do_coalescing_analysis: end");
   debug!("");
   debug!("Coalescing hints:");
   let mut n = 0;

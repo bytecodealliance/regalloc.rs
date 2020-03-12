@@ -74,9 +74,11 @@ impl CFGInfo {
   fn create<F: Function>(func: &F) -> Result<Self, AnalysisError> {
     let nBlocks = func.blocks().len() as u32;
 
+    // === BEGIN compute successor and predecessor maps ===
+    //
     // First calculate the succ map, since we can do that directly from
     // the Func.
-
+    //
     // Func::finish() ensures that all blocks are non-empty, and that only
     // the last instruction is a control flow transfer.  Hence the
     // following won't miss any edges.
@@ -99,7 +101,14 @@ impl CFGInfo {
       }
     }
 
-    // Check that critical edges have been split.
+    // Stay sane ..
+    assert!(pred_map.len() == nBlocks);
+    assert!(succ_map.len() == nBlocks);
+    //
+    // === END compute successor and predecessor maps ===
+
+    // === BEGIN check that critical edges have been split ===
+    //
     for (src, dst_set) in (0..).zip(succ_map.iter()) {
       if dst_set.card() < 2 {
         continue;
@@ -113,16 +122,84 @@ impl CFGInfo {
         }
       }
     }
+    //
+    // === END check that critical edges have been split ===
 
-    // Calculate dominators.
-    let dom_map = calc_dominators(&pred_map, func.entry_block());
+    // === BEGIN compute preord/postord sequences ===
+    //
+    // This is per Fig 7.12 of Muchnick 1997
+    //
+    let mut pre_ord = Vec::<BlockIx>::new();
+    let mut post_ord = Vec::<BlockIx>::new();
+
+    let mut visited = TypedIxVec::<BlockIx, bool>::new();
+    visited.resize(nBlocks, false);
+
+    // FIXME: change this to use an explicit stack.
+    fn dfs(
+      pre_ord: &mut Vec<BlockIx>, post_ord: &mut Vec<BlockIx>,
+      visited: &mut TypedIxVec<BlockIx, bool>,
+      succ_map: &TypedIxVec<BlockIx, Set<BlockIx>>, bix: BlockIx,
+    ) {
+      debug_assert!(!visited[bix]);
+      visited[bix] = true;
+      pre_ord.push(bix);
+      for succ in succ_map[bix].iter() {
+        if !visited[*succ] {
+          dfs(pre_ord, post_ord, visited, succ_map, *succ);
+        }
+      }
+      post_ord.push(bix);
+    }
+
+    dfs(
+      &mut pre_ord,
+      &mut post_ord,
+      &mut visited,
+      &succ_map,
+      func.entry_block(),
+    );
+
+    assert!(pre_ord.len() == post_ord.len());
+    assert!(pre_ord.len() <= nBlocks as usize);
+    if pre_ord.len() < nBlocks as usize {
+      // This can happen if the graph contains nodes unreachable from
+      // the entry point.  In which case, deal with any leftovers.
+      for bix in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
+        if !visited[bix] {
+          dfs(&mut pre_ord, &mut post_ord, &mut visited, &succ_map, bix);
+        }
+      }
+    }
+
+    assert!(pre_ord.len() == nBlocks as usize);
+    assert!(post_ord.len() == nBlocks as usize);
+    #[cfg(debug_assertions)]
+    {
+      let mut pre_ord_sorted: Vec<BlockIx> = pre_ord.clone();
+      let mut post_ord_sorted: Vec<BlockIx> = post_ord.clone();
+      pre_ord_sorted
+        .sort_by(|bix1, bix2| bix1.get().partial_cmp(&bix2.get()).unwrap());
+      post_ord_sorted
+        .sort_by(|bix1, bix2| bix1.get().partial_cmp(&bix2.get()).unwrap());
+      let expected: Vec<BlockIx> =
+        (0..nBlocks).map(|u| BlockIx::new(u)).collect();
+      debug_assert!(pre_ord_sorted == expected);
+      debug_assert!(post_ord_sorted == expected);
+    }
+    //
+    // === END compute preord/postord sequences ===
+
+    // === BEGIN compute dominator sets ===
+    //
+    let dom_map = calc_dominators(&pred_map, &post_ord, func.entry_block());
 
     // Stay sane ..
-    debug_assert!(pred_map.len() == nBlocks);
-    debug_assert!(succ_map.len() == nBlocks);
-    debug_assert!(dom_map.len() == nBlocks);
+    assert!(dom_map.len() == nBlocks);
+    //
+    // === END compute dominator sets ===
 
-    // BEGIN compute loop depth of all Blocks
+    // === BEGIN compute loop depth of all Blocks
     //
     // Find the loops.  First, find the "loop header nodes", and from
     // those, derive the loops.
@@ -225,60 +302,8 @@ impl CFGInfo {
     }
 
     debug_assert!(depth_map.len() == nBlocks);
-
     //
-    // END compute loop depth of all Blocks
-
-    // BEGIN compute preord/postord
-    //
-    // This is per Fig 7.12 of Muchnick 1997
-    //
-    let mut pre_ord = Vec::<BlockIx>::new();
-    let mut post_ord = Vec::<BlockIx>::new();
-
-    let mut visited = TypedIxVec::<BlockIx, bool>::new();
-    visited.resize(nBlocks, false);
-
-    // FIXME: change this to use an explicit stack.
-    fn dfs(
-      pre_ord: &mut Vec<BlockIx>, post_ord: &mut Vec<BlockIx>,
-      visited: &mut TypedIxVec<BlockIx, bool>,
-      succ_map: &TypedIxVec<BlockIx, Set<BlockIx>>, bix: BlockIx,
-    ) {
-      debug_assert!(!visited[bix]);
-      visited[bix] = true;
-      pre_ord.push(bix);
-      for succ in succ_map[bix].iter() {
-        if !visited[*succ] {
-          dfs(pre_ord, post_ord, visited, succ_map, *succ);
-        }
-      }
-      post_ord.push(bix);
-    }
-
-    dfs(
-      &mut pre_ord,
-      &mut post_ord,
-      &mut visited,
-      &succ_map,
-      func.entry_block(),
-    );
-
-    debug_assert!(pre_ord.len() == post_ord.len());
-    debug_assert!(pre_ord.len() <= nBlocks as usize);
-    if pre_ord.len() < nBlocks as usize {
-      // This can happen if the graph contains nodes unreachable from
-      // the entry point.  In which case, deal with any leftovers.
-      for bix in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
-        if !visited[bix] {
-          dfs(&mut pre_ord, &mut post_ord, &mut visited, &succ_map, bix);
-        }
-      }
-    }
-    debug_assert!(pre_ord.len() == nBlocks as usize);
-    debug_assert!(post_ord.len() == nBlocks as usize);
-    //
-    // END compute preord/postord
+    // === END compute loop depth of all Blocks
 
     //println!("QQQQ pre_ord  {}", pre_ord.show());
     //println!("QQQQ post_ord {}", post_ord.show());
@@ -299,8 +324,11 @@ impl CFGInfo {
 // algorithm is described as simple but not as performant as some others.
 #[inline(never)]
 fn calc_dominators(
-  pred_map: &TypedIxVec<BlockIx, Set<BlockIx>>, start: BlockIx,
+  pred_map: &TypedIxVec<BlockIx, Set<BlockIx>>, post_ord: &Vec<BlockIx>,
+  start: BlockIx,
 ) -> TypedIxVec<BlockIx, Set<BlockIx>> {
+  debug!("");
+  debug!("calc_dominators: begin");
   // FIXME: nice up the variable names (D, T, etc) a bit.
   let nBlocks = pred_map.len();
   let mut dom_map = TypedIxVec::<BlockIx, Set<BlockIx>>::new();
@@ -318,9 +346,14 @@ fn calc_dominators(
         dom_map[bixN] = N.clone();
       }
     }
+    let mut nnn = 0;
     loop {
+      nnn += 1;
+      debug!("calc_dominators:   outer loop {}", nnn);
       let mut change = false;
-      for bixN in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
+      for i in 0..nBlocks {
+        // bixN travels in "reverse preorder"
+        let bixN = post_ord[(nBlocks - 1 - i) as usize];
         if bixN == r {
           continue;
         }
@@ -340,6 +373,7 @@ fn calc_dominators(
       }
     }
   }
+  debug!("calc_dominators: end");
   dom_map
 }
 
@@ -370,6 +404,8 @@ fn get_sanitized_reg_uses<F: Function>(
 fn calc_def_and_use<F: Function>(
   f: &F, san_reg_uses: &TypedIxVec<InstIx, SanitizedInstRegUses>,
 ) -> (TypedIxVec<BlockIx, Set<Reg>>, TypedIxVec<BlockIx, Set<Reg>>) {
+  debug!("");
+  debug!("calc_def_and_use: begin");
   let mut def_sets = TypedIxVec::new();
   let mut use_sets = TypedIxVec::new();
   for b in f.blocks() {
@@ -402,6 +438,7 @@ fn calc_def_and_use<F: Function>(
     def_sets.push(def);
     use_sets.push(uce);
   }
+  debug!("calc_def_and_use: end");
   (def_sets, use_sets)
 }
 
@@ -411,6 +448,8 @@ fn calc_livein_and_liveout<F: Function>(
   f: &F, def_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>,
   use_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>, cfg_info: &CFGInfo,
 ) -> (TypedIxVec<BlockIx, Set<Reg>>, TypedIxVec<BlockIx, Set<Reg>>) {
+  debug!("");
+  debug!("calc_livein_and_liveout: begin");
   let nBlocks = f.blocks().len() as u32;
   let empty = Set::<Reg>::empty();
 
@@ -475,6 +514,7 @@ fn calc_livein_and_liveout<F: Function>(
     );
   }
 
+  debug!("calc_livein_and_liveout: end");
   (liveins, liveouts)
 }
 
@@ -758,6 +798,8 @@ fn merge_RangeFrags(
   TypedIxVec<RealRangeIx, RealRange>,
   TypedIxVec<VirtualRangeIx, VirtualRange>,
 ) {
+  debug!("");
+  debug!("merge_RangeFrags: begin");
   let mut resR = TypedIxVec::<RealRangeIx, RealRange>::new();
   let mut resV = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
   for (reg, all_frag_ixs_for_reg) in fragIx_vecs_per_reg.iter() {
@@ -877,6 +919,7 @@ fn merge_RangeFrags(
     // END merge |all_frag_ixs_for_reg| entries as much as possible
   }
 
+  debug!("merge_RangeFrags: end");
   (resR, resV)
 }
 
@@ -901,6 +944,8 @@ fn set_VirtualRange_metrics(
   fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   estFreq: &TypedIxVec<BlockIx, u32>,
 ) {
+  debug!("");
+  debug!("set_VirtualRange_metrics: begin");
   for vlr in vlrs.iter_mut() {
     debug_assert!(vlr.size == 0 && vlr.spill_cost.is_zero());
     debug_assert!(vlr.rreg.is_none());
@@ -936,6 +981,7 @@ fn set_VirtualRange_metrics(
     tot_cost /= tot_size as f32;
     vlr.spill_cost = SpillCost::finite(tot_cost);
   }
+  debug!("set_VirtualRange_metrics: end");
 }
 
 #[inline(never)]
