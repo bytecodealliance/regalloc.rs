@@ -1501,7 +1501,7 @@ pub fn alloc_main<F: Function>(
   // -------- Perform initial liveness analysis --------
   // Note that the analysis phase can fail; hence we propagate any error.
   let (san_reg_uses, rlr_env, mut vlr_env, mut frag_env, _liveouts, est_freqs) =
-    run_analysis(func, reg_universe)
+    run_analysis(func, reg_universe, /* sanitize scratch */ false)
       .map_err(|err| RegAllocError::Analysis(err))?;
 
   // Also perform analysis that finds all coalesing opportunities.

@@ -24,13 +24,7 @@ use std::fmt;
 
 use crate::analysis::run_analysis;
 use crate::checker::{CheckerContext, CheckerErrors};
-use crate::data_structures::{
-  cmp_range_frags, BlockIx, InstIx, InstPoint, Map, PlusOne, Point, RangeFrag,
-  RangeFragIx, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, RegClass,
-  SanitizedInstRegUses, Set, SortedRangeFragIxs, SpillCost, SpillSlot,
-  TypedIxVec, VirtualRange, VirtualRangeIx, VirtualReg, Writable,
-  NUM_REG_CLASSES,
-};
+use crate::data_structures::*;
 use crate::inst_stream::{
   fill_memory_moves, InstAndPoint, InstToInsert, InstsAndPoints,
 };
@@ -1297,7 +1291,7 @@ pub fn run<F: Function>(
   func: &mut F, reg_universe: &RealRegUniverse, use_checker: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
   let (reg_uses, rlrs, vlrs, fragments, liveouts, _est_freqs) =
-    run_analysis(func, reg_universe)
+    run_analysis(func, reg_universe, /* sanitize scratch */ true)
       .map_err(|err| RegAllocError::Analysis(err))?;
 
   let scratches_by_rc = {

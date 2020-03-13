@@ -416,12 +416,27 @@ fn calc_dominators(
 // of "sanitized".
 
 fn get_sanitized_reg_uses<F: Function>(
-  f: &F, reg_universe: &RealRegUniverse,
+  f: &F, reg_universe: &RealRegUniverse, sanitize_scratch: bool,
 ) -> Result<TypedIxVec<InstIx, SanitizedInstRegUses>, RealReg> {
   let mut san_reg_uses = TypedIxVec::new();
+
+  let mut scratch_set: Set<Reg> = Set::empty();
+  if sanitize_scratch {
+    for reg_info in &reg_universe.allocable_by_class {
+      if let Some(reg_info) = reg_info {
+        if let Some(scratch_idx) = &reg_info.suggested_scratch {
+          let scratch_reg = reg_universe.regs[*scratch_idx].0;
+          scratch_set.insert(scratch_reg.to_reg());
+        }
+      }
+    }
+  }
+
   for inst in f.insns() {
     let iru = f.get_regs(inst); // AUDITED
-    let sru = SanitizedInstRegUses::create_by_sanitizing(&iru, reg_universe)?;
+    let mut sru =
+      SanitizedInstRegUses::create_by_sanitizing(&iru, reg_universe)?;
+    sru.san_modified.remove(&scratch_set);
     san_reg_uses.push(sru);
   }
   Ok(san_reg_uses)
@@ -1038,7 +1053,7 @@ fn set_VirtualRange_metrics(
 
 #[inline(never)]
 pub fn run_analysis<F: Function>(
-  func: &F, reg_universe: &RealRegUniverse,
+  func: &F, reg_universe: &RealRegUniverse, sanitize_scratch: bool,
 ) -> Result<
   (
     // The sanitized per-insn reg-use info
@@ -1057,8 +1072,9 @@ pub fn run_analysis<F: Function>(
   AnalysisError,
 > {
   // See |get_sanitized_reg_uses| for the meaning of "sanitized".
-  let san_reg_uses = get_sanitized_reg_uses(func, reg_universe)
-    .map_err(|reg| AnalysisError::NonExistingRealReg(reg))?;
+  let san_reg_uses =
+    get_sanitized_reg_uses(func, reg_universe, sanitize_scratch)
+      .map_err(|reg| AnalysisError::NonExistingRealReg(reg))?;
 
   let (def_sets_per_block, use_sets_per_block) =
     calc_def_and_use(func, &san_reg_uses);
