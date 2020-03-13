@@ -194,9 +194,13 @@ impl CFGInfo {
           stack.append(&mut succ);
         }
       }
-      if visited_blocks.len() as u32 != nBlocks {
-        return Err(AnalysisError::UnreachableBlocks);
-      }
+
+      // cfallin 2020-03-12: disable this check -- we want to do the right
+      // thing in regalloc in the case of dead blocks, rather than error
+      // on them.
+      //if visited_blocks.len() as u32 != nBlocks {
+      //  return Err(AnalysisError::UnreachableBlocks);
+      //}
     }
 
     assert!(pre_ord.len() == nBlocks as usize);
