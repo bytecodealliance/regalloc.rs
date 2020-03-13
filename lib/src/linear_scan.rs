@@ -1292,14 +1292,17 @@ pub fn run<F: Function>(
   func: &mut F, reg_universe: &RealRegUniverse, use_checker: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
   let (reg_uses, rlrs, vlrs, fragments, liveouts, _est_freqs) =
-    run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
+    run_analysis(func, reg_universe)
+      .map_err(|err| RegAllocError::Analysis(err))?;
 
   let scratches_by_rc = {
     let mut scratches_by_rc = vec![None; NUM_REG_CLASSES];
     for i in 0..NUM_REG_CLASSES {
       if let Some(info) = &reg_universe.allocable_by_class[i] {
         if info.first == info.last {
-          return Err(RegAllocError::Other("at least 2 registers required for linear scan".into()));
+          return Err(RegAllocError::Other(
+            "at least 2 registers required for linear scan".into(),
+          ));
         }
         let scratch = reg_universe.regs[info.suggested_scratch.unwrap()].0;
         scratches_by_rc[i] = Some(scratch);
@@ -1753,8 +1756,7 @@ fn resolve_moves<F: Function>(
     // Flush the memory moves caused by block fixups for this block.
     for (at_inst, parallel_moves) in parallel_move_map.iter_mut() {
       let ordered_moves = schedule_moves(&mut parallel_moves.0);
-      let mut insts =
-        emit_moves(ordered_moves, spill_slot, scratches_by_rc);
+      let mut insts = emit_moves(ordered_moves, spill_slot, scratches_by_rc);
 
       // If at_inst pointed to a block start, then insert block fixups *before*
       // inblock fixups;
@@ -2127,10 +2129,8 @@ fn emit_moves(
 /// Fills in the register assignments into instructions.
 fn apply_registers<F: Function>(
   func: &mut F, intervals: &Intervals, virtual_intervals: Vec<&LiveInterval>,
-  fragments: &Fragments,
-  memory_moves: &InstsAndPoints,
-  reg_universe: &RealRegUniverse,
-  use_checker: bool,
+  fragments: &Fragments, memory_moves: &InstsAndPoints,
+  reg_universe: &RealRegUniverse, use_checker: bool,
 ) -> Result<(), CheckerErrors> {
   let show_traces = env::var("MAP_REGS").is_ok();
   let mut checker: Option<CheckerContext> = None;
