@@ -304,29 +304,9 @@ mod test_utils {
 
   // Note: num_gpr/num_fpu: must include the scratch register.
   pub fn check_lsra(func_name: &str, num_gpr: usize, num_fpu: usize) {
-    check_lsra_internal(
-      func_name, num_gpr, num_fpu, /* use_checker = */ false,
-    );
-  }
-
-  pub fn check_lsra_checked(func_name: &str, num_gpr: usize, num_fpu: usize) {
-    check_lsra_internal(
-      func_name, num_gpr, num_fpu, /* use_checker = */ true,
-    );
-  }
-
-  fn check_lsra_internal(
-    func_name: &str, num_gpr: usize, num_fpu: usize, use_checker: bool,
-  ) {
     let _ = pretty_env_logger::try_init();
     let mut func = test_cases::find_func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
-    let algo = if use_checker {
-      RegAllocAlgorithm::LinearScanChecked
-    } else {
-      RegAllocAlgorithm::LinearScan
-    };
-
     let before_regalloc_result = run_func(
       &func,
       "Before allocation",
@@ -334,10 +314,14 @@ mod test_utils {
       RunStage::BeforeRegalloc,
     );
     func.print("BEFORE");
-    let result = allocate_registers(&mut func, algo, &reg_universe)
-      .unwrap_or_else(|err| {
-        panic!("allocation failed: {}", err);
-      });
+    let result = allocate_registers(
+      &mut func,
+      RegAllocAlgorithm::LinearScanChecked,
+      &reg_universe,
+    )
+    .unwrap_or_else(|err| {
+      panic!("allocation failed: {}", err);
+    });
     func.update_from_alloc(result);
     func.print("AFTER");
     let after_regalloc_result = run_func(
@@ -473,12 +457,8 @@ fn lsra_ssort_8() {
 
 // Requires 2 registers.
 #[test]
-fn lsra_ssort2() {
+fn lsra_ssort() {
   test_utils::loop_lsra("ssort2", 3);
-}
-#[test]
-fn lsrac_ssort() {
-  test_utils::check_lsra_checked("ssort", 8, 8);
 }
 
 // 3_loops requires at least 2 registers.
