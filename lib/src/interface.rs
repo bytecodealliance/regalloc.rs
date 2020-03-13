@@ -118,11 +118,10 @@ pub use crate::data_structures::SpillSlot;
 //     vcode, though -- in other words it may appear in the Defined sets
 //     created by Function::get_regs.  This library will tolerate and
 //     correctly handle that.  However, because no vcode instruction may read
-//     or modify the reserved register, all such writes are "dead".  This,
-//     along with the fact that no vcode instruction may read or modify the
-//     reserved register, guarantees that the allocator can, if it wants,
-//     change the value in it at any time, without changing the behaviour of
-//     the final generated code.
+//     or modify the reserved register, all such writes are "dead".  This in
+//     turn guarantees that the allocator can, if it wants, change the value
+//     in it at any time, without changing the behaviour of the final
+//     generated code.
 //
 // Currently, the LinearScan algorithm may use the reserved registers.  The
 // Backtracking algorithm will ignore the hints and treat them as "normal"
