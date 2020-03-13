@@ -915,9 +915,9 @@ impl SanitizedInstRegUses {
 //   themselves
 //
 // * defines the size of the initial section of that mapping that is available
-// to the register allocator for use, so that it can treat the registers under
-// its control as a zero based, contiguous array.  This is important for its
-// efficiency.
+//   to the register allocator for use, so that it can treat the registers
+//   under its control as a zero based, contiguous array.  This is important
+//   for its efficiency.
 //
 // * gives meaning to Set<RealReg>, which otherwise would merely be a bunch of
 //   bits.

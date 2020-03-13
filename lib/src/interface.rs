@@ -6,6 +6,13 @@
 #![allow(non_camel_case_types)]
 
 //! This is the top level interface for the regalloc library.
+//!
+//! We have tried hard to make the library's interface as simple as possible,
+//! yet flexible enough that the allocators it implements can provide good
+//! quality allocations in reasonable time.  Nevertheless, there is still
+//! significant semantic complexity in parts of the interface.  If you intend
+//! to use this library in your own code, you would be well advised to read
+//! the comments in this file very carefully.
 
 use std::fmt;
 
@@ -42,7 +49,84 @@ pub use crate::data_structures::SpillSlot;
 
 // The "register universe".  This describes the registers available to the
 // allocator.  There are very strict requirements on the structure of the
-// universe.  See comments on the definition point for details.
+// universe.  If you fail to observe these requirements, either the allocator
+// itself, or the resulting code, will fail in mysterious ways.  There are
+// lower level details on the definition of RealRegUniverse, which you also
+// need to take note of.  The overall contract is as follows.
+//
+// === (1) === Basic structure ===
+//
+// A "register universe" is a read-only structure that contains all
+// information about real registers on a given host.  For each register class
+// (RegClass) supported by the target, the universe must provide a vector of
+// registers that the allocator may use.
+//
+// The universe may also list other registers that the incoming
+// virtual-registerised code may use, but which are not available for use by
+// the allocator.  Indeed, the universe *must* list *all* registers that will
+// ever be mentioned in the incoming code.  Failure to do so will cause the
+// allocator's analysis phase to assert.
+//
+// === (2) === Ordering of registers within each class
+//
+// The ordering of available registers within these vectors does not affect
+// the correctness of the final allocation.  However, it will affect the
+// quality of final allocation.  Clients are recommended to list, for each
+// class, the callee-saved registers first, and the caller-saved registers
+// after that.  The currently supported allocation algorithms (Backtracking
+// and LinearScan) will try to use the first available registers in each
+// class, that is to say, callee-saved ones first.  The purpose of this is to
+// try and minimise spilling around calls by avoiding use of caller-saved ones
+// if possible.
+//
+// There is a twist here, however.  The abovementioned heuristic works well
+// for non-leaf functions (functions that contain at least one call).
+// However, for leaf functions, we would prefer to use the caller-saved
+// registers first, since doing so has potential to minimise the number of
+// registers that must be saved/restored in the prologue and epilogue.
+// Presently there is no way to tell this interface that the function is a
+// leaf function, and so the only way to get optimal code in this case is to
+// present a universe with the registers listed in the opposite order.
+//
+// This is of course inconvenient for the caller, since it requires
+// maintenance of two separate universes.  In the future we will add a boolean
+// parameter to the top level function |allocate_registers| that indicates
+// that whether or not the function is a leaf function.
+//
+// === (3) === The "reserved register" ===
+//
+// Some allocation algorithms, particularly linear-scan, may need to have a
+// scratch register available for their own use.  The register universe must
+// nominate a scratch register in each class, specified in
+// RealRegUniverse::allocable_by_class[..]::Some(suggested_scratch).  The
+// choice of scratch register is influenced by the architecture, the ABI, and
+// client-side fixed-use register conventions.  There rules are as follows:
+//
+// (1) For each class, the universe must offer a reserved register.
+//
+// (2) The reserved register may not have any implied-by-the architecture
+//     reads/modifies/writes for any instruction in the vcode.  Unfortunately
+//     there is no easy way for this library to check that.
+//
+// (3) The reserved register must not have any reads or modifies by any
+//     instruction in the vcode.  In other words, it must not appear in either
+//     the Use or Modify sets returned by Function::get_regs, for any
+//     instruction.  If it does appear, this is an error on the client's part,
+//     and the allocator is allowed to assert/fail.
+//
+// (4) The reserved reg may be mentioned as written by instructions in the
+//     vcode, though -- in other words it may appear in the Defined sets
+//     created by Function::get_regs.  This library will tolerate and
+//     correctly handle that.  However, because no vcode instruction may read
+//     or modify the reserved register, all such writes are "dead".  This,
+//     along with the fact that no vcode instruction may read or modify the
+//     reserved register, guarantees that the allocator can, if it wants,
+//     change the value in it at any time, without changing the behaviour of
+//     the final generated code.
+//
+// Currently, the LinearScan algorithm may use the reserved registers.  The
+// Backtracking algorithm will ignore the hints and treat them as "normal"
+// allocatable registers.
 
 pub use crate::data_structures::RealRegUniverse;
 pub use crate::data_structures::RegClassInfo;
