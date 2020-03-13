@@ -436,7 +436,7 @@ fn get_sanitized_reg_uses<F: Function>(
     let iru = f.get_regs(inst); // AUDITED
     let mut sru =
       SanitizedInstRegUses::create_by_sanitizing(&iru, reg_universe)?;
-    sru.san_modified.remove(&scratch_set);
+    sru.san_defined.remove(&scratch_set);
     san_reg_uses.push(sru);
   }
   Ok(san_reg_uses)
