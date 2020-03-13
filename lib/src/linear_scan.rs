@@ -1151,21 +1151,39 @@ fn next_pos(mut pos: InstPoint) -> InstPoint {
 fn split_and_spill<F: Function>(
   state: &mut State<F>, id: IntId, split_pos: InstPoint,
 ) {
-  let last_use = last_use(
+  let child = match last_use(
     &state.intervals,
     id,
     split_pos,
     &state.reg_uses,
     &state.fragments,
-  )
-  .expect("should have last use for split_and_spill");
-  debug!("split_and_spill: spill between {:?} and {:?}", last_use, split_pos);
+  ) {
+    Some(last_use) => {
+      debug!(
+        "split_and_spill {:?}: spill between {:?} and {:?}",
+        id, last_use, split_pos
+      );
 
-  let optimal_pos =
-    find_optimal_split_pos(state, id, next_pos(last_use), split_pos);
+      let optimal_pos =
+        find_optimal_split_pos(state, id, next_pos(last_use), split_pos);
 
-  let child = split(state, id, optimal_pos);
-  state.spill(child);
+      let child = split(state, id, optimal_pos);
+      state.spill(child);
+      child
+    }
+
+    None => {
+      // The current interval has no uses before the split position, it can
+      // safely be spilled.
+      debug!(
+        "split_and_spill {:?}: spilling it since no uses before split position",
+        id
+      );
+
+      state.spill(id);
+      id
+    }
+  };
 
   // Split until the next register use.
   match next_use(
