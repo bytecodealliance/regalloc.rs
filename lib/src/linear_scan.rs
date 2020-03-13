@@ -1484,7 +1484,23 @@ fn resolve_moves<F: Function>(
     let parent_id = match interval.parent {
       Some(pid) => pid,
       None => {
-        debug_assert!(intervals.location(interval.id).spill().is_none());
+        // In unreachable code, it's possible that a given interval has no
+        // parents and is assigned to a stack location for its whole lifetime.
+        //
+        // In reachable code, the analysis only create intervals for virtual
+        // registers with at least one register use, so a parentless interval (=
+        // hasn't ever been split) can't live in a stack slot.
+        debug_assert!(
+          intervals.location(interval.id).spill().is_none()
+            || (next_use(
+              intervals,
+              interval.id,
+              InstPoint::min_value(),
+              reg_uses,
+              fragments
+            )
+            .is_none())
+        );
         continue;
       }
     };
