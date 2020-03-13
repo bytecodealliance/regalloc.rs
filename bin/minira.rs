@@ -553,11 +553,10 @@ fn lsra_qsort_cant() {
 fn lsra_qsort_4() {
   test_utils::check_lsra("qsort", 4, 0);
 }
-// TODO Have LSRA pass these tests.
-//#[test]
-//fn lsra_qsort_5() {
-//test_utils::check_lsra("qsort", 5, 0);
-//}
+#[test]
+fn lsra_qsort_5() {
+  test_utils::check_lsra("qsort", 5, 0);
+}
 #[test]
 fn lsra_qsort_6() {
   test_utils::check_lsra("qsort", 6, 0);

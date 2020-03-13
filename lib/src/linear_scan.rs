@@ -581,26 +581,10 @@ fn try_allocate_reg<F: Function>(
   );
 
   if state.intervals.end(id, &state.fragments) >= best_pos {
-    // Partial solution: the register is available until best_pos, and is
-    // unavailable later. It must be split before the best position.
-    let split_pos = match last_use(
-      &state.intervals,
-      id,
-      best_pos,
-      &state.reg_uses,
-      &state.fragments,
-    ) {
-      Some(last_use) => last_use,
-      None => best_pos,
-    };
-
-    if split_pos <= state.intervals.start(id, &state.fragments) {
-      debug!("try_allocate_reg: partial cover: nowhere to split");
-      return false;
-    }
-
-    let new_int = split(state, id, split_pos);
-    state.insert_unhandled(new_int);
+    // TODO Here, it should be possible to split the interval between the start
+    // (or more precisely, the last use before best_pos) and the best_pos value.
+    // See also issue #32.
+    return false;
   }
 
   // At least a partial match: allocate.
@@ -812,6 +796,8 @@ fn allocate_blocked_reg<F: Function>(
     if block_pos[best_reg] <= state.intervals.end(cur_id, &state.fragments) {
       debug!("allocate_blocked_reg: fixed conflict! blocked at {:?}, while ending at {:?}",
           block_pos[best_reg], state.intervals.end(cur_id, &state.fragments));
+      // TODO Here, it should be possible to only split the interval, and not
+      // spill it. See also issue #32.
       split_and_spill(state, cur_id, block_pos[best_reg]);
     }
 
@@ -846,8 +832,6 @@ fn allocate_blocked_reg<F: Function>(
             // (otherwise it'd be active), so it's a great split position.
             split_and_spill(state, id, start_pos);
           }
-          // TODO
-          // break;
         }
       }
     }
