@@ -773,7 +773,10 @@ fn allocate_blocked_reg<F: Function>(
     match best {
       Some(best) => *best.0,
       None => {
-        return Err(RegAllocError::OutOfRegisters(reg_class));
+        return Err(RegAllocError::Other(format!(
+          "the {:?} register class has no registers!",
+          reg_class
+        )));
       }
     }
   };
