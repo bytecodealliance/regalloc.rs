@@ -7,7 +7,7 @@
 
 //! Core implementation of the backtracking allocator.
 
-use log::debug;
+use log::{debug, info};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
@@ -24,71 +24,13 @@ use crate::inst_stream::{
   RangeAllocations,
 };
 use crate::interface::{Function, RegAllocError, RegAllocResult};
-use crate::trees_maps_sets::{AVLTag, AVLTree, AVL_NULL};
+use crate::trees_maps_sets::{
+  AVLTag, AVLTree, ToFromU32, UnionFind, UnionFindEquivClasses, AVL_NULL,
+};
 
 // DEBUGGING: set to true to cross-check the CommitmentMap machinery.
 
 const CROSSCHECK_CM: bool = false;
-
-//=============================================================================
-// Union-find for sets of VirtualRangeIxs.  This is support of coalescing.
-//
-// This is a ultra-lame stand-in implementation.  It should be replaced by
-// something efficient, such as from Chapter 8 of "Data Structures and
-// Algorithm Analysis in C" (Mark Allen Weiss, 1992).
-
-struct UnionFindVLRIx {
-  sets: Vec<Set<VirtualRangeIx>>,
-}
-impl UnionFindVLRIx {
-  fn new(n_elems: u32) -> Self {
-    let mut sets = Vec::new();
-    for i in 0..n_elems {
-      sets.push(Set::unit(VirtualRangeIx::new(i)));
-    }
-    UnionFindVLRIx { sets }
-  }
-  fn union(&mut self, vlrix1: VirtualRangeIx, vlrix2: VirtualRangeIx) {
-    let mut ix1 = None;
-    let mut ix2 = None;
-    for i in 0..self.sets.len() {
-      if self.sets[i].contains(vlrix1) {
-        ix1 = Some(i);
-        break;
-      }
-    }
-    for i in 0..self.sets.len() {
-      if self.sets[i].contains(vlrix2) {
-        ix2 = Some(i);
-        break;
-      }
-    }
-    debug_assert!(ix1.is_some() && ix2.is_some());
-    let mut ix1u = ix1.unwrap();
-    let mut ix2u = ix2.unwrap();
-    if ix1u == ix2u {
-      return;
-    }
-    if ix1u > ix2u {
-      let tmp = ix1u;
-      ix1u = ix2u;
-      ix2u = tmp;
-    }
-    debug_assert!(ix1u < ix2u);
-    debug_assert!(self.sets.len() >= 2);
-    let tmp_set2 = self.sets[ix2u].clone();
-    self.sets[ix1u].union(&tmp_set2);
-    self.sets.remove(ix2u);
-  }
-  fn find(&self, vlrix: VirtualRangeIx) -> Set<VirtualRangeIx> {
-    for i in 0..self.sets.len() {
-      if self.sets[i].contains(vlrix) {
-        return self.sets[i].clone();
-      }
-    }
-    panic!("should not be asked to find non-existent VLRIx")
-  }
-}
 
 //=============================================================================
 // Analysis in support of copy coalescing.
@@ -130,14 +72,27 @@ impl Hint {
   }
 }
 
+// We need this in order to construct a UnionFind<VirtualRangeIx>.
+impl ToFromU32 for VirtualRangeIx {
+  fn to_u32(x: VirtualRangeIx) -> u32 {
+    x.get()
+  }
+  fn from_u32(x: u32) -> VirtualRangeIx {
+    VirtualRangeIx::new(x)
+  }
+}
+
 fn do_coalescing_analysis<F: Function>(
   func: &F, rlr_env: &TypedIxVec<RealRangeIx, RealRange>,
   vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
   est_freqs: &TypedIxVec<BlockIx, u32>,
-) -> (TypedIxVec<VirtualRangeIx, Vec<Hint>>, UnionFindVLRIx) {
-  debug!("");
-  debug!("do_coalescing_analysis: begin");
+) -> (
+  TypedIxVec<VirtualRangeIx, Vec<Hint>>,
+  UnionFindEquivClasses<VirtualRangeIx>,
+) {
+  info!("");
+  info!("do_coalescing_analysis: begin");
   // We have in hand the virtual live ranges.  Each of these carries its
   // associated vreg.  So in effect we have a VLR -> VReg mapping.  We now
   // invert that, so as to generate a mapping from VRegs to their containing
@@ -288,7 +243,7 @@ fn do_coalescing_analysis<F: Function>(
   let mut hints = TypedIxVec::<VirtualRangeIx, Vec<Hint>>::new();
   hints.resize(vlr_env.len(), vec![]);
 
-  let mut vlrEquivClasses = UnionFindVLRIx::new(vlr_env.len());
+  let mut vlrEquivClassesUF = UnionFind::<VirtualRangeIx>::new(vlr_env.len());
 
   for (rDst, rSrc, iix, eef) in connectedByMoves {
     //println!("QQQQ at {:?} {:?} <- {:?} (eef {})", iix, rDst, rSrc, eef);
@@ -309,7 +264,7 @@ fn do_coalescing_analysis<F: Function>(
           // arbitrarily many times.
           hints[vlrSrc].push(Hint::SameAs(vlrDst, eef));
           hints[vlrDst].push(Hint::SameAs(vlrSrc, eef));
-          vlrEquivClasses.union(vlrDst, vlrSrc);
+          vlrEquivClassesUF.union(vlrDst, vlrSrc);
         }
       }
       (true, false) => {
@@ -351,8 +306,11 @@ fn do_coalescing_analysis<F: Function>(
       .sort_by(|h1, h2| h2.get_weight().partial_cmp(&h1.get_weight()).unwrap());
   }
 
-  debug!("do_coalescing_analysis: end");
-  debug!("");
+  let vlrEquivClasses: UnionFindEquivClasses<VirtualRangeIx> =
+    vlrEquivClassesUF.get_equiv_classes();
+
+  info!("do_coalescing_analysis: end");
+  info!("");
   debug!("Coalescing hints:");
   let mut n = 0;
   for hints_for_one_vlr in hints.iter() {
@@ -360,11 +318,18 @@ fn do_coalescing_analysis<F: Function>(
     for hint in hints_for_one_vlr {
       s = s + &show_hint(hint) + &" ".to_string();
     }
-    debug!("  {:<4?}   {}", VirtualRangeIx::new(n), s);
+    debug!("  hintsfor {:<4?} = {}", VirtualRangeIx::new(n), s);
     n += 1;
   }
-  for eclass in &vlrEquivClasses.sets {
-    debug!("  eclass {:?}", eclass);
+
+  for n in 0..vlr_env.len() {
+    let vlrix = VirtualRangeIx::new(n);
+    let mut tmpvec = vec![];
+    for elem in vlrEquivClasses.iter_for_equiv_class_of(vlrix) {
+      tmpvec.reverse();
+      tmpvec.push(elem);
+    }
+    debug!("  eclassof {:?} = {:?}", vlrix, tmpvec);
   }
 
   (hints, vlrEquivClasses)
@@ -1508,12 +1473,14 @@ pub fn alloc_main<F: Function>(
   let coalescing_info =
     do_coalescing_analysis(func, &rlr_env, &vlr_env, &frag_env, &est_freqs);
   let hints: TypedIxVec<VirtualRangeIx, Vec<Hint>> = coalescing_info.0;
-  let vlrEquivClasses: UnionFindVLRIx = coalescing_info.1;
+  let vlrEquivClasses: UnionFindEquivClasses<VirtualRangeIx> =
+    coalescing_info.1;
   debug_assert!(hints.len() == vlr_env.len());
 
   // -------- Alloc main --------
 
   // Create initial state
+  info!("alloc_main: begin");
 
   // This is fully populated by the ::new call.
   let mut prioQ = VirtualRangePrioQ::new(&vlr_env);
@@ -1569,6 +1536,8 @@ pub fn alloc_main<F: Function>(
 
   // A handy constant
   let empty_Set_VirtualRangeIx = Set::<VirtualRangeIx>::empty();
+
+  info!("alloc_main:   main allocation loop: begin");
 
   // ======== BEGIN Main allocation loop ========
   'main_allocation_loop: loop {
@@ -1653,11 +1622,20 @@ pub fn alloc_main<F: Function>(
       // candidates.  Hence we need to iterate over the equivalence class and
       // "round up the secondary candidates."
       let n_primary_cands = hinted_regs.len();
-      let curr_vlr_eclass = vlrEquivClasses.find(curr_vlrix);
+
+      // Find the equivalence class set for |curr_vlrix|.  We'll need it
+      // later.
+      let mut curr_vlr_eclass = Set::<VirtualRangeIx>::empty();
+      for vlrix in vlrEquivClasses.iter_for_equiv_class_of(curr_vlrix) {
+        curr_vlr_eclass.insert(vlrix);
+      }
       assert!(curr_vlr_eclass.contains(curr_vlrix));
-      for vlrix in curr_vlr_eclass.iter() {
-        if *vlrix != curr_vlrix {
-          if let Some(rreg) = vlr_env[*vlrix].rreg {
+      mb_curr_vlr_eclass = Some(curr_vlr_eclass);
+
+      // And work through it to pick up any rreg hints now.
+      for vlrix in vlrEquivClasses.iter_for_equiv_class_of(curr_vlrix) {
+        if vlrix != curr_vlrix {
+          if let Some(rreg) = vlr_env[vlrix].rreg {
             // Add |rreg| as a cand, if we don't already have it.
             if !hinted_regs.iter().any(|r| *r == rreg) {
               hinted_regs.push(rreg);
@@ -1665,7 +1643,7 @@ pub fn alloc_main<F: Function>(
           }
         }
       }
-      mb_curr_vlr_eclass = Some(curr_vlr_eclass);
+
       // Sort the secondary cands, so as to try and impose more consistency
       // across the group.  I don't know if this is worthwhile, but it seems
       // sensible.
@@ -2052,6 +2030,10 @@ pub fn alloc_main<F: Function>(
   }
   // ======== END Main allocation loop ========
 
+  info!("alloc_main:   main allocation loop: end");
+
+  info!("alloc_main:   create spills_n_reloads");
+
   // Reload and spill instructions are missing.  To generate them, go through
   // the "edit list", which contains info on both how to generate the
   // instructions, and where to insert them.
@@ -2132,6 +2114,8 @@ pub fn alloc_main<F: Function>(
   // not take account of spill or reload instructions.  Dealing with those
   // is relatively simple and happens later.
 
+  info!("alloc_main:   create frag_map");
+
   let mut frag_map = RangeAllocations::new();
   // For each real register under our control ..
   for i in 0..reg_universe.allocable {
@@ -2149,7 +2133,9 @@ pub fn alloc_main<F: Function>(
     }
   }
 
-  edit_inst_stream(
+  info!("alloc_main:   edit_inst_stream");
+
+  let res = edit_inst_stream(
     func,
     spills_n_reloads,
     frag_map,
@@ -2157,5 +2143,9 @@ pub fn alloc_main<F: Function>(
     &reg_universe,
     next_spill_slot.get(),
     use_checker,
-  )
+  );
+
+  info!("alloc_main: end");
+
+  res
 }

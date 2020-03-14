@@ -5,7 +5,7 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
-use log::debug;
+use log::{debug, info};
 use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 
@@ -358,8 +358,8 @@ fn calc_dominators(
   pred_map: &TypedIxVec<BlockIx, Set<BlockIx>>, post_ord: &Vec<BlockIx>,
   start: BlockIx,
 ) -> TypedIxVec<BlockIx, Set<BlockIx>> {
-  debug!("");
-  debug!("calc_dominators: begin");
+  info!("");
+  info!("  calc_dominators: begin");
   // FIXME: nice up the variable names (D, T, etc) a bit.
   let nBlocks = pred_map.len();
   let mut dom_map = TypedIxVec::<BlockIx, Set<BlockIx>>::new();
@@ -380,7 +380,7 @@ fn calc_dominators(
     let mut nnn = 0;
     loop {
       nnn += 1;
-      debug!("calc_dominators:   outer loop {}", nnn);
+      info!("  calc_dominators:   outer loop {}", nnn);
       let mut change = false;
       for i in 0..nBlocks {
         // bixN travels in "reverse preorder"
@@ -404,7 +404,7 @@ fn calc_dominators(
       }
     }
   }
-  debug!("calc_dominators: end");
+  info!("  calc_dominators: end");
   dom_map
 }
 
@@ -450,8 +450,8 @@ fn get_sanitized_reg_uses<F: Function>(
 fn calc_def_and_use<F: Function>(
   f: &F, san_reg_uses: &TypedIxVec<InstIx, SanitizedInstRegUses>,
 ) -> (TypedIxVec<BlockIx, Set<Reg>>, TypedIxVec<BlockIx, Set<Reg>>) {
-  debug!("");
-  debug!("calc_def_and_use: begin");
+  info!("");
+  info!("  calc_def_and_use: begin");
   let mut def_sets = TypedIxVec::new();
   let mut use_sets = TypedIxVec::new();
   for b in f.blocks() {
@@ -484,7 +484,7 @@ fn calc_def_and_use<F: Function>(
     def_sets.push(def);
     use_sets.push(uce);
   }
-  debug!("calc_def_and_use: end");
+  info!("  calc_def_and_use: end");
   (def_sets, use_sets)
 }
 
@@ -494,8 +494,8 @@ fn calc_livein_and_liveout<F: Function>(
   f: &F, def_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>,
   use_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>, cfg_info: &CFGInfo,
 ) -> (TypedIxVec<BlockIx, Set<Reg>>, TypedIxVec<BlockIx, Set<Reg>>) {
-  debug!("");
-  debug!("calc_livein_and_liveout: begin");
+  info!("");
+  info!("  calc_livein_and_liveout: begin");
   let nBlocks = f.blocks().len() as u32;
   let empty = Set::<Reg>::empty();
 
@@ -560,7 +560,7 @@ fn calc_livein_and_liveout<F: Function>(
     );
   }
 
-  debug!("calc_livein_and_liveout: end");
+  info!("  calc_livein_and_liveout: end");
   (liveins, liveouts)
 }
 
@@ -836,6 +836,8 @@ fn get_RangeFrags<F: Function>(
   liveout_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>,
   san_reg_uses: &TypedIxVec<InstIx, SanitizedInstRegUses>,
 ) -> (Map<Reg, Vec<RangeFragIx>>, TypedIxVec<RangeFragIx, RangeFrag>) {
+  info!("");
+  info!("  get_RangeFrags: begin");
   debug_assert!(livein_sets_per_block.len() == f.blocks().len() as u32);
   debug_assert!(liveout_sets_per_block.len() == f.blocks().len() as u32);
   let mut resMap = Map::<Reg, Vec<RangeFragIx>>::default();
@@ -851,6 +853,7 @@ fn get_RangeFrags<F: Function>(
       &mut resFEnv,
     );
   }
+  info!("  get_RangeFrags: end");
   (resMap, resFEnv)
 }
 
@@ -865,8 +868,8 @@ fn merge_RangeFrags(
   TypedIxVec<RealRangeIx, RealRange>,
   TypedIxVec<VirtualRangeIx, VirtualRange>,
 ) {
-  debug!("");
-  debug!("merge_RangeFrags: begin");
+  info!("");
+  info!("  merge_RangeFrags: begin");
   let mut resR = TypedIxVec::<RealRangeIx, RealRange>::new();
   let mut resV = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
   for (reg, all_frag_ixs_for_reg) in fragIx_vecs_per_reg.iter() {
@@ -986,7 +989,7 @@ fn merge_RangeFrags(
     // END merge |all_frag_ixs_for_reg| entries as much as possible
   }
 
-  debug!("merge_RangeFrags: end");
+  info!("  merge_RangeFrags: end");
   (resR, resV)
 }
 
@@ -1011,8 +1014,8 @@ fn set_VirtualRange_metrics(
   fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   estFreq: &TypedIxVec<BlockIx, u32>,
 ) {
-  debug!("");
-  debug!("set_VirtualRange_metrics: begin");
+  info!("");
+  info!("  set_VirtualRange_metrics: begin");
   for vlr in vlrs.iter_mut() {
     debug_assert!(vlr.size == 0 && vlr.spill_cost.is_zero());
     debug_assert!(vlr.rreg.is_none());
@@ -1048,7 +1051,7 @@ fn set_VirtualRange_metrics(
     tot_cost /= tot_size as f32;
     vlr.spill_cost = SpillCost::finite(tot_cost);
   }
-  debug!("set_VirtualRange_metrics: end");
+  info!("  set_VirtualRange_metrics: end");
 }
 
 #[inline(never)]
@@ -1071,6 +1074,8 @@ pub fn run_analysis<F: Function>(
   ),
   AnalysisError,
 > {
+  info!("run_analysis: begin");
+
   // See |get_sanitized_reg_uses| for the meaning of "sanitized".
   let san_reg_uses =
     get_sanitized_reg_uses(func, reg_universe, sanitize_scratch)
@@ -1218,6 +1223,9 @@ pub fn run_analysis<F: Function>(
   }
 
   debug_assert!(liveout_sets_per_block.len() == estFreqs.len());
+
+  info!("");
+  info!("run_analysis: end");
 
   Ok((
     san_reg_uses,
