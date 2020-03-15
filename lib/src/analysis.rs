@@ -17,6 +17,13 @@ use crate::data_structures::{
 };
 use crate::interface::Function;
 
+// DEBUGGING: set to true to cross-check the merge_RangeFrags machinery.
+
+const CROSSCHECK_MERGE: bool = false;
+
+//=============================================================================
+// Overall analysis return results
+
 #[derive(Clone, Debug)]
 pub enum AnalysisError {
   /// A critical edge from "from" to "to" has been found, and should have been
@@ -859,20 +866,34 @@ fn get_RangeFrags<F: Function>(
 
 //=============================================================================
 // Merging of RangeFrags, producing the final LRs, minus metrics
+// (SLOW reference implementation)
 
 #[inline(never)]
-fn merge_RangeFrags(
+fn merge_RangeFrags_SLOW(
   fragIx_vecs_per_reg: &Map<Reg, Vec<RangeFragIx>>,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>, cfg_info: &CFGInfo,
 ) -> (
   TypedIxVec<RealRangeIx, RealRange>,
   TypedIxVec<VirtualRangeIx, VirtualRange>,
 ) {
-  info!("");
-  info!("  merge_RangeFrags: begin");
+  let mut n_total_incoming_frags = 0;
+  for (_reg, all_frag_ixs_for_reg) in fragIx_vecs_per_reg.iter() {
+    n_total_incoming_frags += all_frag_ixs_for_reg.len();
+  }
+  info!("  merge_RangeFrags_SLOW: begin");
+  info!("    in: {} in frag_env", frag_env.len());
+  info!(
+    "    in: {} regs containing in total {} frags",
+    fragIx_vecs_per_reg.len(),
+    n_total_incoming_frags
+  );
+
   let mut resR = TypedIxVec::<RealRangeIx, RealRange>::new();
   let mut resV = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
   for (reg, all_frag_ixs_for_reg) in fragIx_vecs_per_reg.iter() {
+    let n_for_this_reg = all_frag_ixs_for_reg.len();
+    assert!(n_for_this_reg > 0);
+
     // BEGIN merge |all_frag_ixs_for_reg| entries as much as possible.
     // Each |state| entry has four components:
     //    (1) An is-this-entry-still-valid flag
@@ -989,7 +1010,258 @@ fn merge_RangeFrags(
     // END merge |all_frag_ixs_for_reg| entries as much as possible
   }
 
+  info!("    out: {} VLRs, {} RLRs", resV.len(), resR.len());
+  info!("  merge_RangeFrags_SLOW: end");
+  (resR, resV)
+}
+
+//=============================================================================
+// Merging of RangeFrags, producing the final LRs, minus metrics
+
+// HELPER FUNCTION
+fn create_and_add_Range(
+  resR: &mut TypedIxVec<RealRangeIx, RealRange>,
+  resV: &mut TypedIxVec<VirtualRangeIx, VirtualRange>, reg: Reg,
+  sorted_frags: SortedRangeFragIxs,
+) {
+  let size = 0;
+  // Set zero spill cost for now.  We'll fill it in for real later.
+  let spill_cost = SpillCost::zero();
+  if reg.is_virtual() {
+    resV.push(VirtualRange {
+      vreg: reg.to_virtual_reg(),
+      rreg: None,
+      sorted_frags,
+      size,
+      spill_cost,
+    });
+  } else {
+    resR.push(RealRange { rreg: reg.to_real_reg(), sorted_frags });
+  }
+}
+
+#[inline(never)]
+fn merge_RangeFrags(
+  fragIx_vecs_per_reg: &Map<Reg, Vec<RangeFragIx>>,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>, cfg_info: &CFGInfo,
+) -> (
+  TypedIxVec<RealRangeIx, RealRange>,
+  TypedIxVec<VirtualRangeIx, VirtualRange>,
+) {
+  let mut n_total_incoming_frags = 0;
+  for (_reg, all_frag_ixs_for_reg) in fragIx_vecs_per_reg.iter() {
+    n_total_incoming_frags += all_frag_ixs_for_reg.len();
+  }
+  info!("");
+  info!("  merge_RangeFrags: begin");
+  info!("    in: {} in frag_env", frag_env.len());
+  info!(
+    "    in: {} regs containing in total {} frags",
+    fragIx_vecs_per_reg.len(),
+    n_total_incoming_frags
+  );
+
+  let mut n_single_grps = 0;
+  let mut n_local_frags = 0;
+  let mut n_multi_grps = 0;
+  let mut sz_multi_grps = 0;
+
+  let mut resR = TypedIxVec::<RealRangeIx, RealRange>::new();
+  let mut resV = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
+
+  'per_reg_loop: for (reg, all_frag_ixs_for_reg) in fragIx_vecs_per_reg.iter() {
+    let n_frags_for_this_reg = all_frag_ixs_for_reg.len();
+    assert!(n_frags_for_this_reg > 0);
+
+    // Do some shortcutting.  First off, if there's only one frag for this
+    // reg, we can directly give it its own live range, and have done.
+    if n_frags_for_this_reg == 1 {
+      create_and_add_Range(
+        &mut resR,
+        &mut resV,
+        *reg,
+        SortedRangeFragIxs::unit(all_frag_ixs_for_reg[0], frag_env),
+      );
+      n_single_grps += 1;
+      continue 'per_reg_loop;
+    }
+
+    // BEGIN merge |all_frag_ixs_for_reg| entries as much as possible.
+    // Each |state| entry has four components:
+    //    (1) An is-this-entry-still-valid flag
+    //    (2) A set of RangeFragIxs.  These should refer to disjoint
+    //        RangeFrags.
+    //    (3) A set of blocks, which are those corresponding to (2)
+    //        that are LiveIn or Thru (== have an inbound value)
+    //    (4) A set of blocks, which are the union of the successors of
+    //        blocks corresponding to the (2) which are LiveOut or Thru
+    //        (== have an outbound value)
+    //
+    // but .. if we come across independents (RangeKind::Local), pull them out
+    // immediately.
+    struct MergeGroup {
+      valid: bool,
+      frag_ixs: Set<RangeFragIx>,
+      live_in_blocks: Set<BlockIx>,
+      succs_of_live_out_blocks: Set<BlockIx>,
+    }
+
+    let mut state = Vec::<MergeGroup>::new();
+
+    // Create the initial state by giving each RangeFragIx its own Vec, and
+    // tagging it with its interface blocks.
+    'per_frag_loop: for fix in all_frag_ixs_for_reg {
+      let frag = &frag_env[*fix];
+      // This frag is Local (standalone).  Give it its own Range and move on.
+      // This is an optimisation, but it's also necessary: the main
+      // fragment-merging logic in this loop relies on the fact that the
+      // fragments it is presented with are all either LiveIn, LiveOut or
+      // Thru.
+      if frag.kind == RangeFragKind::Local {
+        create_and_add_Range(
+          &mut resR,
+          &mut resV,
+          *reg,
+          SortedRangeFragIxs::unit(*fix, frag_env),
+        );
+        n_local_frags += 1;
+        continue 'per_frag_loop;
+      }
+      // This frag isn't Local (standalone) so we have process it the slow way.
+      let mut live_in_blocks = Set::<BlockIx>::empty();
+      let mut succs_of_live_out_blocks = Set::<BlockIx>::empty();
+      let frag_bix = frag.bix;
+      let frag_succ_bixes = &cfg_info.succ_map[frag_bix];
+      match frag.kind {
+        RangeFragKind::Local => {}
+        RangeFragKind::LiveIn => {
+          live_in_blocks.insert(frag_bix);
+        }
+        RangeFragKind::LiveOut => {
+          succs_of_live_out_blocks.union(frag_succ_bixes);
+        }
+        RangeFragKind::Thru => {
+          live_in_blocks.insert(frag_bix);
+          succs_of_live_out_blocks.union(frag_succ_bixes);
+        }
+      }
+
+      let valid = true;
+      let frag_ixs = Set::unit(*fix);
+      let mg = MergeGroup {
+        valid,
+        frag_ixs,
+        live_in_blocks,
+        succs_of_live_out_blocks,
+      };
+      state.push(mg);
+    }
+    n_multi_grps += 1;
+    sz_multi_grps += state.len();
+
+    // Iterate over |state|, merging entries as much as possible.  This
+    // is, unfortunately, quadratic.
+    let state_len = state.len();
+    loop {
+      let mut changed = false;
+
+      for i in 0..state_len {
+        if !state[i].valid {
+          continue;
+        }
+        for j in i + 1..state_len {
+          if !state[j].valid {
+            continue;
+          }
+          let do_merge = // frag group i feeds a value to group j
+                        state[i].succs_of_live_out_blocks
+                                .intersects(&state[j].live_in_blocks)
+                        || // frag group j feeds a value to group i
+                        state[j].succs_of_live_out_blocks
+                                .intersects(&state[i].live_in_blocks);
+          if do_merge {
+            let mut tmp_frag_ixs = state[i].frag_ixs.clone();
+            state[j].frag_ixs.union(&mut tmp_frag_ixs);
+            let tmp_libs = state[i].live_in_blocks.clone();
+            state[j].live_in_blocks.union(&tmp_libs);
+            let tmp_solobs = state[i].succs_of_live_out_blocks.clone();
+            state[j].succs_of_live_out_blocks.union(&tmp_solobs);
+            state[i].valid = false;
+            changed = true;
+          }
+        }
+      }
+
+      if !changed {
+        break;
+      }
+    }
+
+    // Harvest the merged RangeFrag sets from |state|, and turn them into
+    // RealRanges or VirtualRanges.
+    for MergeGroup { valid, frag_ixs, .. } in state {
+      if !valid {
+        continue;
+      }
+      let sorted_frags = SortedRangeFragIxs::new(&frag_ixs.to_vec(), &frag_env);
+      create_and_add_Range(&mut resR, &mut resV, *reg, sorted_frags);
+    }
+
+    // END merge |all_frag_ixs_for_reg| entries as much as possible
+  }
+
+  info!("    in: {} single groups", n_single_grps);
+  info!("    in: {} local frags in multi groups", n_local_frags);
+  info!(
+    "    in: {} multi groups, {} multi group total remaining size",
+    n_multi_grps, sz_multi_grps
+  );
+  info!("    out: {} VLRs, {} RLRs", resV.len(), resR.len());
   info!("  merge_RangeFrags: end");
+
+  if CROSSCHECK_MERGE {
+    info!("");
+    info!("  merge_RangeFrags: crosscheck: begin");
+    let (resRref, resVref) =
+      merge_RangeFrags_SLOW(fragIx_vecs_per_reg, frag_env, cfg_info);
+    assert!(resR.len() == resRref.len());
+    assert!(resV.len() == resVref.len());
+
+    // We need to check that resR comprises an identical set of RealRanges to
+    // resRref.  Problem is they are presented in some arbitrary order.  Hence
+    // we need to sort both, per some arbitrary total order, before comparing.
+    let mut resRc = resR.clone();
+    let mut resRrefc = resRref.clone();
+    resRc.sort_by(|x, y| RealRange::cmp_debug_only(x, y));
+    resRrefc.sort_by(|x, y| RealRange::cmp_debug_only(x, y));
+    for i in 0..resR.len() {
+      let rlrix = RealRangeIx::new(i);
+      assert!(resRc[rlrix].rreg == resRrefc[rlrix].rreg);
+      assert!(
+        resRc[rlrix].sorted_frags.frag_ixs
+          == resRrefc[rlrix].sorted_frags.frag_ixs
+      );
+    }
+    // Same deal for the VirtualRanges.
+    let mut resVc = resV.clone();
+    let mut resVrefc = resVref.clone();
+    resVc.sort_by(|x, y| VirtualRange::cmp_debug_only(x, y));
+    resVrefc.sort_by(|x, y| VirtualRange::cmp_debug_only(x, y));
+    for i in 0..resV.len() {
+      let vlrix = VirtualRangeIx::new(i);
+      assert!(resVc[vlrix].vreg == resVrefc[vlrix].vreg);
+      assert!(resVc[vlrix].rreg == resVrefc[vlrix].rreg);
+      assert!(
+        resVc[vlrix].sorted_frags.frag_ixs
+          == resVrefc[vlrix].sorted_frags.frag_ixs
+      );
+      assert!(resVc[vlrix].size == resVrefc[vlrix].size);
+      assert!(resVc[vlrix].spill_cost.is_zero());
+      assert!(resVrefc[vlrix].spill_cost.is_zero());
+    }
+    info!("  merge_RangeFrags: crosscheck: end");
+  }
+
   (resR, resV)
 }
 

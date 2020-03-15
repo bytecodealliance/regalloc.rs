@@ -324,6 +324,9 @@ where
   pub fn remove(&mut self, idx: TyIx) -> Ty {
     self.vek.remove(idx.into() as usize)
   }
+  pub fn sort_by<F: FnMut(&Ty, &Ty) -> Ordering>(&mut self, compare: F) {
+    self.vek.sort_by(compare)
+  }
 }
 
 impl<TyIx, Ty> Index<TyIx> for TypedIxVec<TyIx, Ty>
@@ -1366,10 +1369,14 @@ impl RangeFrag {
 pub struct SortedRangeFragIxs {
   pub frag_ixs: Vec<RangeFragIx>,
 }
-
 impl fmt::Debug for SortedRangeFragIxs {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     self.frag_ixs.fmt(fmt)
+  }
+}
+impl SortedRangeFragIxs {
+  pub fn cmp_debug_only(&self, other: &SortedRangeFragIxs) -> Ordering {
+    self.frag_ixs.cmp(&other.frag_ixs)
   }
 }
 
@@ -1503,6 +1510,18 @@ impl SpillCost {
       (SpillCost::Finite(c1), SpillCost::Finite(c2)) => c1 < c2,
     }
   }
+  pub fn partial_cmp_debug_only(&self, other: &Self) -> Option<Ordering> {
+    // NB!  This is only for debugging; it serves only to give an arbitrary
+    // structural partial ordering on |SpillCost| so it can participate in
+    // sorting.  The induced ordering should not be used to make any
+    // judgements about spill costs.
+    match (self, other) {
+      (SpillCost::Infinite, SpillCost::Infinite) => Some(Ordering::Equal),
+      (SpillCost::Finite(_), SpillCost::Infinite) => Some(Ordering::Less),
+      (SpillCost::Infinite, SpillCost::Finite(_)) => Some(Ordering::Greater),
+      (SpillCost::Finite(c1), SpillCost::Finite(c2)) => c1.partial_cmp(c2),
+    }
+  }
   pub fn add(&mut self, other: &Self) {
     match (*self, other) {
       (SpillCost::Finite(c1), SpillCost::Finite(c2)) => {
@@ -1570,6 +1589,14 @@ impl fmt::Debug for RealRange {
     write!(fmt, "(RR: {:?}, {:?})", self.rreg, self.sorted_frags)
   }
 }
+impl RealRange {
+  pub fn cmp_debug_only(&self, other: &RealRange) -> Ordering {
+    match self.rreg.cmp(&other.rreg) {
+      Ordering::Equal => self.sorted_frags.cmp_debug_only(&other.sorted_frags),
+      oth1 => oth1,
+    }
+  }
+}
 
 // VirtualRanges are live ranges for virtual regs (VirtualRegs).  This does
 // carry metrics info and also the identity of the RealReg to which it
@@ -1585,7 +1612,6 @@ pub struct VirtualRange {
   pub size: u16,
   pub spill_cost: SpillCost,
 }
-
 impl fmt::Debug for VirtualRange {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     write!(fmt, "(VR: {:?},", self.vreg)?;
@@ -1597,6 +1623,28 @@ impl fmt::Debug for VirtualRange {
       " s={}, c={:?}, {:?})",
       self.size, self.spill_cost, self.sorted_frags
     )
+  }
+}
+impl VirtualRange {
+  pub fn cmp_debug_only(&self, other: &VirtualRange) -> Ordering {
+    match self.vreg.cmp(&other.vreg) {
+      Ordering::Equal => match self.rreg.cmp(&other.rreg) {
+        Ordering::Equal => {
+          match self.sorted_frags.cmp_debug_only(&other.sorted_frags) {
+            Ordering::Equal => match self.size.cmp(&other.size) {
+              Ordering::Equal => self
+                .spill_cost
+                .partial_cmp_debug_only(&other.spill_cost)
+                .unwrap(),
+              oth4 => oth4,
+            },
+            oth3 => oth3,
+          }
+        }
+        oth2 => oth2,
+      },
+      oth1 => oth1,
+    }
   }
 }
 
