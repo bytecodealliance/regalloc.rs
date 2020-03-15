@@ -46,13 +46,18 @@ impl ToFromU32 for u32 {
 // This is a fast union-find implementation for "T: ToFromU32" items in some
 // dense range [0, N-1].  The allowed operations are:
 //
-// * create a new |UnionFind|er
+// (1) create a new |UnionFind|er
 //
-// * mark two elements as being in the same equivalence class
+// (2) mark two elements as being in the same equivalence class
 //
-// * get the equivalence classes wrapped up in an opaque structure
-//   |UnionFindEquivClasses|, which makes it possible to cheaply find and
-//   iterate through equivalence classes.
+// (3) get the equivalence classes wrapped up in an opaque structure
+//     |UnionFindEquivClasses|, which makes it possible to cheaply find and
+//     iterate through the equivalence class of any item.
+//
+// (4) get an iterator over the "equivalence class leaders".  Iterating this
+//     produces one value from each equivalence class.  By presenting each of
+//     these to (3), it is possible to enumerate all the equivalence classes
+//     exactly once.
 
 pub struct UnionFind<T: ToFromU32> {
   // These are the trees that we are building.  A value that is negative means
@@ -76,13 +81,13 @@ pub struct UnionFind<T: ToFromU32> {
 const UF_MAX_SIZE: u32 = 0x7FFF_FFF0;
 
 impl<T: ToFromU32> UnionFind<T> {
-  pub fn new(size: u32) -> Self {
+  pub fn new(size: usize) -> Self {
     // Test a slightly conservative limit to avoid any off-by-one errors.
-    if size > UF_MAX_SIZE {
+    if size > UF_MAX_SIZE as usize {
       panic!("UnionFind::new: too many elements; max = 2^31 - 16.");
     }
     let mut parent_or_size = Vec::<i32>::new();
-    parent_or_size.resize(size as usize, -1);
+    parent_or_size.resize(size, -1);
     Self { parent_or_size, anchor: PhantomData }
   }
 
@@ -192,10 +197,10 @@ impl<T: ToFromU32> UnionFind<T> {
   // requirement.
   pub fn get_equiv_classes(&mut self) -> UnionFindEquivClasses<T> {
     let nElemsUSize = self.parent_or_size.len();
-    // The construction algorithm only cares that no element has the value
-    // UFEC_NULL.  The union-find machinery, that builds |parent_or_size| that
-    // we read here, however relies on a tighter bound, which which we
-    // reiterate here:
+    // The construction algorithm requires that all elements have a value
+    // strictly less than 2^31.  The union-find machinery, that builds
+    // |parent_or_size| that we read here, however relies on a slightly
+    // tighter bound, which which we reiterate here due to general paranoia:
     assert!(nElemsUSize < UF_MAX_SIZE as usize);
     let nElems = nElemsUSize as u32;
 
@@ -211,22 +216,49 @@ impl<T: ToFromU32> UnionFind<T> {
     //
     // When we are finished, |lists| will contain M independent linked lists,
     // each of which represents one equivalence class, and which is terminated
-    // by UFEC_NULL.  And |heads| will contain a number, for each elem in [0,
-    // N-1], which gives the index in |lists| of the starting point for that
-    // elem's equivalence class.  This makes it possible to find the
-    // equivalence class for any element in O(1) time and to iterate over its
-    // elements in time linear in the size of the class.
+    // by UFEC_NULL.  And |heads| is used to point to the starting point of
+    // each elem's equivalence class, as follows:
     //
-    // The construction algorithm requires 3 forward passes over
-    // |parent_or_size|.  In the first two passes, we will use |heads|
-    // differently than described in the previous paragraph.  The third pass
-    // fixes that, producing the end result.
+    // * if heads[elem][bit 31] == 1, then heads[i][bits 30:0] contain the
+    //   index in lists[] of the first element in |elem|s equivalence class.
+    //
+    // * if heads[elem][bit 31] == 0, then heads[i][bits 30:0] contain tell us
+    //   what |elem|s equivalence class leader is.  That is, heads[i][bits
+    //   30:0] tells us the index in |heads| of the entry that contains the
+    //   first element in |elem|s equivalence class.
+    //
+    // With this arrangement, we can:
+    //
+    // * detect whether |elem| is an equivalence class leader, by inspecting
+    //   heads[elem][bit 31]
+    //
+    // * find the start of |elem|s equivalence class list, either by using
+    //   heads[elem][bits 30:0] directly if heads[elem][bit 31] == 1, or
+    //   using a single indirection if heads[elem][bit 31] == 0.
+    //
+    // For a universe of size N, this makes it possible to:
+    //
+    // * find the equivalence class list of any elem in O(1) time.
+    //
+    // * find and iterate through any single equivalence class in time O(1) +
+    //   O(size of the equivalence class).
+    //
+    // * find all the equivalence class headers in O(N) time.
+    //
+    // * find all the equivalence class headers, and then iterate through each
+    //   equivalence class exactly once, in time k1.O(N) + k2.O(N).  The first
+    //   term is the cost of finding all the headers.  The second term is the
+    //   cost of visiting all elements of each equivalence class exactly once.
+    //
+    // The construction algorithm requires two forward passes over
+    // |parent_or_size|.
     //
     // In the first pass, we visit each element.  If a element is a tree root,
     // its |heads| entry is left at UFEC_NULL.  If a element isn't a tree
-    // root, we use |find| to find the root element, and set |heads| to be the
-    // tree root.  Hence, after the first pass, |heads| maps each non-root
-    // element to its "equivalence class leader".
+    // root, we use |find| to find the root element, and set
+    // |heads[elem][30:0]| to be the tree root, and heads[elem][31] to 0.
+    // Hence, after the first pass, |heads| maps each non-root element to its
+    // equivalence class leader.
     //
     // The second pass builds the lists.  We again visit each element.  If a
     // element is a tree root, it is added as a list element, and its |heads|
@@ -239,21 +271,18 @@ impl<T: ToFromU32> UnionFind<T> {
     // non-root elements is unchanged from the first pass, that is, it points
     // to the |head| entry for that element's root element.
     //
-    // The third pass shorts out those non-root indirections.  We visit each
-    // element.  Root elements are ignored.  For a non-root elements, we its
-    // |head| entry so as to point directly at the |lists| entry that is its
-    // equivalance class.  Hence, after the third pass, all |heads| entries
-    // point directly at the equivalence class (list) for that entry, and we
-    // are good to go.
-    //
-    // I tried to figure out how to do this in only two passes, but failed.
+    // Note that the heads[] entry for any class leader (tree root) can never
+    // be UFEC_NULL, since all elements must at least be in an equivalence
+    // class of size 1.  Hence there is no confusion possible resulting from
+    // using the heads bit 31 entries as a direct/indirect flag.
 
     // First pass
     for i in 0..nElems {
       if self.parent_or_size[i as usize] >= 0 {
         // i is non-root
-        let root_i = self.find(i);
-        heads[i as usize] = root_i;
+        let root_i: u32 = self.find(i);
+        assert!(root_i < 0x8000_0000u32);
+        heads[i as usize] = root_i; // .direct flag == 0
       }
     }
 
@@ -262,40 +291,52 @@ impl<T: ToFromU32> UnionFind<T> {
     for i in 0..nElems {
       if self.parent_or_size[i as usize] < 0 {
         // i is root
-        lists[list_bump as usize] = LLElem { elem: i, tail: heads[i as usize] };
-        heads[i as usize] = list_bump;
+        lists[list_bump as usize] = LLElem {
+          elem: i,
+          tail: if heads[i as usize] == UFEC_NULL {
+            UFEC_NULL
+          } else {
+            heads[i as usize] & 0x7FFF_FFFF
+          },
+        };
+        assert!(list_bump < 0x8000_0000u32);
+        heads[i as usize] = list_bump | 0x8000_0000u32; // .direct flag == 1
         list_bump += 1;
       } else {
         // i is non-root
         let i_root = heads[i as usize];
-        lists[list_bump as usize] =
-          LLElem { elem: i, tail: heads[i_root as usize] };
-        heads[i_root as usize] = list_bump;
+        lists[list_bump as usize] = LLElem {
+          elem: i,
+          tail: if heads[i_root as usize] == UFEC_NULL {
+            UFEC_NULL
+          } else {
+            heads[i_root as usize] & 0x7FFF_FFFF
+          },
+        };
+        assert!(list_bump < 0x8000_0000u32);
+        heads[i_root as usize] = list_bump | 0x8000_0000u32; // .direct flag == 1
         list_bump += 1;
       }
     }
     assert!(list_bump == nElems);
 
-    // Third pass
-    for i in 0..nElems {
-      if self.parent_or_size[i as usize] >= 0 {
-        // i is non-root
-        let i_root = heads[i as usize];
-        heads[i as usize] = heads[i_root as usize];
-      }
-    }
-
     // It's a wrap!
     assert!(heads.len() == nElemsUSize);
     assert!(lists.len() == nElemsUSize);
+    //{
+    //  for i in 0 .. heads.len() {
+    //    println!("{}:  heads {:x}  lists.elem {} .tail {:x}", i,
+    //             heads[i], lists[i].elem, lists[i].tail);
+    //  }
+    //}
     UnionFindEquivClasses { heads, lists, anchor: PhantomData }
   }
 }
 
-// Finally, provide a way to get an iterator from a UnionFindEquivClasses and
-// use it.
+// We may want to find the equivalence class for some given element, and
+// iterate through its elements.  This iterator provides that.
 
-pub struct UnionFindEquivClassesIter<'a, T: ToFromU32> {
+pub struct UnionFindEquivClassElemsIter<'a, T: ToFromU32> {
   // The equivalence classes
   /*priv*/
   ufec: &'a UnionFindEquivClasses<T>,
@@ -305,17 +346,25 @@ pub struct UnionFindEquivClassesIter<'a, T: ToFromU32> {
 }
 
 impl<T: ToFromU32> UnionFindEquivClasses<T> {
-  pub fn iter_for_equiv_class_of<'a>(
+  pub fn equiv_class_elems_iter<'a>(
     &'a self, item: T,
-  ) -> UnionFindEquivClassesIter<'a, T> {
-    let itemU32 = ToFromU32::to_u32(item);
+  ) -> UnionFindEquivClassElemsIter<'a, T> {
+    let mut itemU32 = ToFromU32::to_u32(item);
     assert!((itemU32 as usize) < self.heads.len());
-    let next = self.heads[itemU32 as usize];
-    UnionFindEquivClassesIter { ufec: &self, next }
+    if (self.heads[itemU32 as usize] & 0x8000_0000) == 0 {
+      // .direct flag is not set.  This is not a class leader.  We must
+      // indirect.
+      itemU32 = self.heads[itemU32 as usize];
+    }
+    // Now |itemU32| must point at a class leader.
+    assert!((self.heads[itemU32 as usize] & 0x8000_0000) == 0x8000_0000);
+    let next = self.heads[itemU32 as usize] & 0x7FFF_FFFF;
+    // Now |next| points at the first element in the list.
+    UnionFindEquivClassElemsIter { ufec: &self, next }
   }
 }
 
-impl<'a, T: ToFromU32> Iterator for UnionFindEquivClassesIter<'a, T> {
+impl<'a, T: ToFromU32> Iterator for UnionFindEquivClassElemsIter<'a, T> {
   type Item = T;
   fn next(&mut self) -> Option<Self::Item> {
     if self.next == UFEC_NULL {
@@ -329,28 +378,98 @@ impl<'a, T: ToFromU32> Iterator for UnionFindEquivClassesIter<'a, T> {
   }
 }
 
+// In order to visit all equivalence classes exactly once, we need something
+// else: a way to enumerate their leaders (some value arbitrarily drawn from
+// each one).  This provides that.
+
+pub struct UnionFindEquivClassLeadersIter<'a, T: ToFromU32> {
+  // The equivalence classes
+  /*priv*/
+  ufec: &'a UnionFindEquivClasses<T>,
+  // Index into |ufec.heads| of the next unvisited item.
+  /*priv*/
+  next: u32,
+}
+
+impl<T: ToFromU32> UnionFindEquivClasses<T> {
+  pub fn equiv_class_leaders_iter<'a>(
+    &'a self,
+  ) -> UnionFindEquivClassLeadersIter<'a, T> {
+    UnionFindEquivClassLeadersIter { ufec: &self, next: 0 }
+  }
+}
+
+impl<'a, T: ToFromU32> Iterator for UnionFindEquivClassLeadersIter<'a, T> {
+  type Item = T;
+  fn next(&mut self) -> Option<Self::Item> {
+    // Scan forwards through |ufec.heads| to find the next unvisited one which
+    // is a leader (a tree root).
+    loop {
+      if self.next as usize >= self.ufec.heads.len() {
+        return None;
+      }
+      if (self.ufec.heads[self.next as usize] & 0x8000_0000) == 0x8000_0000 {
+        // This is a leader.
+        let res = ToFromU32::from_u32(self.next);
+        self.next += 1;
+        return Some(res);
+      }
+      // No luck, keep one searching.
+      self.next += 1;
+    }
+    /*NOTREACHED*/
+  }
+}
+
 // ====== Testing machinery for UnionFind ======
 
 #[cfg(test)]
 mod union_find_test_utils {
   use super::UnionFindEquivClasses;
+  // Test that the eclass for |elem| is |expected| (modulo ordering).
   pub fn test_eclass(
     eclasses: &UnionFindEquivClasses<u32>, elem: u32, expected: &Vec<u32>,
   ) {
     let mut expected_sorted = expected.clone();
     let mut actual = vec![];
-    for ecm in eclasses.iter_for_equiv_class_of(elem) {
+    for ecm in eclasses.equiv_class_elems_iter(elem) {
       actual.push(ecm);
     }
     expected_sorted.sort();
     actual.sort();
     assert!(actual == expected_sorted);
   }
+  // Test that the eclass leaders are exactly |expected|.
+  pub fn test_leaders(
+    univ_size: u32, eclasses: &UnionFindEquivClasses<u32>, expected: &Vec<u32>,
+  ) {
+    let mut actual = vec![];
+    for leader in eclasses.equiv_class_leaders_iter() {
+      actual.push(leader);
+    }
+    assert!(actual == *expected);
+    // Now use the headers to enumerate each eclass exactly once, and collect
+    // up the elements.  The resulting vector should be some permutation of
+    // [0 .. univ_size-1].
+    let mut univ_actual = vec![];
+    for leader in eclasses.equiv_class_leaders_iter() {
+      for elem in eclasses.equiv_class_elems_iter(leader) {
+        univ_actual.push(elem);
+      }
+    }
+    univ_actual.sort();
+    let mut univ_expected = vec![];
+    for i in 0..univ_size {
+      univ_expected.push(i);
+    }
+    assert!(univ_actual == univ_expected);
+  }
 }
 
 #[test]
 fn test_union_find() {
-  let mut uf = UnionFind::new(8);
+  const UNIV_SIZE: u32 = 8;
+  let mut uf = UnionFind::new(UNIV_SIZE as usize);
   let mut uf_eclasses = uf.get_equiv_classes();
   union_find_test_utils::test_eclass(&uf_eclasses, 0, &vec![0]);
   union_find_test_utils::test_eclass(&uf_eclasses, 1, &vec![1]);
@@ -360,6 +479,11 @@ fn test_union_find() {
   union_find_test_utils::test_eclass(&uf_eclasses, 5, &vec![5]);
   union_find_test_utils::test_eclass(&uf_eclasses, 6, &vec![6]);
   union_find_test_utils::test_eclass(&uf_eclasses, 7, &vec![7]);
+  union_find_test_utils::test_leaders(
+    UNIV_SIZE,
+    &uf_eclasses,
+    &vec![0, 1, 2, 3, 4, 5, 6, 7],
+  );
 
   uf.union(2, 4);
   uf_eclasses = uf.get_equiv_classes();
@@ -371,6 +495,11 @@ fn test_union_find() {
   union_find_test_utils::test_eclass(&uf_eclasses, 5, &vec![5]);
   union_find_test_utils::test_eclass(&uf_eclasses, 6, &vec![6]);
   union_find_test_utils::test_eclass(&uf_eclasses, 7, &vec![7]);
+  union_find_test_utils::test_leaders(
+    UNIV_SIZE,
+    &uf_eclasses,
+    &vec![0, 1, 2, 3, 5, 6, 7],
+  );
 
   uf.union(5, 3);
   uf_eclasses = uf.get_equiv_classes();
@@ -382,6 +511,11 @@ fn test_union_find() {
   union_find_test_utils::test_eclass(&uf_eclasses, 5, &vec![5, 3]);
   union_find_test_utils::test_eclass(&uf_eclasses, 6, &vec![6]);
   union_find_test_utils::test_eclass(&uf_eclasses, 7, &vec![7]);
+  union_find_test_utils::test_leaders(
+    UNIV_SIZE,
+    &uf_eclasses,
+    &vec![0, 1, 2, 5, 6, 7],
+  );
 
   uf.union(2, 5);
   uf_eclasses = uf.get_equiv_classes();
@@ -393,6 +527,11 @@ fn test_union_find() {
   union_find_test_utils::test_eclass(&uf_eclasses, 5, &vec![5, 4, 3, 2]);
   union_find_test_utils::test_eclass(&uf_eclasses, 6, &vec![6]);
   union_find_test_utils::test_eclass(&uf_eclasses, 7, &vec![7]);
+  union_find_test_utils::test_leaders(
+    UNIV_SIZE,
+    &uf_eclasses,
+    &vec![0, 1, 2, 6, 7],
+  );
 
   uf.union(7, 1);
   uf_eclasses = uf.get_equiv_classes();
@@ -404,6 +543,11 @@ fn test_union_find() {
   union_find_test_utils::test_eclass(&uf_eclasses, 5, &vec![5, 4, 3, 2]);
   union_find_test_utils::test_eclass(&uf_eclasses, 6, &vec![6]);
   union_find_test_utils::test_eclass(&uf_eclasses, 7, &vec![7, 1]);
+  union_find_test_utils::test_leaders(
+    UNIV_SIZE,
+    &uf_eclasses,
+    &vec![0, 2, 6, 7],
+  );
 
   uf.union(6, 7);
   uf_eclasses = uf.get_equiv_classes();
@@ -415,6 +559,7 @@ fn test_union_find() {
   union_find_test_utils::test_eclass(&uf_eclasses, 5, &vec![5, 4, 3, 2]);
   union_find_test_utils::test_eclass(&uf_eclasses, 6, &vec![7, 6, 1]);
   union_find_test_utils::test_eclass(&uf_eclasses, 7, &vec![7, 6, 1]);
+  union_find_test_utils::test_leaders(UNIV_SIZE, &uf_eclasses, &vec![0, 2, 6]);
 
   uf.union(4, 1);
   uf_eclasses = uf.get_equiv_classes();
@@ -454,6 +599,7 @@ fn test_union_find() {
     7,
     &vec![7, 6, 5, 4, 3, 2, 1],
   );
+  union_find_test_utils::test_leaders(UNIV_SIZE, &uf_eclasses, &vec![0, 6]);
 
   uf.union(0, 3);
   uf_eclasses = uf.get_equiv_classes();
@@ -497,6 +643,7 @@ fn test_union_find() {
     7,
     &vec![7, 6, 5, 4, 3, 2, 1, 0],
   );
+  union_find_test_utils::test_leaders(UNIV_SIZE, &uf_eclasses, &vec![0]);
 
   // Pointless, because the classes are already maximal.
   uf.union(1, 2);
@@ -541,6 +688,7 @@ fn test_union_find() {
     7,
     &vec![7, 6, 5, 4, 3, 2, 1, 0],
   );
+  union_find_test_utils::test_leaders(UNIV_SIZE, &uf_eclasses, &vec![0]);
 }
 
 //=============================================================================

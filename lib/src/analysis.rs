@@ -16,6 +16,7 @@ use crate::data_structures::{
   VirtualRange, VirtualRangeIx,
 };
 use crate::interface::Function;
+use crate::trees_maps_sets::{ToFromU32, UnionFind};
 
 // DEBUGGING: set to true to cross-check the merge_RangeFrags machinery.
 
@@ -1040,6 +1041,32 @@ fn create_and_add_Range(
   }
 }
 
+// We need this in order to construct a UnionFind<usize>.
+impl ToFromU32 for usize {
+  // 64 bit
+  #[cfg(target_pointer_width = "64")]
+  fn to_u32(x: usize) -> u32 {
+    if x < 0x1_0000_0000usize {
+      x as u32
+    } else {
+      panic!("impl ToFromU32 for usize: to_u32: out of range")
+    }
+  }
+  #[cfg(target_pointer_width = "64")]
+  fn from_u32(x: u32) -> usize {
+    x as usize
+  }
+  // 32 bit
+  #[cfg(target_pointer_width = "32")]
+  fn to_u32(x: usize) -> u32 {
+    x as u32
+  }
+  #[cfg(target_pointer_width = "32")]
+  fn from_u32(x: u32) -> usize {
+    x as usize
+  }
+}
+
 #[inline(never)]
 fn merge_RangeFrags(
   fragIx_vecs_per_reg: &Map<Reg, Vec<RangeFragIx>>,
@@ -1069,6 +1096,7 @@ fn merge_RangeFrags(
   let mut resR = TypedIxVec::<RealRangeIx, RealRange>::new();
   let mut resV = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
 
+  // BEGIN per_reg_loop
   'per_reg_loop: for (reg, all_frag_ixs_for_reg) in fragIx_vecs_per_reg.iter() {
     let n_frags_for_this_reg = all_frag_ixs_for_reg.len();
     assert!(n_frags_for_this_reg > 0);
@@ -1087,34 +1115,19 @@ fn merge_RangeFrags(
     }
 
     // BEGIN merge |all_frag_ixs_for_reg| entries as much as possible.
-    // Each |state| entry has four components:
-    //    (1) An is-this-entry-still-valid flag
-    //    (2) A set of RangeFragIxs.  These should refer to disjoint
-    //        RangeFrags.
-    //    (3) A set of blocks, which are those corresponding to (2)
-    //        that are LiveIn or Thru (== have an inbound value)
-    //    (4) A set of blocks, which are the union of the successors of
-    //        blocks corresponding to the (2) which are LiveOut or Thru
-    //        (== have an outbound value)
     //
     // but .. if we come across independents (RangeKind::Local), pull them out
     // immediately.
-    struct MergeGroup {
-      valid: bool,
-      frag_ixs: Set<RangeFragIx>,
-      live_in_blocks: Set<BlockIx>,
-      succs_of_live_out_blocks: Set<BlockIx>,
-    }
 
-    let mut state = Vec::<MergeGroup>::new();
+    let mut triples = Vec::<(RangeFragIx, RangeFragKind, BlockIx)>::new();
 
-    // Create the initial state by giving each RangeFragIx its own Vec, and
-    // tagging it with its interface blocks.
+    // Create |triples|.  We will use it to guide the merging phase, but it is
+    // immutable there.
     'per_frag_loop: for fix in all_frag_ixs_for_reg {
       let frag = &frag_env[*fix];
       // This frag is Local (standalone).  Give it its own Range and move on.
       // This is an optimisation, but it's also necessary: the main
-      // fragment-merging logic in this loop relies on the fact that the
+      // fragment-merging logic below relies on the fact that the
       // fragments it is presented with are all either LiveIn, LiveOut or
       // Thru.
       if frag.kind == RangeFragKind::Local {
@@ -1128,87 +1141,84 @@ fn merge_RangeFrags(
         continue 'per_frag_loop;
       }
       // This frag isn't Local (standalone) so we have process it the slow way.
-      let mut live_in_blocks = Set::<BlockIx>::empty();
-      let mut succs_of_live_out_blocks = Set::<BlockIx>::empty();
-      let frag_bix = frag.bix;
-      let frag_succ_bixes = &cfg_info.succ_map[frag_bix];
-      match frag.kind {
-        RangeFragKind::Local => {}
-        RangeFragKind::LiveIn => {
-          live_in_blocks.insert(frag_bix);
-        }
-        RangeFragKind::LiveOut => {
-          succs_of_live_out_blocks.union(frag_succ_bixes);
-        }
-        RangeFragKind::Thru => {
-          live_in_blocks.insert(frag_bix);
-          succs_of_live_out_blocks.union(frag_succ_bixes);
-        }
-      }
-
-      let valid = true;
-      let frag_ixs = Set::unit(*fix);
-      let mg = MergeGroup {
-        valid,
-        frag_ixs,
-        live_in_blocks,
-        succs_of_live_out_blocks,
-      };
-      state.push(mg);
+      assert!(frag.kind != RangeFragKind::Local);
+      triples.push((*fix, frag.kind, frag.bix));
     }
     n_multi_grps += 1;
-    sz_multi_grps += state.len();
+    sz_multi_grps += triples.len();
 
-    // Iterate over |state|, merging entries as much as possible.  This
-    // is, unfortunately, quadratic.
-    let state_len = state.len();
-    loop {
-      let mut changed = false;
+    // This is the core of the merging algorithm.
+    //
+    // For each ix@(fix, kind, bix) in |triples| (order unimportant):
+    //
+    // * "Merge with blocks that are live 'downstream' from here":
+    //   if fix is live-out or live-through:
+    //      for b in succs[bix]
+    //         for each ix2@(fix2, kind2, bix2) in |triples|
+    //            if bix2 == b && kind2 is live-in or live-through:
+    //                merge(ix, ix2)
+    //
+    // * "Merge with blocks that are live 'upstream' from here":
+    //   if fix is live-in or live-through:
+    //      for b in preds[bix]
+    //         for each ix2@(fix2, kind2, bix2) in |triples|
+    //            if bix2 == b && kind2 is live-out or live-through:
+    //                merge(ix, ix2)
+    //
+    // |triples| remains unchanged.  The equivalence class info is accumulated
+    // in |eclasses_uf| instead.  |eclasses_uf| entries are indices into
+    // |triples|.
+    let mut eclasses_uf = UnionFind::<usize>::new(triples.len());
 
-      for i in 0..state_len {
-        if !state[i].valid {
-          continue;
-        }
-        for j in i + 1..state_len {
-          if !state[j].valid {
-            continue;
-          }
-          let do_merge = // frag group i feeds a value to group j
-                        state[i].succs_of_live_out_blocks
-                                .intersects(&state[j].live_in_blocks)
-                        || // frag group j feeds a value to group i
-                        state[j].succs_of_live_out_blocks
-                                .intersects(&state[i].live_in_blocks);
-          if do_merge {
-            let mut tmp_frag_ixs = state[i].frag_ixs.clone();
-            state[j].frag_ixs.union(&mut tmp_frag_ixs);
-            let tmp_libs = state[i].live_in_blocks.clone();
-            state[j].live_in_blocks.union(&tmp_libs);
-            let tmp_solobs = state[i].succs_of_live_out_blocks.clone();
-            state[j].succs_of_live_out_blocks.union(&tmp_solobs);
-            state[i].valid = false;
-            changed = true;
+    for ((_fix, kind, bix), ix) in triples.iter().zip(0..) {
+      // Deal with liveness flows outbound from |fix|.
+      if *kind == RangeFragKind::LiveOut || *kind == RangeFragKind::Thru {
+        for b in cfg_info.succ_map[*bix].iter() {
+          // Visit all entries in |triples| that are for |b|
+          for ((_fix2, kind2, bix2), ix2) in triples.iter().zip(0..) {
+            if *bix2 != *b || *kind2 == RangeFragKind::LiveOut {
+              continue;
+            }
+            // Now we know that liveness for this reg "flows" from
+            // |triples[ix]| to |triples[ix2]|.  So those two frags must be
+            // part of the same live range.  Note this.
+            eclasses_uf.union(ix, ix2); // Order of args irrelevant
           }
         }
       }
-
-      if !changed {
-        break;
+      // Symmetrically, deal with liveness flows inbound to |fix|.
+      if *kind == RangeFragKind::LiveIn || *kind == RangeFragKind::Thru {
+        for b in cfg_info.pred_map[*bix].iter() {
+          // Visit all entries in |triples| that are for |b|
+          for ((_fix2, kind2, bix2), ix2) in triples.iter().zip(0..) {
+            if *bix2 != *b || *kind2 == RangeFragKind::LiveIn {
+              continue;
+            }
+            // Now we know that liveness for this reg "flows" from
+            // |triples[ix2]| to |triples[ix]|.  So those two frags must be
+            // part of the same live range.  Note this.
+            eclasses_uf.union(ix, ix2); // Order of args irrelevant
+          }
+        }
       }
-    }
+    } // outermost iteration over |triples|
 
-    // Harvest the merged RangeFrag sets from |state|, and turn them into
-    // RealRanges or VirtualRanges.
-    for MergeGroup { valid, frag_ixs, .. } in state {
-      if !valid {
-        continue;
+    // Now |eclasses_uf| contains the results of the merging-search.  Visit
+    // each of its equivalence classes in turn, and convert each into a
+    // virtual or real live range as appropriate.
+    let eclasses = eclasses_uf.get_equiv_classes();
+    for leader_triple_ix in eclasses.equiv_class_leaders_iter() {
+      // |leader_triple_ix| is an eclass leader.  Enumerate the whole eclass.
+      let mut frag_ixs = Vec::<RangeFragIx>::new();
+      for triple_ix in eclasses.equiv_class_elems_iter(leader_triple_ix) {
+        frag_ixs.push(triples[triple_ix].0 /*first field is frag ix*/);
       }
       let sorted_frags = SortedRangeFragIxs::new(&frag_ixs.to_vec(), &frag_env);
       create_and_add_Range(&mut resR, &mut resV, *reg, sorted_frags);
     }
-
     // END merge |all_frag_ixs_for_reg| entries as much as possible
-  }
+  } // 'per_reg_loop
+    // END per_reg_loop
 
   info!("    in: {} single groups", n_single_grps);
   info!("    in: {} local frags in multi groups", n_local_frags);

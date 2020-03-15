@@ -243,7 +243,8 @@ fn do_coalescing_analysis<F: Function>(
   let mut hints = TypedIxVec::<VirtualRangeIx, Vec<Hint>>::new();
   hints.resize(vlr_env.len(), vec![]);
 
-  let mut vlrEquivClassesUF = UnionFind::<VirtualRangeIx>::new(vlr_env.len());
+  let mut vlrEquivClassesUF =
+    UnionFind::<VirtualRangeIx>::new(vlr_env.len() as usize);
 
   for (rDst, rSrc, iix, eef) in connectedByMoves {
     //println!("QQQQ at {:?} {:?} <- {:?} (eef {})", iix, rDst, rSrc, eef);
@@ -325,7 +326,7 @@ fn do_coalescing_analysis<F: Function>(
   for n in 0..vlr_env.len() {
     let vlrix = VirtualRangeIx::new(n);
     let mut tmpvec = vec![];
-    for elem in vlrEquivClasses.iter_for_equiv_class_of(vlrix) {
+    for elem in vlrEquivClasses.equiv_class_elems_iter(vlrix) {
       tmpvec.reverse();
       tmpvec.push(elem);
     }
@@ -1626,14 +1627,14 @@ pub fn alloc_main<F: Function>(
       // Find the equivalence class set for |curr_vlrix|.  We'll need it
       // later.
       let mut curr_vlr_eclass = Set::<VirtualRangeIx>::empty();
-      for vlrix in vlrEquivClasses.iter_for_equiv_class_of(curr_vlrix) {
+      for vlrix in vlrEquivClasses.equiv_class_elems_iter(curr_vlrix) {
         curr_vlr_eclass.insert(vlrix);
       }
       assert!(curr_vlr_eclass.contains(curr_vlrix));
       mb_curr_vlr_eclass = Some(curr_vlr_eclass);
 
       // And work through it to pick up any rreg hints now.
-      for vlrix in vlrEquivClasses.iter_for_equiv_class_of(curr_vlrix) {
+      for vlrix in vlrEquivClasses.equiv_class_elems_iter(curr_vlrix) {
         if vlrix != curr_vlrix {
           if let Some(rreg) = vlr_env[vlrix].rreg {
             // Add |rreg| as a cand, if we don't already have it.
