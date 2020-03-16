@@ -913,39 +913,24 @@ fn find_optimal_split_pos<F: Function>(
     return from;
   }
 
-  match state.optimal_split_strategy {
-    OptimalSplitStrategy::To => return to,
-    OptimalSplitStrategy::NextFrom => {
-      let pos = next_pos(from);
-      if pos <= to {
-        return pos;
-      }
-    }
-    OptimalSplitStrategy::NextNextFrom => {
-      let pos = next_pos(next_pos(from));
-      if pos <= to {
-        return pos;
-      }
-    }
-    OptimalSplitStrategy::From => {}
-    OptimalSplitStrategy::PrevTo => {
-      let pos = prev_pos(to);
-      if pos >= from {
-        return pos;
-      }
-    }
-    OptimalSplitStrategy::PrevPrevTo => {
-      let pos = prev_pos(prev_pos(to));
-      if pos >= from {
-        return pos;
-      }
-    }
+  let candidate = match state.optimal_split_strategy {
+    OptimalSplitStrategy::To => Some(to),
+    OptimalSplitStrategy::NextFrom => Some(next_pos(from)),
+    OptimalSplitStrategy::NextNextFrom => Some(next_pos(next_pos(from))),
+    OptimalSplitStrategy::From => None,
+    OptimalSplitStrategy::PrevTo => Some(prev_pos(to)),
+    OptimalSplitStrategy::PrevPrevTo => Some(prev_pos(prev_pos(to))),
     OptimalSplitStrategy::Mid => {
-      let pos =
-        InstPoint::new_use(InstIx::new((from.iix.get() + to.iix.get()) / 2));
-      if from <= pos && pos <= to {
-        return pos;
-      }
+      Some(InstPoint::new_use(InstIx::new((from.iix.get() + to.iix.get()) / 2)))
+    }
+  };
+
+  if let Some(pos) = candidate {
+    if pos >= from
+      && pos <= to
+      && state.intervals.covers(id, &pos, &state.fragments)
+    {
+      return pos;
     }
   }
 
@@ -1149,8 +1134,8 @@ fn split_and_spill<F: Function>(
         id, last_use, split_pos
       );
 
-      let optimal_pos =
-        find_optimal_split_pos(state, id, next_pos(last_use), split_pos);
+      let min_pos = InstPoint::min(next_pos(last_use), split_pos);
+      let optimal_pos = find_optimal_split_pos(state, id, min_pos, split_pos);
 
       let child = split(state, id, optimal_pos);
       state.spill(child);

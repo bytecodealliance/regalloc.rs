@@ -699,3 +699,7 @@ fn lsra_flush_block_fixups() {
 fn lsra_split_unused() {
   test_utils::check_lsra("lsra_split_unused", 5, 2);
 }
+#[test]
+fn lsra_split_positions() {
+  test_utils::check_lsra("lsra_split_positions", 5, 2);
+}
