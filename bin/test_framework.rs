@@ -7,6 +7,7 @@
 
 use arbitrary::Arbitrary;
 use regalloc::*;
+use std::collections::HashSet;
 
 use std::fmt;
 
@@ -199,11 +200,11 @@ impl fmt::Debug for BinOp {
         BinOp::Mod => "mod",
         BinOp::Shr => "shr",
         BinOp::And => "and",
-        BinOp::CmpEQ => "cmpeq",
-        BinOp::CmpLT => "cmplt",
-        BinOp::CmpLE => "cmple",
-        BinOp::CmpGE => "cmpge",
-        BinOp::CmpGT => "cmpgt",
+        BinOp::CmpEQ => "cmp_eq",
+        BinOp::CmpLT => "cmp_lt",
+        BinOp::CmpLE => "cmp_le",
+        BinOp::CmpGE => "cmp_ge",
+        BinOp::CmpGT => "cmp_gt",
       }
     )
   }
@@ -351,6 +352,11 @@ pub fn i_copy(dst: Reg, src: Reg) -> Inst {
   debug_assert!(src.get_class() == RegClass::I32);
   Inst::Copy { dst, src }
 }
+pub fn i_copyf(dst: Reg, src: Reg) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::F32);
+  debug_assert!(src.get_class() == RegClass::F32);
+  Inst::CopyF { dst, src }
+}
 // For BinOp variants see below
 
 pub fn i_load(dst: Reg, addr: AM) -> Inst {
@@ -474,9 +480,33 @@ pub fn i_addm(dst: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
   Inst::BinOpM { op: BinOp::Add, dst, src_right }
 }
+pub fn i_andm(dst: Reg, src_right: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::BinOpM { op: BinOp::And, dst, src_right }
+}
+pub fn i_modm(dst: Reg, src_right: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::BinOpM { op: BinOp::Mod, dst, src_right }
+}
+pub fn i_mulm(dst: Reg, src_right: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::BinOpM { op: BinOp::Mul, dst, src_right }
+}
+pub fn i_shrm(dst: Reg, src_right: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::BinOpM { op: BinOp::Shr, dst, src_right }
+}
 pub fn i_subm(dst: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
   Inst::BinOpM { op: BinOp::Sub, dst, src_right }
+}
+pub fn i_cmp_eqm(dst: Reg, src_right: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::BinOpM { op: BinOp::CmpEQ, dst, src_right }
+}
+pub fn i_cmp_gem(dst: Reg, src_right: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::BinOpM { op: BinOp::CmpGE, dst, src_right }
 }
 pub fn i_cmp_gtm(dst: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
@@ -485,6 +515,10 @@ pub fn i_cmp_gtm(dst: Reg, src_right: RI) -> Inst {
 pub fn i_cmp_lem(dst: Reg, src_right: RI) -> Inst {
   debug_assert!(dst.get_class() == RegClass::I32);
   Inst::BinOpM { op: BinOp::CmpLE, dst, src_right }
+}
+pub fn i_cmp_ltm(dst: Reg, src_right: RI) -> Inst {
+  debug_assert!(dst.get_class() == RegClass::I32);
+  Inst::BinOpM { op: BinOp::CmpLT, dst, src_right }
 }
 
 pub fn i_fadd(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
@@ -570,7 +604,7 @@ impl fmt::Debug for Inst {
       Inst::Goto { target } => write!(fmt, "goto    {:?}", target),
       Inst::GotoCTF { cond, target_true, target_false } => write!(
         fmt,
-        "goto    if {:?} then {:?} else {:?}",
+        "if_then_else {:?}, {:?}, {:?}",
         cond, target_true, target_false
       ),
       Inst::PrintS { str } => {
@@ -582,7 +616,13 @@ impl fmt::Debug for Inst {
       }
       Inst::PrintI { reg } => write!(fmt, "printi  {:?}", reg),
       Inst::PrintF { reg } => write!(fmt, "printf  {:?}", reg),
-      Inst::Finish { reg } => write!(fmt, "finish  {:?}", reg),
+      Inst::Finish { reg } => {
+        if let Some(reg) = reg {
+          write!(fmt, "finish  {:?}", reg)
+        } else {
+          write!(fmt, "finish")
+        }
+      }
     }
   }
 }
@@ -1387,6 +1427,73 @@ impl Func {
       ix += 1;
     }
     println!("}}");
+  }
+
+  /// Prints the function in a way the parser can comprehend.
+  pub fn render(&self, who: &str, fmt: &mut String) -> fmt::Result {
+    use std::fmt::Write;
+    use std::iter::FromIterator;
+
+    let mut used_vregs = HashSet::new();
+    let mut used_rregs = HashSet::new();
+
+    for b in self.blocks.iter() {
+      for i in b.start.get()..b.start.get() + b.len {
+        let ix = InstIx::new(i);
+        let (defined, modified, used) = self.insns[ix].get_reg_usage();
+        for reg in defined.iter().chain(modified.iter()) {
+          let reg = reg.to_reg();
+          if reg.is_virtual() {
+            used_vregs.insert(reg);
+          } else {
+            used_rregs.insert(reg);
+          }
+        }
+        for &reg in used.iter() {
+          if reg.is_virtual() {
+            used_vregs.insert(reg);
+          } else {
+            used_rregs.insert(reg);
+          }
+        }
+      }
+    }
+
+    let mut used_vregs = Vec::from_iter(used_vregs.into_iter());
+    used_vregs.sort();
+    let mut used_rregs = Vec::from_iter(used_rregs.into_iter());
+    used_rregs.sort();
+
+    writeln!(fmt, "; {}", who)?;
+    for vreg in used_vregs {
+      writeln!(fmt, "{:?} = {:?}", vreg, vreg.get_class())?;
+    }
+    for rreg in used_rregs {
+      writeln!(
+        fmt,
+        "{:?} = real {:?} {:?}",
+        rreg,
+        rreg.get_class(),
+        rreg.get_index()
+      )?;
+    }
+    writeln!(fmt, "")?;
+
+    let mut ix = 0;
+    for b in self.blocks.iter() {
+      if ix > 0 {
+        writeln!(fmt, "")?;
+      }
+      writeln!(fmt, "{:?}:", BlockIx::new(ix))?;
+      for i in b.start.get()..b.start.get() + b.len {
+        let ix = InstIx::new(i);
+        writeln!(fmt, "    {:?}", self.insns[ix])?;
+      }
+      ix += 1;
+    }
+    writeln!(fmt, "")?;
+
+    Ok(())
   }
 
   // Get a new VirtualReg name

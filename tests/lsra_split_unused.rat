@@ -15,7 +15,7 @@ b0:
     cmp_le   r2I, v4I, v3I
     copy     r0I, r2I
     copy     v1I, r2I
-    goto_ctf r0I, b2, b2
+    if_then_else r0I, b2, b2
 
 b1:
     copy    r2I, r0I

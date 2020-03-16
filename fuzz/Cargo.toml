@@ -33,6 +33,10 @@ path = "fuzz_lsra_differential.rs"
 name = "validator"
 path = "fuzz_validator.rs"
 
+[[bin]]
+name = "parser"
+path = "fuzz_parser.rs"
+
 [profile.release]
 debug = true
 debug-assertions = true

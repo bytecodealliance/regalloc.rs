@@ -165,8 +165,15 @@ impl<'f, 'str> Parser<'f, 'str> {
     None
   }
 
-  fn try_read_ident(&mut self) -> Option<String> {
-    self.skip_whitespace_and_comments();
+  fn try_read_ident_sameline(&mut self) -> Option<String> {
+    // Only ignore simple spaces.
+    while let Some(c) = self.peek() {
+      if c == ' ' {
+        self.advance().unwrap();
+      } else {
+        break;
+      }
+    }
 
     if let Some(c) = self.peek() {
       if !is_alpha(c) {
@@ -191,12 +198,27 @@ impl<'f, 'str> Parser<'f, 'str> {
     Some(substr.to_string())
   }
 
+  fn try_read_ident(&mut self) -> Option<String> {
+    self.skip_whitespace_and_comments();
+    self.try_read_ident_sameline()
+  }
+
   fn read_ident(&mut self) -> ParseResult<String> {
     if let Some(string) = self.try_read_ident() {
       Ok(string)
     } else {
       self.error("expected identifier or keyword")
     }
+  }
+
+  fn read_block(&mut self) -> ParseResult<String> {
+    let block_name = self.read_ident()?;
+    if let Some(':') = self.peek() {
+      self.advance().unwrap();
+      // Ignore the block's name.
+      self.read_ident()?;
+    }
+    Ok(block_name)
   }
 
   fn read_string(&mut self) -> ParseResult<&str> {
@@ -224,27 +246,48 @@ impl<'f, 'str> Parser<'f, 'str> {
 
   fn try_read_number(&mut self) -> ParseResult<Option<f64>> {
     self.skip_whitespace_and_comments();
+
     let mut is_negative = false;
-    let first_digit = if let Some('-') = self.peek() {
+    if let Some('-') = self.peek() {
       // Consume the minus sign.
       self.advance().unwrap();
       is_negative = true;
-      // Now, we expect a digit.
-      if let Some(c) = self.advance() {
-        if !is_digit(c) {
-          return self.error("expected a digit after minus sign");
-        }
-        c
-      } else {
-        return self.error("expected a digit after minus sign");
-      }
-    } else if let Some(c) = self.peek() {
+    }
+
+    let first_digit = if let Some(c) = self.peek() {
+      // A regular number.
       if is_digit(c) {
         self.advance().unwrap();
         c
+      } else if c == 'i' {
+        self.advance().unwrap();
+        // This must be inf.
+        self.expect_char('n')?;
+        self.expect_char('f')?;
+        let mut result = std::f64::INFINITY;
+        if is_negative {
+          result = -result;
+        }
+        return Ok(Some(result));
+      } else if c == 'N' {
+        // This must be NaN.
+        self.advance().unwrap();
+        self.expect_char('a')?;
+        self.expect_char('N')?;
+        let mut result = std::f64::NAN;
+        if is_negative {
+          result = -result;
+        }
+        return Ok(Some(result));
+      } else if is_negative {
+        // We saw a minus sign, we should have had something after it.
+        return self.error("expected a valid number after minus sign");
       } else {
         return Ok(None);
       }
+    } else if is_negative {
+      // We saw a minus sign, we should have had something after it.
+      return self.error("expected something after minus sign");
     } else {
       return Ok(None);
     };
@@ -322,9 +365,9 @@ impl<'f, 'str> Parser<'f, 'str> {
   }
 
   fn to_reg_class(&self, ident: &str) -> ParseResult<RegClass> {
-    if ident == "i32" {
+    if ident == "i32" || ident == "I32" {
       Ok(RegClass::I32)
-    } else if ident == "f32" {
+    } else if ident == "f32" || ident == "F32" {
       Ok(RegClass::F32)
     } else {
       self.error("unknown register class")
@@ -377,7 +420,7 @@ impl<'f, 'str> Parser<'f, 'str> {
   }
 }
 
-fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
+pub fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
   let mut func = Func::new(func_name);
 
   let mut parser = Parser::new(&mut func, content);
@@ -456,11 +499,25 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_and(dst, src, op));
         }
 
+        "andm" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src = parser.read_ri()?;
+          insts.push(i_andm(dst, src));
+        }
+
         "copy" => {
           let dst = parser.read_var()?;
           parser.expect_char(',')?;
           let src = parser.read_var()?;
           insts.push(i_copy(dst, src));
+        }
+
+        "copyf" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src = parser.read_var()?;
+          insts.push(i_copyf(dst, src));
         }
 
         "cmp_eq" => {
@@ -472,6 +529,36 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_cmp_eq(dst, src, ri));
         }
 
+        "cmp_eqm" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let ri = parser.read_ri()?;
+          insts.push(i_cmp_eqm(dst, ri));
+        }
+
+        "cmp_gem" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let ri = parser.read_ri()?;
+          insts.push(i_cmp_gem(dst, ri));
+        }
+
+        "cmp_gtm" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let ri = parser.read_ri()?;
+          insts.push(i_cmp_gtm(dst, ri));
+        }
+
+        "cmp_ge" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src = parser.read_var()?;
+          parser.expect_char(',')?;
+          let ri = parser.read_ri()?;
+          insts.push(i_cmp_ge(dst, src, ri));
+        }
+
         "cmp_gt" => {
           let dst = parser.read_var()?;
           parser.expect_char(',')?;
@@ -481,11 +568,18 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_cmp_gt(dst, src, ri));
         }
 
-        "cmp_gtm" => {
+        "cmp_lem" => {
           let dst = parser.read_var()?;
           parser.expect_char(',')?;
           let ri = parser.read_ri()?;
-          insts.push(i_cmp_gtm(dst, ri));
+          insts.push(i_cmp_lem(dst, ri));
+        }
+
+        "cmp_ltm" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let ri = parser.read_ri()?;
+          insts.push(i_cmp_ltm(dst, ri));
         }
 
         "cmp_le" => {
@@ -497,13 +591,6 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_cmp_le(dst, src, ri));
         }
 
-        "cmp_lem" => {
-          let dst = parser.read_var()?;
-          parser.expect_char(',')?;
-          let ri = parser.read_ri()?;
-          insts.push(i_cmp_lem(dst, ri));
-        }
-
         "cmp_lt" => {
           let dst = parser.read_var()?;
           parser.expect_char(',')?;
@@ -511,6 +598,15 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           parser.expect_char(',')?;
           let ri = parser.read_ri()?;
           insts.push(i_cmp_lt(dst, src, ri));
+        }
+
+        "fadd" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_left = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_right = parser.read_var()?;
+          insts.push(i_fadd(dst, src_left, src_right));
         }
 
         "fdiv" => {
@@ -522,24 +618,43 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_fdiv(dst, src_left, src_right));
         }
 
+        "fmul" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_left = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_right = parser.read_var()?;
+          insts.push(i_fmul(dst, src_left, src_right));
+        }
+
+        "fsub" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_left = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_right = parser.read_var()?;
+          insts.push(i_fsub(dst, src_left, src_right));
+        }
+
         "finish" => {
-          let return_val =
-            parser.try_read_ident().and_then(|var_name| parser.var(&var_name));
+          let return_val = parser
+            .try_read_ident_sameline()
+            .and_then(|var_name| parser.var(&var_name));
           insts.push(i_finish(return_val));
         }
 
-        "goto_ctf" => {
-          let test_var = parser.read_var()?;
-          parser.expect_char(',')?;
-          let then_block = parser.read_ident()?;
-          parser.expect_char(',')?;
-          let else_block = parser.read_ident()?;
-          insts.push(i_goto_ctf(test_var, &then_block, &else_block));
+        "goto" => {
+          let target = parser.read_block()?;
+          insts.push(i_goto(&target));
         }
 
-        "goto" => {
-          let target = parser.read_ident()?;
-          insts.push(i_goto(&target));
+        "if_then_else" => {
+          let test_var = parser.read_var()?;
+          parser.expect_char(',')?;
+          let then_block = parser.read_block()?;
+          parser.expect_char(',')?;
+          let else_block = parser.read_block()?;
+          insts.push(i_goto_ctf(test_var, &then_block, &else_block));
         }
 
         "imm" => {
@@ -579,6 +694,13 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           insts.push(i_mod(dst, src_left, src_right));
         }
 
+        "modm" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_right = parser.read_ri()?;
+          insts.push(i_modm(dst, src_right));
+        }
+
         "mul" => {
           let dst = parser.read_var()?;
           parser.expect_char(',')?;
@@ -586,6 +708,29 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           parser.expect_char(',')?;
           let src_right = parser.read_ri()?;
           insts.push(i_mul(dst, src_left, src_right));
+        }
+
+        "mulm" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_right = parser.read_ri()?;
+          insts.push(i_mulm(dst, src_right));
+        }
+
+        "shr" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_left = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_right = parser.read_ri()?;
+          insts.push(i_shr(dst, src_left, src_right));
+        }
+
+        "shrm" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_right = parser.read_ri()?;
+          insts.push(i_shrm(dst, src_right));
         }
 
         "store" => {
@@ -609,6 +754,13 @@ fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
           parser.expect_char(',')?;
           let src_right = parser.read_ri()?;
           insts.push(i_sub(dst, src_left, src_right));
+        }
+
+        "subm" => {
+          let dst = parser.read_var()?;
+          parser.expect_char(',')?;
+          let src_right = parser.read_ri()?;
+          insts.push(i_subm(dst, src_right));
         }
 
         "printi" => {

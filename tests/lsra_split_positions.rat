@@ -15,7 +15,7 @@ r3I = real i32 3
       cmp_le   r2I, v3I, r3I
       copy    r2I, r3I
       copy    v1I, r3I
-      goto_ctf  v4I, b2, b2
+      if_then_else  v4I, b2, b2
 
   b1:
       copy    r2I, v4I

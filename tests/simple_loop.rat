@@ -13,7 +13,7 @@ preheader:
 loop:
     add vI, vI, 1
     cmp_lt rTMP, vI, vNENT
-    goto_ctf rTMP, continue, end
+    if_then_else rTMP, continue, end
 
 continue:
     goto preheader

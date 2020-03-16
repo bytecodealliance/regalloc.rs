@@ -20,7 +20,7 @@ set-loop:
     store [vI], vI
     add vI, vI, 1
     cmp_lt rTMP, vI, vNENT
-    goto_ctf rTMP, set-loop-continue, sum-loop-pre
+    if_then_else rTMP, set-loop-continue, sum-loop-pre
 
 set-loop-continue:
     goto set-loop-header
@@ -40,7 +40,7 @@ sum-loop:
     add vSUM, vSUM, rTMP
     add vI, vI, 1
     cmp_lt vTMP2, vI, vNENT
-    goto_ctf vTMP2, sum-loop-continue, print-result
+    if_then_else vTMP2, sum-loop-continue, print-result
 
 sum-loop-continue:
     goto sum-loop-header
