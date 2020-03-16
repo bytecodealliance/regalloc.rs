@@ -1151,27 +1151,32 @@ fn merge_RangeFrags(
     //
     // For each ix@(fix, kind, bix) in |triples| (order unimportant):
     //
-    // * "Merge with blocks that are live 'downstream' from here":
-    //   if fix is live-out or live-through:
-    //      for b in succs[bix]
-    //         for each ix2@(fix2, kind2, bix2) in |triples|
-    //            if bix2 == b && kind2 is live-in or live-through:
-    //                merge(ix, ix2)
+    // (1) "Merge with blocks that are live 'downstream' from here":
+    //     if fix is live-out or live-through:
+    //        for b in succs[bix]
+    //           for each ix2@(fix2, kind2, bix2) in |triples|
+    //              if bix2 == b && kind2 is live-in or live-through:
+    //                  merge(ix, ix2)
     //
-    // * "Merge with blocks that are live 'upstream' from here":
-    //   if fix is live-in or live-through:
-    //      for b in preds[bix]
-    //         for each ix2@(fix2, kind2, bix2) in |triples|
-    //            if bix2 == b && kind2 is live-out or live-through:
-    //                merge(ix, ix2)
+    // (2) "Merge with blocks that are live 'upstream' from here":
+    //     if fix is live-in or live-through:
+    //        for b in preds[bix]
+    //           for each ix2@(fix2, kind2, bix2) in |triples|
+    //              if bix2 == b && kind2 is live-out or live-through:
+    //                  merge(ix, ix2)
     //
     // |triples| remains unchanged.  The equivalence class info is accumulated
     // in |eclasses_uf| instead.  |eclasses_uf| entries are indices into
     // |triples|.
+    //
+    // Now, you might think it necessary to do both (1) and (2).  But no, they
+    // are mutually redundant, since if two blocks are connected by a live
+    // flow from one to the other, then they are also connected in the other
+    // direction.  Hence checking one of the directions is enough.
     let mut eclasses_uf = UnionFind::<usize>::new(triples.len());
 
     for ((_fix, kind, bix), ix) in triples.iter().zip(0..) {
-      // Deal with liveness flows outbound from |fix|.
+      // Deal with liveness flows outbound from |fix|.  Meaning, (1) above.
       if *kind == RangeFragKind::LiveOut || *kind == RangeFragKind::Thru {
         for b in cfg_info.succ_map[*bix].iter() {
           // Visit all entries in |triples| that are for |b|
@@ -1181,21 +1186,6 @@ fn merge_RangeFrags(
             }
             // Now we know that liveness for this reg "flows" from
             // |triples[ix]| to |triples[ix2]|.  So those two frags must be
-            // part of the same live range.  Note this.
-            eclasses_uf.union(ix, ix2); // Order of args irrelevant
-          }
-        }
-      }
-      // Symmetrically, deal with liveness flows inbound to |fix|.
-      if *kind == RangeFragKind::LiveIn || *kind == RangeFragKind::Thru {
-        for b in cfg_info.pred_map[*bix].iter() {
-          // Visit all entries in |triples| that are for |b|
-          for ((_fix2, kind2, bix2), ix2) in triples.iter().zip(0..) {
-            if *bix2 != *b || *kind2 == RangeFragKind::LiveIn {
-              continue;
-            }
-            // Now we know that liveness for this reg "flows" from
-            // |triples[ix2]| to |triples[ix]|.  So those two frags must be
             // part of the same live range.  Note this.
             eclasses_uf.union(ix, ix2); // Order of args irrelevant
           }
