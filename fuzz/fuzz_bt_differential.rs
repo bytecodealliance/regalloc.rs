@@ -1,50 +1,49 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 
+use minira::{self, test_framework as ir, validator};
 use regalloc;
-use minira::{self, test_framework as ir};
 
 fuzz_target!(|func: ir::Func| {
-    let mut func = func;
+  let mut func = func;
 
-    let num_regs = minira::fuzzing::NUM_REAL_REGS_PER_RC as usize;
-    let reg_universe = ir::make_universe(num_regs, num_regs);
+  let num_regs = minira::fuzzing::NUM_REAL_REGS_PER_RC as usize;
+  let reg_universe = ir::make_universe(num_regs, num_regs);
 
-    let cloned_func = func.clone();
-    func.print("before allocation");
+  let cloned_func = func.clone();
 
-    let result = match regalloc::allocate_registers(
-      &mut func,
-      regalloc::RegAllocAlgorithm::Backtracking,
-      &reg_universe,
-    ) {
-        Ok(result) => result,
-        Err(err) => {
-            println!("allocation error: {}", err);
-            return;
-        }
-    };
+  let mut rendered = String::new();
+  func.render("before allocation", &mut rendered).unwrap();
+  println!("{}", rendered);
 
-    func.update_from_alloc(result);
-    func.print("after allocation");
+  let result = match regalloc::allocate_registers(
+    &mut func,
+    regalloc::RegAllocAlgorithm::Backtracking,
+    &reg_universe,
+  ) {
+    Ok(result) => result,
+    Err(err) => {
+      println!("allocation error: {}", err);
+      return;
+    }
+  };
 
-    let expected_ret_value = ir::run_func(
-      &cloned_func,
-      "Before allocation",
-      &reg_universe,
-      ir::RunStage::BeforeRegalloc,
-    );
+  func.update_from_alloc(result);
+  func.print("after allocation");
 
-    let observed_ret_value = ir::run_func(
-      &func,
-      "After allocation",
-      &reg_universe,
-      ir::RunStage::AfterRegalloc,
-    );
+  let expected = ir::run_func(
+    &cloned_func,
+    "Before allocation",
+    &reg_universe,
+    ir::RunStage::BeforeRegalloc,
+  );
 
-    assert_eq!(
-      expected_ret_value, observed_ret_value,
-      "Incorrect interpreter result: expected {:?}, observed {:?}",
-      expected_ret_value, observed_ret_value
-    );
+  let observed = ir::run_func(
+    &func,
+    "After allocation",
+    &reg_universe,
+    ir::RunStage::AfterRegalloc,
+  );
+
+  validator::check_results(&expected, &observed);
 });

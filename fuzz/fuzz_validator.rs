@@ -10,7 +10,9 @@ fuzz_target!(|func: ir::Func| {
   );
 
   validate(&func, &reg_universe).unwrap_or_else(|err| {
-    func.print("validation error");
+    let mut rendered = String::new();
+    func.render("validation error", &mut rendered).unwrap();
+    println!("{}", rendered);
     panic!(err);
   });
 });
