@@ -224,7 +224,21 @@ impl<'f, 'str> Parser<'f, 'str> {
 
   fn try_read_number(&mut self) -> ParseResult<Option<f64>> {
     self.skip_whitespace_and_comments();
-    let first_digit = if let Some(c) = self.peek() {
+    let mut is_negative = false;
+    let first_digit = if let Some('-') = self.peek() {
+      // Consume the minus sign.
+      self.advance().unwrap();
+      is_negative = true;
+      // Now, we expect a digit.
+      if let Some(c) = self.advance() {
+        if !is_digit(c) {
+          return self.error("expected a digit after minus sign");
+        }
+        c
+      } else {
+        return self.error("expected a digit after minus sign");
+      }
+    } else if let Some(c) = self.peek() {
       if is_digit(c) {
         self.advance().unwrap();
         c
@@ -234,6 +248,7 @@ impl<'f, 'str> Parser<'f, 'str> {
     } else {
       return Ok(None);
     };
+
     let mut number = first_digit.to_digit(10).unwrap() as f64;
     let mut fractional_power_of_ten: Option<f64> = None;
     while let Some(c) = self.peek() {
@@ -263,6 +278,11 @@ impl<'f, 'str> Parser<'f, 'str> {
         break;
       }
     }
+
+    if is_negative {
+      number = -number;
+    }
+
     Ok(Some(number))
   }
   fn read_number(&mut self) -> ParseResult<f64> {
