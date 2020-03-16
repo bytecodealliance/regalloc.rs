@@ -116,10 +116,9 @@ impl<T: ToFromU32> UnionFind<T> {
     let elem1 = ToFromU32::to_u32(elem1t);
     let elem2 = ToFromU32::to_u32(elem2t);
     if elem1 == elem2 {
-      // We could simply do nothing here, but it's probably safer to alert the
-      // caller to the problem, so as to avoid perf problems where callers
-      // mistakenly do |union| on identical values repeatedly.
-      panic!("UnionFind::union: union on the same elements");
+      // Ideally, we'd alert the callers they're mistakenly do |union| on
+      // identical values repeatedly, but fuzzing hits this repeatedly.
+      return;
     }
     let root1: u32 = self.find(elem1);
     let root2: u32 = self.find(elem2);
