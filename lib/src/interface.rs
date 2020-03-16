@@ -145,7 +145,7 @@ pub use crate::data_structures::{BlockIx, InstIx, Range};
 pub trait Function {
   /// Regalloc is parameterized on F: Function and so can use the projected
   /// type F::Inst.
-  type Inst: Clone;
+  type Inst: Clone + fmt::Debug;
 
   // -------------
   // CFG traversal
