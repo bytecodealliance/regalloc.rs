@@ -367,6 +367,10 @@ struct State<'a, F: Function> {
 
   /// Next available spill slot.
   next_spill_slot: SpillSlot,
+
+  /// Maps given virtual registers to the spill slots they should be assigned
+  /// to.
+  spill_map: HashMap<VirtualReg, SpillSlot>,
 }
 
 impl<'a, F: Function> State<'a, F> {
@@ -405,6 +409,7 @@ impl<'a, F: Function> State<'a, F> {
       inactive: Vec::new(),
       handled: Vec::new(),
       next_spill_slot: SpillSlot::new(0),
+      spill_map: HashMap::default(),
     }
   }
 
@@ -435,30 +440,16 @@ impl<'a, F: Function> State<'a, F> {
     );
     debug!("spilling {}", self.intervals.display(id, &self.fragments));
 
-    // TODO this should be per vreg instead.
-    let mut spill_slot = None;
-
-    // Try to find if there's a parent which allocated a spill slot for this
-    // particular virtual register, and reuse it in this case.
-    let mut cur_id = id;
-    while let Some(parent) = &self.intervals.data[cur_id.0].parent {
-      if let Some(parent_spill) = self.intervals.location(*parent).spill() {
-        spill_slot = Some(parent_spill);
-        break;
-      }
-      cur_id = *parent;
-    }
-
-    let spill_slot = match spill_slot {
-      None => {
-        let reg_class = self.intervals.reg_class(id);
-        let vreg = self.intervals.vreg(id);
-        let size_slot = self.func.get_spillslot_size(reg_class, vreg);
-        let spill_slot = self.next_spill_slot.round_up(size_slot);
-        self.next_spill_slot = self.next_spill_slot.inc(1);
-        spill_slot
-      }
-      Some(x) => x,
+    let vreg = self.intervals.vreg(id);
+    let spill_slot = if let Some(spill_slot) = self.spill_map.get(&vreg) {
+      *spill_slot
+    } else {
+      let reg_class = self.intervals.reg_class(id);
+      let size_slot = self.func.get_spillslot_size(reg_class, vreg);
+      let spill_slot = self.next_spill_slot.round_up(size_slot);
+      self.next_spill_slot = self.next_spill_slot.inc(1);
+      self.spill_map.insert(vreg, spill_slot);
+      spill_slot
     };
 
     self.intervals.set_spill(id, spill_slot);
