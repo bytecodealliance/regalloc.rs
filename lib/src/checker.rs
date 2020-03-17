@@ -78,6 +78,10 @@ pub struct CheckerErrors {
 /// A single error detected by the regalloc checker.
 #[derive(Clone, Debug)]
 pub enum CheckerError {
+  MissingAllocationForReg {
+    reg: VirtualReg,
+    inst: InstIx,
+  },
   UnknownValueInReg {
     real_reg: RealReg,
     inst: InstIx,
@@ -273,17 +277,32 @@ pub(crate) struct Checker {
   bb_insts: Map<BlockIx, Vec<Inst>>,
 }
 
-fn map_regs(map: &Map<VirtualReg, RealReg>, regs: &[Reg]) -> Vec<RealReg> {
-  regs
+fn map_regs(
+  inst: InstIx, map: &Map<VirtualReg, RealReg>, regs: &[Reg],
+) -> Result<Vec<RealReg>, CheckerErrors> {
+  let mut errors = Vec::new();
+  let real_regs = regs
     .iter()
     .map(|r| {
       if r.is_virtual() {
-        map.get(&r.to_virtual_reg()).cloned().unwrap()
+        map.get(&r.to_virtual_reg()).cloned().unwrap_or_else(|| {
+          errors.push(CheckerError::MissingAllocationForReg {
+            reg: r.to_virtual_reg(),
+            inst,
+          });
+          // Provide a dummy value for the register, it'll never be read.
+          Reg::new_real(r.get_class(), 0x0, 0).to_real_reg()
+        })
       } else {
         r.to_real_reg()
       }
     })
-    .collect()
+    .collect();
+  if errors.is_empty() {
+    Ok(real_regs)
+  } else {
+    Err(CheckerErrors { errors })
+  }
 }
 
 impl Checker {
@@ -322,21 +341,22 @@ impl Checker {
   pub(crate) fn add_op(
     &mut self, block: BlockIx, inst_ix: InstIx, iru: &SanitizedInstRegUses,
     pre_map: &Map<VirtualReg, RealReg>, post_map: &Map<VirtualReg, RealReg>,
-  ) {
+  ) -> Result<(), CheckerErrors> {
     let mut uses_set = iru.san_used.clone();
     let mut defs_set = iru.san_defined.clone();
     uses_set.union(&iru.san_modified);
     defs_set.union(&iru.san_modified);
     if uses_set.is_empty() && defs_set.is_empty() {
-      return;
+      return Ok(());
     }
 
     let uses_orig = uses_set.to_vec();
     let defs_orig = defs_set.to_vec();
-    let uses = map_regs(pre_map, &uses_orig[..]);
-    let defs = map_regs(post_map, &defs_orig[..]);
+    let uses = map_regs(inst_ix, pre_map, &uses_orig[..])?;
+    let defs = map_regs(inst_ix, post_map, &defs_orig[..])?;
     let insts = self.bb_insts.get_mut(&block).unwrap();
     insts.push(Inst::Op { inst_ix, uses_orig, defs_orig, uses, defs });
+    Ok(())
   }
 
   /// Perform the dataflow analysis to compute checker state at each BB entry.
@@ -421,7 +441,7 @@ impl CheckerContext {
   pub(crate) fn handle_insn<F: Function>(
     &mut self, ru: &RealRegUniverse, func: &F, bix: BlockIx, iix: InstIx,
     pre_map: &Map<VirtualReg, RealReg>, post_map: &Map<VirtualReg, RealReg>,
-  ) {
+  ) -> Result<(), CheckerErrors> {
     let empty = vec![];
     let pre_point = InstPoint { iix, pt: Point::Reload };
     let post_point = InstPoint { iix, pt: Point::Spill };
@@ -439,13 +459,15 @@ impl CheckerContext {
       "at inst {:?}: sru {:?} use-map {:?} def-map {:?}",
       iix, sru, pre_map, post_map
     );
-    self.checker.add_op(bix, iix, &sru, pre_map, post_map);
+    self.checker.add_op(bix, iix, &sru, pre_map, post_map)?;
 
     for checker_inst in self.checker_inst_map.get(&post_point).unwrap_or(&empty)
     {
       debug!("at inst {:?}: post checker_inst: {:?}", iix, checker_inst);
       self.checker.add_inst(bix, checker_inst.clone());
     }
+
+    Ok(())
   }
 
   /// Run the underlying checker, once all instructions have been added.

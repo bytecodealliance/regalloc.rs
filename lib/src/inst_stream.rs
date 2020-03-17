@@ -375,7 +375,7 @@ pub(crate) fn apply_reg_uses<F: Function>(
           insnIx,
           &map_uses,
           &map_defs,
-        );
+        )?;
       }
 
       // Finally, we have map_uses/map_defs set correctly for this instruction.

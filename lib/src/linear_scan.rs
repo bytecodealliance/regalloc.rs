@@ -2242,7 +2242,7 @@ fn apply_registers<F: Function>(
           inst_id,
           &map_uses,
           &map_defs,
-        );
+        )?;
       }
 
       let mut inst = func.get_insn_mut(inst_id);
