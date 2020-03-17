@@ -2146,9 +2146,10 @@ fn emit_moves(
 
 /// Fills in the register assignments into instructions.
 fn apply_registers<F: Function>(
-  func: &mut F, intervals: &Intervals, virtual_intervals: Vec<&LiveInterval>,
-  fragments: &Fragments, memory_moves: &InstsAndPoints,
-  reg_universe: &RealRegUniverse, use_checker: bool,
+  func: &mut F, intervals: &Intervals,
+  mut virtual_intervals: Vec<&LiveInterval>, fragments: &Fragments,
+  memory_moves: &InstsAndPoints, reg_universe: &RealRegUniverse,
+  use_checker: bool,
 ) -> Result<(), CheckerErrors> {
   info!("apply_registers");
 
@@ -2158,47 +2159,73 @@ fn apply_registers<F: Function>(
     checker = Some(CheckerContext::new(func, reg_universe, memory_moves));
   }
 
+  // Sort the intervals by starting point again.
+  virtual_intervals.sort_by_key(|int| intervals.start(int.id, fragments));
+
+  let mut cur_int = 0;
+  let mut active: Vec<(RealReg, IntId)> = Vec::with_capacity(16);
+
+  let mut map_uses = Map::<VirtualReg, RealReg>::default();
+  let mut map_defs = Map::<VirtualReg, RealReg>::default();
+
   for block_id in func.blocks() {
     for inst_id in func.block_insns(block_id) {
       let inst_use = InstPoint::new_use(inst_id);
       let inst_def = InstPoint::new_def(inst_id);
 
-      // TODO optimize this by maintaining sorted lists of active and unhandled
-      // intervals.
-      let mut map_uses = Map::<VirtualReg, RealReg>::default();
-      let mut map_defs = Map::<VirtualReg, RealReg>::default();
+      // Expire previously active intervals.
+      active.retain(|&(_rreg, id)| inst_use <= intervals.end(id, fragments));
 
-      for &interval in &virtual_intervals {
-        let id = interval.id;
-        if intervals.is_fixed(id) {
-          continue;
+      // Add new active intervals.
+      while cur_int < virtual_intervals.len()
+        && inst_def >= intervals.start(virtual_intervals[cur_int].id, fragments)
+      {
+        if let Some(rreg) =
+          intervals.location(virtual_intervals[cur_int].id).reg()
+        {
+          active.push((rreg, virtual_intervals[cur_int].id));
         }
+        cur_int += 1;
+      }
+
+      map_uses.clear();
+      map_defs.clear();
+
+      for &(rreg, id) in &active {
+        let vreg = intervals.vreg(id);
 
         if intervals.covers(id, &inst_def, &fragments) {
-          if let Some(rreg) = intervals.location(id).reg() {
-            let vreg = intervals.vreg(id);
-            let prev_entry = map_defs.insert(vreg, rreg);
-            debug_assert!(
-              prev_entry.is_none() || prev_entry.unwrap() == rreg,
-              "def vreg {:?} already mapped to {:?}",
-              vreg,
-              prev_entry.unwrap()
-            );
-          }
+          let prev_entry = map_defs.insert(vreg, rreg);
+          debug_assert!(
+            prev_entry.is_none() || prev_entry.unwrap() == rreg,
+            "def vreg {:?} already mapped to {:?}",
+            vreg,
+            prev_entry.unwrap()
+          );
         }
 
         if intervals.covers(id, &inst_use, &fragments) {
-          if let Some(rreg) = intervals.location(id).reg() {
-            let vreg = intervals.vreg(id);
-            let prev_entry = map_uses.insert(vreg, rreg);
-            debug_assert!(
-              prev_entry.is_none() || prev_entry.unwrap() == rreg,
-              "use vreg {:?} already mapped to {:?}",
-              vreg,
-              prev_entry.unwrap()
-            );
-          }
+          let prev_entry = map_uses.insert(vreg, rreg);
+          debug_assert!(
+            prev_entry.is_none() || prev_entry.unwrap() == rreg,
+            "use vreg {:?} already mapped to {:?}",
+            vreg,
+            prev_entry.unwrap()
+          );
         }
+      }
+
+      if show_traces {
+        debug!("map_regs for {:?}", inst_id);
+        trace!("uses");
+        for (k, v) in &map_uses {
+          trace!("- {:?} -> {:?}", k, v);
+        }
+        trace!("defs");
+        for (k, v) in &map_defs {
+          trace!("- {:?} -> {:?}", k, v);
+        }
+        trace!("");
       }
 
       #[cfg(debug_assertions)]
@@ -2219,19 +2246,6 @@ fn apply_registers<F: Function>(
             debug_assert_eq!(prev_vreg, *k);
           }
         }
-      }
-
-      if show_traces {
-        trace!("map_regs for {:?}", inst_id);
-        trace!("uses");
-        for (k, v) in &map_uses {
-          trace!("- {:?} -> {:?}", k, v);
-        }
-        trace!("defs");
-        for (k, v) in &map_defs {
-          trace!("- {:?} -> {:?}", k, v);
-        }
-        trace!("");
       }
 
       if let Some(ref mut checker) = &mut checker {
