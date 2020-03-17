@@ -1181,9 +1181,9 @@ fn merge_RangeFrags(
     // We have two schemes for group merging, one of which is N^2 in the
     // length of triples, the other is N-log-N, but with higher constant
     // factors.  Some experimentation with the bz2 test on a Cortex A57 puts
-    // the puts the optimal crossover point between 200 and 300; it's not
-    // critical.  Having this protects us against bad behaviour for huge
-    // inputs whilst still being fast for small inputs.
+    // the optimal crossover point between 200 and 300; it's not critical.
+    // Having this protects us against bad behaviour for huge inputs whilst
+    // still being fast for small inputs.
     if triples_len <= 250 {
       // The simple way, which is N^2 in the length of |triples|.
       for ((_fix, kind, bix), ix) in triples.iter().zip(0..) {
@@ -1208,10 +1208,10 @@ fn merge_RangeFrags(
       sz_multi_grps_small += triples_len;
     } else {
       // The more complex way, which is N-log-N in the length of |triples|.
-      // This is the same as the simply way, except that the innermost loop,
+      // This is the same as the simple way, except that the innermost loop,
       // which is a linear search in |triples| to find entries for some block
-      // |b| is replaced by a binary search.  This means that |triples| first
-      // needs to be sorted by block.
+      // |b|, is replaced by a binary search.  This means that |triples| first
+      // needs to be sorted by block index.
       triples.sort_unstable_by(|(_, _, bix1), (_, _, bix2)| {
         bix1.partial_cmp(bix2).unwrap()
       });
