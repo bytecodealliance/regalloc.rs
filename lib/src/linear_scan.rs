@@ -15,7 +15,7 @@
 // - (perf) try to handle different register classes in different passes.
 // - (correctness) use sanitized reg uses in lieu of reg uses.
 
-use log::{debug, trace};
+use log::{debug, info, trace};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use std::cmp::Ordering;
@@ -226,6 +226,11 @@ impl Intervals {
   fn covers(
     &self, int_id: IntId, pos: &InstPoint, fragments: &Fragments,
   ) -> bool {
+    if *pos < self.start(int_id, fragments)
+      || *pos > self.end(int_id, fragments)
+    {
+      return false;
+    }
     self
       .fragments(int_id)
       .frag_ixs
@@ -909,7 +914,6 @@ fn find_optimal_split_pos<F: Function>(
   );
 
   if from == to {
-    debug_assert!(state.intervals.covers(id, &from, &state.fragments));
     return from;
   }
 
@@ -948,11 +952,8 @@ fn find_optimal_split_pos<F: Function>(
 fn split<F: Function>(
   state: &mut State<F>, id: IntId, at_pos: InstPoint,
 ) -> IntId {
-  debug!(
-    "split {:?} {}",
-    at_pos,
-    state.intervals.display(id, &state.fragments),
-  );
+  debug!("split {:?} at {:?}", id, at_pos);
+  trace!("interval: {}", state.intervals.display(id, &state.fragments),);
 
   let parent_start = state.intervals.start(id, &state.fragments);
   debug_assert!(parent_start <= at_pos, "must split after the start");
@@ -994,7 +995,7 @@ fn split<F: Function>(
       let child_first = at_pos;
       let child_last = frag.last;
 
-      debug!(
+      trace!(
         "split fragment [{:?}; {:?}] into two parts: [{:?}; {:?}] to [{:?}; {:?}]",
         frag.first, frag.last,
         parent_first,
@@ -1078,9 +1079,9 @@ fn split<F: Function>(
 
   state.intervals.set_child(id, child_id);
 
-  debug!("split results:");
-  debug!("- {}", state.intervals.display(id, &state.fragments));
-  debug!("- {}", state.intervals.display(child_id, &state.fragments));
+  trace!("split results:");
+  trace!("- {}", state.intervals.display(id, &state.fragments));
+  trace!("- {}", state.intervals.display(child_id, &state.fragments));
 
   child_id
 }
@@ -1134,7 +1135,11 @@ fn split_and_spill<F: Function>(
         id, last_use, split_pos
       );
 
+      // Maintain ascending order between the min and max positions.
       let min_pos = InstPoint::min(next_pos(last_use), split_pos);
+
+      // Make sure that if the two positions are the same, we'll be splitting in
+      // a position that's in the current interval.
       let optimal_pos = find_optimal_split_pos(state, id, min_pos, split_pos);
 
       let child = split(state, id, optimal_pos);
@@ -1309,6 +1314,7 @@ pub fn run<F: Function>(
 
     let mut prev_start = None;
     while let Some(id) = state.next_unhandled() {
+      info!("main loop: allocating {:?}", id);
       trace!(
         "main loop: allocating {}",
         state.intervals.display(id, &state.fragments)
@@ -1424,15 +1430,37 @@ fn find_enclosing_interval(
   vreg: VirtualReg, inst: InstPoint, intervals: &Intervals,
   fragments: &Fragments, virtual_intervals: &Vec<&LiveInterval>,
 ) -> Option<IntId> {
-  for vint in virtual_intervals {
-    if intervals.vreg(vint.id) != vreg {
-      continue;
+  // The list of virtual intervals is sorted by vreg; find one interval for this
+  // vreg.
+  let index = virtual_intervals
+    .binary_search_by_key(&vreg, |int| intervals.vreg(int.id))
+    .expect("should find at least one virtual interval for this vreg");
+
+  // Rewind back to the first interval for this vreg, since there might be
+  // several ones.
+  let mut index = index;
+  while index > 0 && intervals.vreg(virtual_intervals[index - 1].id) == vreg {
+    index -= 1;
+  }
+
+  // Now iterates on all the intervals for this virtual register, until one
+  // works.
+  let mut int = &virtual_intervals[index];
+  loop {
+    if intervals.covers(int.id, &inst, fragments) {
+      return Some(int.id);
     }
-    if intervals.covers(vint.id, &inst, fragments) {
-      return Some(vint.id);
+
+    index += 1;
+    if index == virtual_intervals.len() {
+      return None;
+    }
+
+    int = &virtual_intervals[index];
+    if intervals.vreg(int.id) != vreg {
+      return None;
     }
   }
-  None
 }
 
 fn resolve_moves<F: Function>(
@@ -1446,7 +1474,7 @@ fn resolve_moves<F: Function>(
   let mut parallel_reloads = HashMap::default();
   let mut spills = HashMap::default();
 
-  debug!("resolve_moves");
+  info!("resolve_moves");
 
   for &interval in virtual_intervals {
     let location = interval.location();
@@ -1625,6 +1653,7 @@ fn resolve_moves<F: Function>(
         let vreg =
           if let Some(vreg) = reg.as_virtual_reg() { vreg } else { continue };
 
+        // Find the interval for this (vreg, inst) pair.
         let (succ_first_inst, succ_id) = {
           let first_inst = InstPoint::new_use(func.block_insns(succ).first());
           let found = match find_enclosing_interval(
@@ -1642,8 +1671,6 @@ fn resolve_moves<F: Function>(
           (first_inst, found)
         };
 
-        // Find the interval for this (vreg, inst) pair.
-        // TODO Probably need to optimize this.
         let (cur_last_inst, cur_id) = {
           let last_inst = func.block_insns(block).last();
           // see XXX above
@@ -2123,6 +2150,8 @@ fn apply_registers<F: Function>(
   fragments: &Fragments, memory_moves: &InstsAndPoints,
   reg_universe: &RealRegUniverse, use_checker: bool,
 ) -> Result<(), CheckerErrors> {
+  info!("apply_registers");
+
   let show_traces = env::var("MAP_REGS").is_ok();
   let mut checker: Option<CheckerContext> = None;
   if use_checker {
@@ -2202,11 +2231,10 @@ fn apply_registers<F: Function>(
         for (k, v) in &map_defs {
           trace!("- {:?} -> {:?}", k, v);
         }
-
         trace!("");
       }
 
-      if let &mut Some(ref mut checker) = &mut checker {
+      if let Some(ref mut checker) = &mut checker {
         checker.handle_insn(
           reg_universe,
           func,
@@ -2222,8 +2250,8 @@ fn apply_registers<F: Function>(
     }
   }
 
-  if checker.is_some() {
-    checker.unwrap().run()
+  if let Some(checker) = checker {
+    checker.run()
   } else {
     Ok(())
   }
