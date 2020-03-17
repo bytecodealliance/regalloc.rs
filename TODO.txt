@@ -12,6 +12,9 @@
 - Require clients to specify the number of virtual regs in the input, so that
   we can use DenseSet<VirtualReg>.
 
+- Allow clients to specify an is_leaf_function flag, so we can switch
+  allocation ordering to favour leaf functions in such cases.
+
 === Allocator run time (analysis phase, algorithmic) ======================
 
 Estimated most-important-first:
@@ -64,9 +67,9 @@ Estimated most-important-first:
   change Vec to SmallVec without supporting DHAT profile data; this can make
   things run more slowly.
 
-- (Longer term) investigate the feasibility of remove the fragment environment
-  and instead storing fragment range data directly in what is currently
-  RangeFragIx.
+- (Longer term) investigate the feasibility of removing the fragment
+  environment and instead storing fragment range data directly in what is
+  currently RangeFragIx.
 
 === Functionality =====================================================
 
