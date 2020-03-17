@@ -1090,8 +1090,11 @@ fn merge_RangeFrags(
 
   let mut n_single_grps = 0;
   let mut n_local_frags = 0;
-  let mut n_multi_grps = 0;
-  let mut sz_multi_grps = 0;
+
+  let mut n_multi_grps_small = 0;
+  let mut n_multi_grps_large = 0;
+  let mut sz_multi_grps_small = 0;
+  let mut sz_multi_grps_large = 0;
 
   let mut resR = TypedIxVec::<RealRangeIx, RealRange>::new();
   let mut resV = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
@@ -1144,8 +1147,8 @@ fn merge_RangeFrags(
       assert!(frag.kind != RangeFragKind::Local);
       triples.push((*fix, frag.kind, frag.bix));
     }
-    n_multi_grps += 1;
-    sz_multi_grps += triples.len();
+
+    let triples_len = triples.len();
 
     // This is the core of the merging algorithm.
     //
@@ -1173,25 +1176,117 @@ fn merge_RangeFrags(
     // are mutually redundant, since if two blocks are connected by a live
     // flow from one to the other, then they are also connected in the other
     // direction.  Hence checking one of the directions is enough.
-    let mut eclasses_uf = UnionFind::<usize>::new(triples.len());
+    let mut eclasses_uf = UnionFind::<usize>::new(triples_len);
 
-    for ((_fix, kind, bix), ix) in triples.iter().zip(0..) {
-      // Deal with liveness flows outbound from |fix|.  Meaning, (1) above.
-      if *kind == RangeFragKind::LiveOut || *kind == RangeFragKind::Thru {
-        for b in cfg_info.succ_map[*bix].iter() {
-          // Visit all entries in |triples| that are for |b|
-          for ((_fix2, kind2, bix2), ix2) in triples.iter().zip(0..) {
-            if *bix2 != *b || *kind2 == RangeFragKind::LiveOut {
-              continue;
+    // We have two schemes for group merging, one of which is N^2 in the
+    // length of triples, the other is N-log-N, but with higher constant
+    // factors.  Some experimentation with the bz2 test on a Cortex A57 puts
+    // the puts the optimal crossover point between 200 and 300; it's not
+    // critical.  Having this protects us against bad behaviour for huge
+    // inputs whilst still being fast for small inputs.
+    if triples_len <= 250 {
+      // The simple way, which is N^2 in the length of |triples|.
+      for ((_fix, kind, bix), ix) in triples.iter().zip(0..) {
+        // Deal with liveness flows outbound from |fix|.  Meaning, (1) above.
+        if *kind == RangeFragKind::LiveOut || *kind == RangeFragKind::Thru {
+          for b in cfg_info.succ_map[*bix].iter() {
+            // Visit all entries in |triples| that are for |b|
+            for ((_fix2, kind2, bix2), ix2) in triples.iter().zip(0..) {
+              if *bix2 != *b || *kind2 == RangeFragKind::LiveOut {
+                continue;
+              }
+              // Now we know that liveness for this reg "flows" from
+              // |triples[ix]| to |triples[ix2]|.  So those two frags must be
+              // part of the same live range.  Note this.
+              debug_assert!(ix != ix2);
+              eclasses_uf.union(ix, ix2); // Order of args irrelevant
             }
-            // Now we know that liveness for this reg "flows" from
-            // |triples[ix]| to |triples[ix2]|.  So those two frags must be
-            // part of the same live range.  Note this.
-            eclasses_uf.union(ix, ix2); // Order of args irrelevant
+          }
+        }
+      } // outermost iteration over |triples|
+      n_multi_grps_small += 1;
+      sz_multi_grps_small += triples_len;
+    } else {
+      // The more complex way, which is N-log-N in the length of |triples|.
+      // This is the same as the simply way, except that the innermost loop,
+      // which is a linear search in |triples| to find entries for some block
+      // |b| is replaced by a binary search.  This means that |triples| first
+      // needs to be sorted by block.
+      triples.sort_unstable_by(|(_, _, bix1), (_, _, bix2)| {
+        bix1.partial_cmp(bix2).unwrap()
+      });
+      for ((_fix, kind, bix), ix) in triples.iter().zip(0..) {
+        // Deal with liveness flows outbound from |fix|.  Meaning, (1) above.
+        if *kind == RangeFragKind::LiveOut || *kind == RangeFragKind::Thru {
+          for b in cfg_info.succ_map[*bix].iter() {
+            //println!("QQQ looking for {:?}", b);
+            // Visit all entries in |triples| that are for |b|.  Binary search
+            // |triples| to find the lowest-indexed entry for |b|.
+            let mut ixL = 0;
+            let mut ixR = triples_len;
+            while ixL < ixR {
+              let m = (ixL + ixR) >> 1;
+              if triples[m].2 < *b {
+                ixL = m + 1;
+              } else {
+                ixR = m;
+              }
+            }
+            // It might be that there is no block for |b| in the sequence.
+            // That's legit; it just means that block |bix| jumps to a
+            // successor where the associated register isn't live-in/thru.  A
+            // failure to find |b| can be indicated one of two ways:
+            //
+            // * ixL == triples_len
+            // * ixL < triples_len and b < triples[ixL].b
+            //
+            // In both cases I *think* the 'loop_over_entries_for_b below will
+            // not do anything.  But this is all a bit hairy, so let's convert
+            // the second variant into the first, so as to make it obvious
+            // that the loop won't do anything.
+
+            // ixL now holds the lowest index of any |triples| entry for block
+            // |b|.  Assert this.
+            if ixL < triples_len && *b < triples[ixL].2 {
+              ixL = triples_len;
+            }
+            if ixL < triples_len {
+              assert!(ixL == 0 || triples[ixL - 1].2 < *b);
+            }
+            // ix2 plays the same role as in the quadratic version.  ixL and
+            // ixR are not used after this point.
+            let mut ix2 = ixL;
+            'loop_over_entries_for_b: loop {
+              if ix2 >= triples_len {
+                break;
+              }
+              let (_fix2, kind2, bix2) = triples[ix2];
+              if *b < bix2 {
+                // We've come to the end of the sequence of |b|-blocks.
+                break;
+              }
+              debug_assert!(*b == bix2);
+              if kind2 == RangeFragKind::LiveOut {
+                ix2 += 1;
+                continue 'loop_over_entries_for_b;
+              }
+              // Now we know that liveness for this reg "flows" from
+              // |triples[ix]| to |triples[ix2]|.  So those two frags must be
+              // part of the same live range.  Note this.
+              if ix != ix2 {
+                eclasses_uf.union(ix, ix2); // Order of args irrelevant
+              }
+              ix2 += 1;
+            }
+            if ix2 + 1 < triples_len {
+              debug_assert!(*b < triples[ix2 + 1].2);
+            }
           }
         }
       }
-    } // outermost iteration over |triples|
+      n_multi_grps_large += 1;
+      sz_multi_grps_large += triples_len;
+    }
 
     // Now |eclasses_uf| contains the results of the merging-search.  Visit
     // each of its equivalence classes in turn, and convert each into a
@@ -1213,8 +1308,12 @@ fn merge_RangeFrags(
   info!("    in: {} single groups", n_single_grps);
   info!("    in: {} local frags in multi groups", n_local_frags);
   info!(
-    "    in: {} multi groups, {} multi group total remaining size",
-    n_multi_grps, sz_multi_grps
+    "    in: {} small multi groups, {} small multi group total size",
+    n_multi_grps_small, sz_multi_grps_small
+  );
+  info!(
+    "    in: {} large multi groups, {} large multi group total size",
+    n_multi_grps_large, sz_multi_grps_large
   );
   info!("    out: {} VLRs, {} RLRs", resV.len(), resR.len());
   info!("  merge_RangeFrags: end");
