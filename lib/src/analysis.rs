@@ -568,6 +568,12 @@ fn calc_livein_and_liveout<F: Function>(
     );
   }
 
+  let ratio: f32 =
+    (nEvals as f32) / ((if nBlocks == 0 { 1 } else { nBlocks }) as f32);
+  info!(
+    "  calc_livein_and_liveout:   {} blocks, {} evals ({:<.2} per block)",
+    nBlocks, nEvals, ratio
+  );
   info!("  calc_livein_and_liveout: end");
   (liveins, liveouts)
 }
