@@ -226,17 +226,18 @@ impl Intervals {
   fn covers(
     &self, int_id: IntId, pos: &InstPoint, fragments: &Fragments,
   ) -> bool {
-    if *pos < self.start(int_id, fragments)
-      || *pos > self.end(int_id, fragments)
-    {
-      return false;
+    // Fragments are sorted by start.
+    let frag_ixs = &self.fragments(int_id).frag_ixs;
+    match frag_ixs.binary_search_by_key(pos, |&index| fragments[index].first) {
+      // Either we find a precise match...
+      Ok(_) => true,
+      // ... or we're just after an interval that could contain it.
+      Err(index) => {
+        // There's at least one fragment, by construction, so no need to check
+        // against fragments.len().
+        index > 0 && fragments[frag_ixs[index - 1]].contains(pos)
+      }
     }
-    self
-      .fragments(int_id)
-      .frag_ixs
-      .iter()
-      .map(|&index| fragments[index])
-      .any(|frag| frag.contains(pos))
   }
 
   fn intersects_with(
