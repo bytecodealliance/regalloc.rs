@@ -18,7 +18,6 @@
 use log::{debug, info, trace};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
-use std::cmp::Ordering;
 use std::env;
 use std::fmt;
 
@@ -267,26 +266,24 @@ impl Intervals {
   fn intersects_with(
     &self, left_id: IntId, right_id: IntId, fragments: &Fragments,
   ) -> Option<InstPoint> {
+    let left = self.get(left_id);
+    let right = self.get(right_id);
+
+    if left.start == right.start {
+      return Some(left.start);
+    }
+
     let left_frags = &self.fragments(left_id).frag_ixs;
     let right_frags = &self.fragments(right_id).frag_ixs;
 
-    let left = self.get(left_id);
-    let right = self.get(right_id);
-    let left_start = left.start;
-    let right_start = right.start;
-
     let mut left_i = 0;
     let mut right_i = 0;
-
     let mut left_max_i = left_frags.len() - 1;
     let mut right_max_i = right_frags.len() - 1;
 
-    if left_start == right_start {
-      return Some(left_start);
-    }
-    if left_start < right_start {
+    if left.start < right.start {
       left_i = match left_frags
-        .binary_search_by_key(&right_start, |&frag_ix| fragments[frag_ix].first)
+        .binary_search_by_key(&right.start, |&frag_ix| fragments[frag_ix].first)
       {
         Ok(index) => return Some(fragments[left_frags[index]].first),
         Err(index) => {
@@ -299,7 +296,7 @@ impl Intervals {
       };
     } else {
       right_i = match right_frags
-        .binary_search_by_key(&left_start, |&frag_ix| fragments[frag_ix].first)
+        .binary_search_by_key(&left.start, |&frag_ix| fragments[frag_ix].first)
       {
         Ok(index) => return Some(fragments[right_frags[index]].first),
         Err(index) => {
@@ -312,11 +309,9 @@ impl Intervals {
       }
     }
 
-    let left_end = left.end;
-    let right_end = right.end;
-    if left_end < right_end {
+    if left.end < right.end {
       right_max_i = match right_frags
-        .binary_search_by_key(&left_end, |&frag_ix| fragments[frag_ix].first)
+        .binary_search_by_key(&left.end, |&frag_ix| fragments[frag_ix].first)
       {
         Ok(index) => index,
         Err(index) => {
@@ -329,7 +324,7 @@ impl Intervals {
       };
     } else {
       left_max_i = match left_frags
-        .binary_search_by_key(&right_end, |&frag_ix| fragments[frag_ix].first)
+        .binary_search_by_key(&right.end, |&frag_ix| fragments[frag_ix].first)
       {
         Ok(index) => index,
         Err(index) => {
@@ -342,30 +337,33 @@ impl Intervals {
       };
     }
 
-    while left_i <= left_max_i && right_i <= right_max_i {
-      let cur = &fragments[left_frags[left_i]];
-      let other = &fragments[right_frags[right_i]];
-      match cmp_range_frags(cur, other) {
-        None => {
-          // They intersect!
-          return Some(if cur.first < other.first {
-            other.first
-          } else {
-            cur.first
-          });
+    let mut left_frag = &fragments[left_frags[left_i]];
+    let mut right_frag = &fragments[right_frags[right_i]];
+    loop {
+      if left_frag.first == right_frag.first {
+        return Some(left_frag.first);
+      }
+      if left_frag.last < right_frag.first {
+        // left_frag < right_frag, go to the range following left_frag.
+        left_i += 1;
+        if left_i > left_max_i {
+          break;
         }
-        Some(Ordering::Less) => {
-          // cur < other, go to the range following cur.
-          left_i += 1;
+        left_frag = &fragments[left_frags[left_i]];
+      } else if right_frag.last < left_frag.first {
+        // left_frag > right_frag, go to the range following right_frag.
+        right_i += 1;
+        if right_i > right_max_i {
+          break;
         }
-        Some(Ordering::Equal) => {
-          // Special intersection case, at the start.
-          return Some(cur.first);
-        }
-        Some(Ordering::Greater) => {
-          // cur > other, go to the range following other.
-          right_i += 1;
-        }
+        right_frag = &fragments[right_frags[right_i]];
+      } else {
+        // They intersect!
+        return Some(if left_frag.first < right_frag.first {
+          right_frag.first
+        } else {
+          left_frag.first
+        });
       }
     }
 
