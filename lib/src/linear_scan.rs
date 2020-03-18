@@ -241,17 +241,84 @@ impl Intervals {
   }
 
   fn intersects_with(
-    &self, int_id: IntId, other_id: IntId, fragments: &Fragments,
+    &self, left_id: IntId, right_id: IntId, fragments: &Fragments,
   ) -> Option<InstPoint> {
-    let frags = &self.fragments(int_id).frag_ixs;
-    let other_frags = &self.fragments(other_id).frag_ixs;
+    let left_frags = &self.fragments(left_id).frag_ixs;
+    let right_frags = &self.fragments(right_id).frag_ixs;
 
-    let mut i = 0;
-    let mut other_i = 0;
+    let left_start = self.start(left_id, fragments);
+    let right_start = self.start(right_id, fragments);
 
-    while i < frags.len() && other_i < other_frags.len() {
-      let cur = &fragments[frags[i]];
-      let other = &fragments[other_frags[other_i]];
+    let mut left_i = 0;
+    let mut right_i = 0;
+
+    let mut left_max_i = left_frags.len() - 1;
+    let mut right_max_i = right_frags.len() - 1;
+
+    if left_start == right_start {
+      return Some(left_start);
+    }
+    if left_start < right_start {
+      left_i = match left_frags
+        .binary_search_by_key(&right_start, |&frag_ix| fragments[frag_ix].first)
+      {
+        Ok(index) => return Some(fragments[left_frags[index]].first),
+        Err(index) => {
+          if index == 0 {
+            index
+          } else {
+            index - 1
+          }
+        }
+      };
+    } else {
+      right_i = match right_frags
+        .binary_search_by_key(&left_start, |&frag_ix| fragments[frag_ix].first)
+      {
+        Ok(index) => return Some(fragments[right_frags[index]].first),
+        Err(index) => {
+          if index == 0 {
+            index
+          } else {
+            index - 1
+          }
+        }
+      }
+    }
+
+    let left_end = self.end(left_id, fragments);
+    let right_end = self.end(right_id, fragments);
+    if left_end < right_end {
+      right_max_i = match right_frags
+        .binary_search_by_key(&left_end, |&frag_ix| fragments[frag_ix].first)
+      {
+        Ok(index) => index,
+        Err(index) => {
+          if index == 0 {
+            index
+          } else {
+            index - 1
+          }
+        }
+      };
+    } else {
+      left_max_i = match left_frags
+        .binary_search_by_key(&right_end, |&frag_ix| fragments[frag_ix].first)
+      {
+        Ok(index) => index,
+        Err(index) => {
+          if index == 0 {
+            index
+          } else {
+            index - 1
+          }
+        }
+      };
+    }
+
+    while left_i <= left_max_i && right_i <= right_max_i {
+      let cur = &fragments[left_frags[left_i]];
+      let other = &fragments[right_frags[right_i]];
       match cmp_range_frags(cur, other) {
         None => {
           // They intersect!
@@ -263,7 +330,7 @@ impl Intervals {
         }
         Some(Ordering::Less) => {
           // cur < other, go to the range following cur.
-          i += 1;
+          left_i += 1;
         }
         Some(Ordering::Equal) => {
           // Special intersection case, at the start.
@@ -271,7 +338,7 @@ impl Intervals {
         }
         Some(Ordering::Greater) => {
           // cur > other, go to the range following other.
-          other_i += 1;
+          right_i += 1;
         }
       }
     }
