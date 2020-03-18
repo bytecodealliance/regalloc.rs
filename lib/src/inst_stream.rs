@@ -102,7 +102,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
     .map_err(|e| RegAllocError::Other(e))
 }
 
-pub(crate) fn apply_reg_uses<F: Function>(
+fn apply_reg_uses<F: Function>(
   func: &mut F, frag_map: RangeAllocations,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>, insts_to_add: &InstsAndPoints,
   reg_universe: &RealRegUniverse, use_checker: bool,
@@ -405,7 +405,7 @@ pub(crate) fn apply_reg_uses<F: Function>(
 }
 
 #[inline(never)]
-pub(crate) fn fill_memory_moves<F: Function>(
+fn fill_memory_moves<F: Function>(
   func: &mut F, mut insts_to_add: InstsAndPoints,
   reg_universe: &RealRegUniverse, num_spill_slots: u32,
 ) -> Result<RegAllocResult<F>, String> {
