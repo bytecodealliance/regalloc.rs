@@ -404,6 +404,7 @@ pub(crate) fn apply_reg_uses<F: Function>(
   }
 }
 
+#[inline(never)]
 pub(crate) fn fill_memory_moves<F: Function>(
   func: &mut F, mut insts_to_add: InstsAndPoints,
   reg_universe: &RealRegUniverse, num_spill_slots: u32,
