@@ -1401,6 +1401,13 @@ pub fn run<F: Function>(
 
   let intervals = Intervals::new(rlrs, vlrs, &fragments);
 
+  // Subset of fixed intervals, sorted by start point (as intervals are).
+  let fixed_intervals = intervals
+    .data
+    .iter()
+    .filter_map(|int| if int.is_fixed() { Some(int.id) } else { None })
+    .collect::<Vec<_>>();
+
   trace!("unassigned intervals:");
   for int in &intervals.data {
     trace!("{}", intervals.display(int.id, &fragments));
@@ -1411,17 +1418,10 @@ pub fn run<F: Function>(
     let mut state =
       State::new(func, &reg_uses, fragments, intervals, &scratches_by_rc);
 
-    // Put all the fixed intervals in the inactive list: they're either becoming
-    // active or should be remain inactive.
-
-    for &id in &state.unhandled {
-      if state.intervals.get(id).is_fixed() {
-        state.inactive.push(id);
-      }
-    }
-
     #[cfg(debug_assertions)]
     let mut prev_start = None;
+
+    let mut last_fixed = 0;
 
     while let Some(id) = state.next_unhandled() {
       info!("main loop: allocating {:?}", id);
@@ -1437,6 +1437,18 @@ pub fn run<F: Function>(
           debug_assert!(*prev <= start, "main loop must make progress");
         };
         prev_start = Some(start);
+      }
+
+      if state.intervals.get(id).location.is_none() {
+        // Lazily push all the fixed intervals that might interfere with the
+        // current interval to the inactive list.
+        let int = state.intervals.get(id);
+        while last_fixed < fixed_intervals.len()
+          && state.intervals.get(fixed_intervals[last_fixed]).start <= int.end
+        {
+          state.inactive.push(fixed_intervals[last_fixed]);
+          last_fixed += 1;
+        }
       }
 
       update_state(id, &mut state);
