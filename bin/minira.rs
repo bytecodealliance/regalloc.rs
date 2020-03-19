@@ -106,6 +106,8 @@ fn main() {
       Ok(r) => r,
     };
 
+  let num_spill_slots = result.num_spill_slots;
+
   // Update the function itself. This bridges the gap from the generic
   // interface to our specific test ISA.
   func.update_from_alloc(result);
@@ -125,6 +127,7 @@ fn main() {
   println!("");
   println!("result before: {:#?}", before_regalloc_result);
   println!("result after: {:#?}", after_regalloc_result);
+  println!("number of generated spill slots: {}", num_spill_slots);
   println!("");
 
   check_results(&before_regalloc_result, &after_regalloc_result);
