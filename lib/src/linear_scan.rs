@@ -247,6 +247,18 @@ impl Intervals {
   ) -> bool {
     // Fragments are sorted by start.
     let frag_ixs = &self.fragments(int_id).frag_ixs;
+
+    // The binary search is useful only after some threshold number of elements;
+    // This value has been determined after benchmarking a large program.
+    if frag_ixs.len() <= 4 {
+      for &frag_ix in frag_ixs {
+        if fragments[frag_ix].contains(&pos) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     match frag_ixs.binary_search_by_key(&pos, |&index| fragments[index].first) {
       // Either we find a precise match...
       Ok(_) => true,
