@@ -18,6 +18,7 @@
 use log::{debug, info, trace};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
+use std::cmp::Ordering;
 use std::env;
 use std::fmt;
 
@@ -28,6 +29,7 @@ use crate::inst_stream::{
   RangeAllocations,
 };
 use crate::interface::{Function, RegAllocError, RegAllocResult};
+use crate::trees_maps_sets::AVLTree;
 
 // Local shorthands.
 type Fragments = TypedIxVec<RangeFragIx, RangeFrag>;
@@ -36,7 +38,7 @@ type RealRanges = TypedIxVec<RealRangeIx, RealRange>;
 type RegUses = TypedIxVec<InstIx, SanitizedInstRegUses>;
 
 /// A unique identifier for an interval.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct IntId(usize);
 
 impl fmt::Debug for IntId {
@@ -112,6 +114,7 @@ struct LiveInterval {
   reg_class: RegClass,
   start: InstPoint,
   end: InstPoint,
+  last_frag: usize,
 }
 
 impl LiveInterval {
@@ -198,6 +201,7 @@ impl Intervals {
           reg_class,
           start,
           end,
+          last_frag: 0,
         }
       })
       .collect();
@@ -286,38 +290,10 @@ impl Intervals {
     let left_frags = &self.fragments(left_id).frag_ixs;
     let right_frags = &self.fragments(right_id).frag_ixs;
 
-    let mut left_i = 0;
-    let mut right_i = 0;
+    let mut left_i = left.last_frag;
+    let mut right_i = right.last_frag;
     let mut left_max_i = left_frags.len() - 1;
     let mut right_max_i = right_frags.len() - 1;
-
-    if left.start < right.start {
-      left_i = match left_frags
-        .binary_search_by_key(&right.start, |&frag_ix| fragments[frag_ix].first)
-      {
-        Ok(index) => return Some(fragments[left_frags[index]].first),
-        Err(index) => {
-          if index == 0 {
-            index
-          } else {
-            index - 1
-          }
-        }
-      };
-    } else {
-      right_i = match right_frags
-        .binary_search_by_key(&left.start, |&frag_ix| fragments[frag_ix].first)
-      {
-        Ok(index) => return Some(fragments[right_frags[index]].first),
-        Err(index) => {
-          if index == 0 {
-            index
-          } else {
-            index - 1
-          }
-        }
-      }
-    }
 
     if left.end < right.end {
       right_max_i = match right_frags
@@ -453,6 +429,8 @@ struct State<'a, F: Function> {
   scratches: &'a [Option<RealReg>],
   intervals: Intervals,
 
+  interval_tree: AVLTree<(IntId, usize)>,
+
   /// Intervals that are starting after the current interval's start position.
   unhandled: Vec<IntId>,
 
@@ -507,6 +485,10 @@ impl<'a, F: Function> State<'a, F> {
       inactive: Vec::new(),
       next_spill_slot: SpillSlot::new(0),
       spill_map: HashMap::default(),
+      interval_tree: AVLTree::new((
+        IntId(usize::max_value()),
+        usize::max_value(),
+      )),
     }
   }
 
@@ -549,44 +531,268 @@ impl<'a, F: Function> State<'a, F> {
   }
 }
 
+/// Checks that the update_state algorithm matches the naive way to perform the
+/// update.
+#[cfg(debug_assertions)]
+fn match_previous_update_state<F: Function>(
+  state: &State<F>, start_point: InstPoint, active: &Vec<IntId>,
+  inactive: &Vec<IntId>, expired: &Vec<IntId>,
+) -> Result<bool, &'static str> {
+  let intervals = &state.intervals;
+
+  // Make local mutable copies.
+  let mut active = active.clone();
+  let mut inactive = inactive.clone();
+  let mut expired = expired.clone();
+
+  for &int_id in &active {
+    if start_point > intervals.get(int_id).end {
+      return Err("active should have expired");
+    }
+    if !intervals.covers(int_id, start_point, &state.fragments) {
+      return Err("active should contain start pos");
+    }
+  }
+
+  for &int_id in &inactive {
+    if intervals.covers(int_id, start_point, &state.fragments) {
+      return Err("inactive should not contain start pos");
+    }
+    if start_point > intervals.get(int_id).end {
+      return Err("inactive should have expired");
+    }
+  }
+
+  for &int_id in &expired {
+    if intervals.covers(int_id, start_point, &state.fragments) {
+      return Err("expired shouldn't cover target");
+    }
+    if intervals.get(int_id).end >= start_point {
+      return Err("expired shouldn't have expired");
+    }
+  }
+
+  let mut other_active = Vec::new();
+  let mut other_inactive = Vec::new();
+  let mut other_expired = Vec::new();
+  for &id in &state.active {
+    if intervals.get(id).location.spill().is_some() {
+      continue;
+    }
+    if intervals.get(id).end < start_point {
+      // It's expired, forget about it.
+      other_expired.push(id);
+    } else if intervals.covers(id, start_point, &state.fragments) {
+      other_active.push(id);
+    } else {
+      other_inactive.push(id);
+    }
+  }
+  for &id in &state.inactive {
+    if intervals.get(id).location.spill().is_some() {
+      continue;
+    }
+    if intervals.get(id).end < start_point {
+      // It's expired, forget about it.
+      other_expired.push(id);
+    } else if intervals.covers(id, start_point, &state.fragments) {
+      other_active.push(id);
+    } else {
+      other_inactive.push(id);
+    }
+  }
+
+  other_active.sort_by_key(|&id| (intervals.get(id).start, id));
+  active.sort_by_key(|&id| (intervals.get(id).start, id));
+  other_inactive.sort_by_key(|&id| (intervals.get(id).start, id));
+  inactive.sort_by_key(|&id| (intervals.get(id).start, id));
+  other_expired.sort_by_key(|&id| (intervals.get(id).start, id));
+  expired.sort_by_key(|&id| (intervals.get(id).start, id));
+
+  trace!("active: reference/fast algo");
+  trace!("{:?}", other_active);
+  trace!("{:?}", active);
+  trace!("inactive: reference/fast algo");
+  trace!("{:?}", other_inactive);
+  trace!("{:?}", inactive);
+  trace!("expired: reference/fast algo");
+  trace!("{:?}", other_expired);
+  trace!("{:?}", expired);
+
+  if other_active.len() != active.len() {
+    return Err("diff in active.len()");
+  }
+  for (&other, &next) in other_active.iter().zip(active.iter()) {
+    if other != next {
+      return Err("diff in active");
+    }
+  }
+
+  if other_inactive.len() != inactive.len() {
+    return Err("diff in inactive.len()");
+  };
+  for (&other, &next) in other_inactive.iter().zip(inactive.iter()) {
+    if other != next {
+      return Err("diff in inactive");
+    }
+  }
+
+  if other_expired.len() != expired.len() {
+    return Err("diff in expired.len()");
+  };
+  for (&other, &next) in other_expired.iter().zip(expired.iter()) {
+    if other != next {
+      return Err("diff in expired");
+    }
+  }
+
+  Ok(true)
+}
+
 /// Transitions intervals from active/inactive into active/inactive/handled.
+///
+/// An interval tree is stored in the state, containing all the active and
+/// inactive intervals. The comparison key is the interval's start point.
+///
+/// A state update consists in the following. We consider the next interval to
+/// allocate, and in particular its start point S.
+///
+/// 1. remove all the active/inactive intervals that have expired, i.e. their
+///    end point is before S.
+/// 2. reconsider active/inactive intervals:
+///   - if they contain S, they become (or stay) active.
+///   - otherwise, they become (or stay) inactive.
+///
+/// Item 1 is easy to implement, and fast enough.
+///
+/// Item 2 is a bit trickier. While we could just call `Intervals::covers` for
+/// each interval on S, this is quite expensive. In addition to this, it happens
+/// that most intervals are inactive. This is explained by the fact that linear
+/// scan can create large intervals, if a value is used much later after it's
+/// been created, *according to the block ordering*.
+///
+/// For each interval, we remember the last active fragment, or the first
+/// inactive fragment that starts after S. This makes search really fast:
+///
+/// - if the considered (active or inactive) interval start is before S, then we
+/// should look more precisely if it's active or inactive. This might include
+/// seeking to the next fragment that contains S.
+/// - otherwise, if the considered interval start is *after* S, then it means
+/// this interval, as well as all the remaining ones in the interval tree (since
+/// they're sorted by starting position) are inactive, and we can escape the
+/// loop eagerly.
+///
+/// The escape for inactive intervals make this function overall cheap.
 #[inline(never)]
 fn update_state<'a, F: Function>(cur_id: IntId, state: &mut State<'a, F>) {
-  let intervals = &state.intervals;
+  let intervals = &mut state.intervals;
 
   let start_point = intervals.get(cur_id).start;
 
   let mut next_active = Vec::new();
   let mut next_inactive = Vec::new();
 
-  //use log::warn;
-  //warn!(
-  //"update_state: {:?} {:?} {} {} (start_point/active/inactive)",
-  //start_point,
-  //intervals.get(cur_id).end,
-  //state.active.len(),
-  //state.inactive.len(),
-  //);
+  let fragments = &state.fragments;
+  let comparator =
+    |left, right| cmp_interval_tree(left, right, intervals, fragments);
 
-  for &id in &state.active {
-    if intervals.get(id).end < start_point {
-      // It's expired, forget about it.
-    } else if intervals.covers(id, start_point, &state.fragments) {
-      next_active.push(id);
+  // TODO make an iterator to avoid the conversion to a vector, and put tree
+  // updates in a separate vec.
+  let all_ids = state.interval_tree.to_vec();
+
+  let mut all_inactive_from = None;
+
+  #[cfg(debug_assertions)]
+  let mut expired = Vec::new();
+
+  let mut interval_updates = Vec::new();
+  for (i, &(int_id, last_frag_idx)) in all_ids.iter().enumerate() {
+    let int = intervals.get(int_id);
+
+    // Skip expired intervals.
+    if int.end < start_point {
+      #[cfg(debug_assertions)]
+      expired.push(int.id);
+
+      let deleted_1 =
+        state.interval_tree.delete((int_id, last_frag_idx), Some(&comparator));
+      debug_assert!(deleted_1);
+      continue;
+    }
+
+    // From this point, start <= int.end.
+    let frag_ixs = &intervals.fragments(int_id).frag_ixs;
+    let mut cur_frag = &state.fragments[frag_ixs[last_frag_idx]];
+
+    // If the current fragment still contains start, it is still active.
+    if cur_frag.contains(&start_point) {
+      next_active.push(int_id);
+      continue;
+    }
+
+    if start_point < cur_frag.first {
+      // This is the root of the optimization: all the remaining intervals,
+      // including this one, are now inactive, so we can skip them.
+      all_inactive_from = Some(i);
+      break;
+    }
+
+    // Otherwise, fast-forward to the next fragment that starts after start.
+    // It exists, because start <= int.end.
+    let mut new_frag_idx = last_frag_idx + 1;
+
+    while new_frag_idx < frag_ixs.len() {
+      cur_frag = &state.fragments[frag_ixs[new_frag_idx]];
+      if start_point <= cur_frag.last {
+        break;
+      }
+      new_frag_idx += 1;
+    }
+
+    debug_assert!(new_frag_idx != frag_ixs.len());
+
+    // In all the cases, update the interval so its last fragment is now the
+    // one we'd expect.
+    let deleted_2 =
+      state.interval_tree.delete((int_id, last_frag_idx), Some(&comparator));
+    debug_assert!(deleted_2);
+    let inserted_1 =
+      state.interval_tree.insert((int_id, new_frag_idx), Some(&comparator));
+    debug_assert!(inserted_1);
+    interval_updates.push((int_id, new_frag_idx));
+
+    if start_point >= cur_frag.first {
+      // Now active.
+      next_active.push(int_id);
     } else {
-      next_inactive.push(id);
+      // Now inactive.
+      next_inactive.push(int_id);
     }
   }
 
-  for &id in &state.inactive {
-    if intervals.get(id).end < start_point {
-      // It's expired, forget about it.
-    } else if intervals.covers(id, start_point, &state.fragments) {
-      next_active.push(id);
-    } else {
-      next_inactive.push(id);
+  if let Some(i) = all_inactive_from {
+    for &(int_id, _) in &all_ids[i..] {
+      next_inactive.push(int_id);
     }
   }
+
+  // Finally, add the current one for the next round.
+  let inserted_2 = state.interval_tree.insert((cur_id, 0), Some(&comparator));
+  debug_assert!(inserted_2);
+
+  for (int_id, new_frag_idx) in interval_updates {
+    intervals.get_mut(int_id).last_frag = new_frag_idx;
+  }
+
+  #[cfg(debug_assertions)]
+  debug_assert!(match_previous_update_state(
+    &state,
+    start_point,
+    &next_active,
+    &next_inactive,
+    &expired
+  )
+  .unwrap());
 
   state.active = next_active;
   state.inactive = next_inactive;
@@ -1107,6 +1313,26 @@ fn split<F: Function>(
     "must split before the end"
   );
 
+  {
+    // Remove the parent from the interval tree, if it was there.
+    let intervals = &state.intervals;
+    let fragments = &state.fragments;
+    state.interval_tree.delete(
+      (id, state.intervals.get(id).last_frag),
+      Some(&|left, right| cmp_interval_tree(left, right, intervals, fragments)),
+    );
+  }
+  if state.intervals.get(id).location.reg().is_some() {
+    // If the interval was set to a register, reset it to the first fragment.
+    state.intervals.get_mut(id).last_frag = 0;
+    let intervals = &state.intervals;
+    let fragments = &state.fragments;
+    state.interval_tree.insert(
+      (id, 0),
+      Some(&|left, right| cmp_interval_tree(left, right, intervals, fragments)),
+    );
+  }
+
   let vreg = state.intervals.vreg(id);
   let fragments = &state.fragments;
   let frags = state.intervals.fragments_mut(id);
@@ -1238,6 +1464,7 @@ fn split<F: Function>(
     reg_class: state.intervals.get(id).reg_class,
     start: child_start,
     end: child_end,
+    last_frag: 0,
   };
   state.intervals.push_interval(child_int);
 
@@ -1487,6 +1714,17 @@ fn try_compress_ranges<F: Function>(
   }
 }
 
+fn cmp_interval_tree(
+  left_id: (IntId, usize), right_id: (IntId, usize), intervals: &Intervals,
+  fragments: &Fragments,
+) -> Option<Ordering> {
+  let left_frags = &intervals.fragments(left_id.0).frag_ixs;
+  let left = fragments[left_frags[left_id.1]].first;
+  let right_frags = &intervals.fragments(right_id.0).frag_ixs;
+  let right = fragments[right_frags[right_id.1]].first;
+  (left, left_id).partial_cmp(&(right, right_id))
+}
+
 // Allocator top level.  |func| is modified so that, when this function
 // returns, it will contain no VirtualReg uses.  Allocation can fail if there
 // are insufficient registers to even generate spill/reload code, or if the
@@ -1564,7 +1802,21 @@ pub fn run<F: Function>(
         while last_fixed < fixed_intervals.len()
           && state.intervals.get(fixed_intervals[last_fixed]).start <= int.end
         {
+          // Maintain active/inactive state for match_previous_update_state.
+          #[cfg(debug_assertions)]
           state.inactive.push(fixed_intervals[last_fixed]);
+
+          {
+            let intervals = &state.intervals;
+            let fragments = &state.fragments;
+            state.interval_tree.insert(
+              (fixed_intervals[last_fixed], 0),
+              Some(&|left, right| {
+                cmp_interval_tree(left, right, intervals, fragments)
+              }),
+            );
+          }
+
           last_fixed += 1;
         }
 
@@ -1573,8 +1825,13 @@ pub fn run<F: Function>(
         if !try_allocate_reg(id, &mut state, reg_universe) {
           allocate_blocked_reg(id, &mut state, reg_universe)?;
         }
-        if state.intervals.get(id).location.reg().is_some() {
-          state.active.push(id);
+
+        #[cfg(debug_assertions)]
+        {
+          // Maintain active/inactive state for match_previous_update_state.
+          if state.intervals.get(id).location.reg().is_some() {
+            state.active.push(id);
+          }
         }
       }
 
@@ -2404,10 +2661,14 @@ fn apply_registers<F: Function>(
     if let Some(rreg) = intervals.get(int_id).location.reg() {
       let vreg = intervals.vreg(int_id);
       for &range_ix in &intervals.fragments(int_id).frag_ixs {
+        let range = &fragments[range_ix];
+        trace!("in {:?}, {:?} lives in {:?}", range, vreg, rreg);
         frag_map.push((range_ix, vreg, rreg));
       }
     }
   }
+
+  trace!("frag_map: {:?}", frag_map);
 
   edit_inst_stream(
     func,
