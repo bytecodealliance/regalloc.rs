@@ -87,7 +87,8 @@ pub(crate) type InstsAndPoints = Vec<InstAndPoint>;
 pub(crate) fn edit_inst_stream<F: Function>(
   func: &mut F, insts_to_add: InstsAndPoints, frag_map: RangeAllocations,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-  reg_universe: &RealRegUniverse, num_spill_slots: u32, use_checker: bool,
+  reg_universe: &RealRegUniverse, num_spill_slots: u32,
+  has_multiple_blocks_per_frag: bool, use_checker: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
   apply_reg_uses(
     func,
@@ -95,6 +96,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
     frag_env,
     &insts_to_add,
     reg_universe,
+    has_multiple_blocks_per_frag,
     use_checker,
   )
   .map_err(|e| RegAllocError::RegChecker(e))?;
@@ -105,7 +107,8 @@ pub(crate) fn edit_inst_stream<F: Function>(
 fn apply_reg_uses<F: Function>(
   func: &mut F, frag_map: RangeAllocations,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>, insts_to_add: &InstsAndPoints,
-  reg_universe: &RealRegUniverse, use_checker: bool,
+  reg_universe: &RealRegUniverse, has_multiple_blocks_per_frag: bool,
+  use_checker: bool,
 ) -> Result<(), CheckerErrors> {
   // Set up checker state, if indicated by our configuration.
   let mut checker: Option<CheckerContext> = None;
@@ -390,7 +393,7 @@ fn apply_reg_uses<F: Function>(
 
       if func.block_insns(blockIx).last() == insnIx {
         //debug!("Block end");
-        debug_assert!(map.is_empty());
+        debug_assert!(has_multiple_blocks_per_frag || map.is_empty());
       }
     }
   }

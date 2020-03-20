@@ -252,7 +252,8 @@ impl Intervals {
     // This value has been determined after benchmarking a large program.
     if frag_ixs.len() <= 4 {
       for &frag_ix in frag_ixs {
-        if fragments[frag_ix].contains(&pos) {
+        let frag = &fragments[frag_ix];
+        if frag.first <= pos && pos <= frag.last {
           return true;
         }
       }
@@ -557,6 +558,15 @@ fn update_state<'a, F: Function>(cur_id: IntId, state: &mut State<'a, F>) {
 
   let mut next_active = Vec::new();
   let mut next_inactive = Vec::new();
+
+  //use log::warn;
+  //warn!(
+  //"update_state: {:?} {:?} {} {} (start_point/active/inactive)",
+  //start_point,
+  //intervals.get(cur_id).end,
+  //state.active.len(),
+  //state.inactive.len(),
+  //);
 
   for &id in &state.active {
     if intervals.get(id).end < start_point {
@@ -1147,15 +1157,25 @@ fn split<F: Function>(
 
       // Parent range.
       let count = 1; // unused by LSRA.
-      let parent_frag =
-        RangeFrag::new(state.func, bix, parent_first, parent_last, count);
+      let parent_frag = RangeFrag::new_multi_block(
+        state.func,
+        bix,
+        parent_first,
+        parent_last,
+        count,
+      );
 
       let parent_frag_ix = RangeFragIx::new(state.fragments.len());
       state.fragments.push(parent_frag);
 
       // Child range.
-      let child_frag =
-        RangeFrag::new(state.func, bix, child_first, child_last, count);
+      let child_frag = RangeFrag::new_multi_block(
+        state.func,
+        bix,
+        child_first,
+        child_last,
+        count,
+      );
       let child_frag_ix = RangeFragIx::new(state.fragments.len());
       state.fragments.push(child_frag);
 
@@ -1175,8 +1195,9 @@ fn split<F: Function>(
     );
 
     let frag = &state.fragments[child_frag_ixs[0]];
-    let parent_frag =
-      RangeFrag::new(state.func, frag.bix, at_pos, at_pos, /* count */ 1);
+    let parent_frag = RangeFrag::new_multi_block(
+      state.func, frag.bix, at_pos, at_pos, /* count */ 1,
+    );
 
     let parent_frag_ix = RangeFragIx::new(state.fragments.len());
     state.fragments.push(parent_frag);
@@ -1404,6 +1425,68 @@ impl<T> std::ops::IndexMut<RealReg> for RegisterMapping<T> {
   }
 }
 
+fn try_compress_ranges<F: Function>(
+  func: &F, rlrs: &mut RealRanges, vlrs: &mut VirtualRanges,
+  fragments: &mut Fragments,
+) {
+  for vlr in vlrs.iter_mut() {
+    let old_size = vlr.sorted_frags.frag_ixs.len();
+    let mut i = vlr.sorted_frags.frag_ixs.len() - 1;
+    while i > 0 {
+      let cur_frag = &fragments[vlr.sorted_frags.frag_ixs[i]];
+      let prev_frag = &fragments[vlr.sorted_frags.frag_ixs[i - 1]];
+      if prev_frag.last.iix.get() + 1 == cur_frag.first.iix.get()
+        && prev_frag.last.pt == Point::Def
+        && cur_frag.first.pt == Point::Use
+      {
+        let new_range = RangeFrag::new_multi_block(
+          func,
+          prev_frag.bix,
+          prev_frag.first,
+          cur_frag.last,
+          prev_frag.count + cur_frag.count,
+        );
+
+        let new_range_ix = RangeFragIx::new(fragments.len());
+        fragments.push(new_range);
+        vlr.sorted_frags.frag_ixs[i - 1] = new_range_ix;
+
+        let _ = vlr.sorted_frags.frag_ixs.remove(i);
+      }
+      i -= 1;
+    }
+
+    let new_size = vlr.sorted_frags.frag_ixs.len();
+    use log::warn;
+    warn!(
+      "compress: {} -> {}; {}",
+      old_size,
+      new_size,
+      100. * (old_size as f64 - new_size as f64) / (old_size as f64)
+    );
+  }
+
+  let mut reg_map: HashMap<RealReg, Vec<RangeFragIx>> = HashMap::default();
+  for rlr in rlrs.iter_mut() {
+    let reg = rlr.rreg;
+    if let Some(ref mut vec) = reg_map.get_mut(&reg) {
+      vec.append(&mut rlr.sorted_frags.frag_ixs);
+    } else {
+      // TODO clone can be avoided with an into_iter methods.
+      reg_map.insert(reg, rlr.sorted_frags.frag_ixs.clone());
+    }
+  }
+
+  rlrs.clear();
+  for (rreg, mut sorted_frags) in reg_map {
+    sorted_frags.sort_by_key(|frag_ix| fragments[*frag_ix].first);
+    rlrs.push(RealRange {
+      rreg,
+      sorted_frags: SortedRangeFragIxs { frag_ixs: sorted_frags },
+    });
+  }
+}
+
 // Allocator top level.  |func| is modified so that, when this function
 // returns, it will contain no VirtualReg uses.  Allocation can fail if there
 // are insufficient registers to even generate spill/reload code, or if the
@@ -1412,7 +1495,7 @@ impl<T> std::ops::IndexMut<RealReg> for RegisterMapping<T> {
 pub fn run<F: Function>(
   func: &mut F, reg_universe: &RealRegUniverse, use_checker: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
-  let (reg_uses, rlrs, vlrs, fragments, liveouts, _est_freqs) =
+  let (reg_uses, mut rlrs, mut vlrs, mut fragments, liveouts, _est_freqs) =
     run_analysis(func, reg_universe, /* sanitize scratch */ true)
       .map_err(|err| RegAllocError::Analysis(err))?;
 
@@ -1431,6 +1514,8 @@ pub fn run<F: Function>(
     }
     scratches_by_rc
   };
+
+  try_compress_ranges(func, &mut rlrs, &mut vlrs, &mut fragments);
 
   let intervals = Intervals::new(rlrs, vlrs, &fragments);
 
@@ -2331,6 +2416,7 @@ fn apply_registers<F: Function>(
     fragments,
     reg_universe,
     num_spill_slots,
+    true, // multiple blocks per frag
     use_checker,
   )
 }

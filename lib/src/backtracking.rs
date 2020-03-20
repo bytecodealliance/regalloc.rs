@@ -2177,6 +2177,7 @@ pub fn alloc_main<F: Function>(
     &frag_env,
     &reg_universe,
     next_spill_slot.get(),
+    false, // multiple blocks per frag
     use_checker,
   );
 

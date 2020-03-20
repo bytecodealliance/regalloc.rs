@@ -348,6 +348,9 @@ where
   pub fn sort_by<F: FnMut(&Ty, &Ty) -> Ordering>(&mut self, compare: F) {
     self.vek.sort_by(compare)
   }
+  pub fn clear(&mut self) {
+    self.vek.clear();
+  }
 }
 
 impl<TyIx, Ty> Index<TyIx> for TypedIxVec<TyIx, Ty>
@@ -1334,13 +1337,11 @@ impl fmt::Debug for RangeFrag {
     )
   }
 }
+
 impl RangeFrag {
-  pub fn new<F: Function>(
+  pub fn new_multi_block<F: Function>(
     f: &F, bix: BlockIx, first: InstPoint, last: InstPoint, count: u16,
   ) -> Self {
-    debug_assert!(f.block_insns(bix).len() >= 1);
-    debug_assert!(f.block_insns(bix).contains(first.iix));
-    debug_assert!(f.block_insns(bix).contains(last.iix));
     debug_assert!(first <= last);
     if first == last {
       debug_assert!(count == 1);
@@ -1356,6 +1357,15 @@ impl RangeFrag {
       (true, true) => RangeFragKind::Thru,
     };
     RangeFrag { bix, kind, first, last, count }
+  }
+
+  pub fn new<F: Function>(
+    f: &F, bix: BlockIx, first: InstPoint, last: InstPoint, count: u16,
+  ) -> Self {
+    debug_assert!(f.block_insns(bix).len() >= 1);
+    debug_assert!(f.block_insns(bix).contains(first.iix));
+    debug_assert!(f.block_insns(bix).contains(last.iix));
+    RangeFrag::new_multi_block(f, bix, first, last, count)
   }
 }
 
