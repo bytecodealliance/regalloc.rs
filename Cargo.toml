@@ -24,3 +24,6 @@ rustc-hash = "1.0.1"
 log = { version = "0.4.8", default-features = false }
 pretty_env_logger = "0.3.1"
 clap = "2.33.0"
+
+[profile.release]
+debug = true
