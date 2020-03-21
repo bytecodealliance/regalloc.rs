@@ -19,15 +19,9 @@
 
 Estimated most-important-first:
 
-- merge_RangeFrags: try to avoid quadratic behaviour for large merge-sets
-
 - Dominator computation: switch to "A Simple, Fast Dominance Algorithm (Keith
   D. Cooper, Timothy J. Harvey, and Ken Kennedy)" and reimplement the
   loop-finder on top of that.
-
-- Iterative liveness analysis: only put blocks in the work queue if they are
-  not already present in it.  This could reduce the number of evaluations by
-  quite a lot.  Requires a working DenseSet<BlockIx>.
 
 - (Longer term) merge_RangeFrags: can we do even better?
 
@@ -57,6 +51,10 @@ Estimated most-important-first:
 - Collect typical use data for each Set<T> instance and replace with a
   suitable optimised replacement.  Maybe DenseSet<T: ToFromU32> and
   SparseSet<T: ToFromU32>.
+
+- Iterative liveness analysis: for DenseSet<T>, considering implementing a
+  special (X `minus` Y) `union` Z operation, so as to avoid having to create
+  intermediate (X `minus` Y) sets.
 
 - Ditto FxHashMap (if we have to have it at all)
 

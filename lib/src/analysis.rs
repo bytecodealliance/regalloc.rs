@@ -623,7 +623,19 @@ fn calc_livein_and_liveout<F: Function>(
     workQ.push_back(bixI);
   }
 
+  // inQ is an optimisation -- this routine works fine without it.  inQ is
+  // used to avoid inserting duplicate work items in workQ.  This avoids some
+  // number of duplicate re-evaluations and gets us to a fixed point faster.
+  // Very roughly, it reduces the number of evaluations per block from around
+  // 3 to around 2.
+  let mut inQ = Vec::<bool>::new();
+  inQ.resize(nBlocks as usize, true);
+
   while let Some(bixI) = workQ.pop_front() {
+    let i = bixI.get() as usize;
+    assert!(inQ[i]);
+    inQ[i] = false;
+
     // Compute a new value for liveouts[bixI]
     let mut set = Set::<Reg>::empty();
     for bixJ in cfg_info.succ_map[bixI].iter() {
@@ -642,7 +654,11 @@ fn calc_livein_and_liveout<F: Function>(
       // FIXME JRS 2020Feb06: only add preds to the work queue if they are not
       // already in it (possible speedup).
       for bixJ in cfg_info.pred_map[bixI].iter() {
-        workQ.push_back(*bixJ);
+        let j = bixJ.get() as usize;
+        if !inQ[j] {
+          workQ.push_back(*bixJ);
+          inQ[j] = true;
+        }
       }
     }
   }
