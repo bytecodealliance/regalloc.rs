@@ -349,6 +349,7 @@ impl fmt::Display for RegAllocError {
 ///
 /// Allocate may succeed, returning a `RegAllocResult` with the new instruction
 /// sequence, or it may fail, returning an error.
+#[inline(never)]
 pub fn allocate_registers<F: Function>(
   func: &mut F, algorithm: RegAllocAlgorithm, rreg_universe: &RealRegUniverse,
 ) -> Result<RegAllocResult<F>, RegAllocError> {

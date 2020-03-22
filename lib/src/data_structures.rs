@@ -41,16 +41,19 @@ pub struct Set<T> {
 }
 
 impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
+  #[inline(never)]
   pub fn empty() -> Self {
     Self { set: FxHashSet::<T>::default() }
   }
 
+  #[inline(never)]
   pub fn unit(item: T) -> Self {
     let mut s = Self::empty();
     s.insert(item);
     s
   }
 
+  #[inline(never)]
   pub fn two(item1: T, item2: T) -> Self {
     let mut s = Self::empty();
     s.insert(item1);
@@ -58,26 +61,32 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
     s
   }
 
+  #[inline(never)]
   pub fn card(&self) -> usize {
     self.set.len()
   }
 
+  #[inline(never)]
   pub fn insert(&mut self, item: T) {
     self.set.insert(item);
   }
 
+  #[inline(never)]
   pub fn delete(&mut self, item: T) {
     self.set.remove(&item);
   }
 
+  #[inline(never)]
   pub fn is_empty(&self) -> bool {
     self.set.is_empty()
   }
 
+  #[inline(never)]
   pub fn contains(&self, item: T) -> bool {
     self.set.contains(&item)
   }
 
+  #[inline(never)]
   pub fn intersect(&mut self, other: &Self) {
     let mut res = FxHashSet::<T>::default();
     for item in self.set.iter() {
@@ -88,26 +97,31 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
     self.set = res;
   }
 
+  #[inline(never)]
   pub fn union(&mut self, other: &Self) {
     for item in other.set.iter() {
       self.set.insert(*item);
     }
   }
 
+  #[inline(never)]
   pub fn remove(&mut self, other: &Self) {
     for item in other.set.iter() {
       self.set.remove(item);
     }
   }
 
+  #[inline(never)]
   pub fn intersects(&self, other: &Self) -> bool {
     !self.set.is_disjoint(&other.set)
   }
 
+  #[inline(never)]
   pub fn is_subset_of(&self, other: &Self) -> bool {
     self.set.is_subset(&other.set)
   }
 
+  #[inline(never)]
   pub fn to_vec(&self) -> Vec<T> {
     let mut res = Vec::<T>::new();
     for item in self.set.iter() {
@@ -117,6 +131,7 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
     res
   }
 
+  #[inline(never)]
   pub fn from_vec(vec: Vec<T>) -> Self {
     let mut res = Set::<T>::empty();
     for x in vec {
@@ -125,10 +140,12 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
     res
   }
 
+  #[inline(never)]
   pub fn equals(&self, other: &Self) -> bool {
     self.set == other.set
   }
 
+  #[inline(never)]
   pub fn retain<F>(&mut self, f: F)
   where
     F: FnMut(&T) -> bool,
@@ -136,6 +153,7 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
     self.set.retain(f)
   }
 
+  #[inline(never)]
   pub fn map<F, U>(&self, f: F) -> Set<U>
   where
     F: Fn(&T) -> U,
@@ -144,6 +162,7 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
     Set { set: self.set.iter().map(f).collect() }
   }
 
+  #[inline(never)]
   fn filter_map<F, U>(&self, f: F) -> Set<U>
   where
     F: Fn(&T) -> Option<U>,
@@ -154,12 +173,14 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
 }
 
 impl<T: Eq + Ord + Hash + Copy + fmt::Debug> fmt::Debug for Set<T> {
+  #[inline(never)]
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     write!(fmt, "{:?}", self.set)
   }
 }
 
 impl<T: Eq + Ord + Hash + Copy + Clone + fmt::Debug> Clone for Set<T> {
+  #[inline(never)]
   fn clone(&self) -> Self {
     let mut res = Set::<T>::empty();
     for item in self.set.iter() {

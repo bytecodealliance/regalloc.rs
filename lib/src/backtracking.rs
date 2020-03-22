@@ -82,6 +82,7 @@ impl ToFromU32 for VirtualRangeIx {
   }
 }
 
+#[inline(never)]
 fn do_coalescing_analysis<F: Function>(
   func: &F, rlr_env: &TypedIxVec<RealRangeIx, RealRange>,
   vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
@@ -1506,16 +1507,18 @@ pub fn alloc_main<F: Function>(
   }
 
   let mut edit_list = Vec::<EditListItem>::new();
-  debug!("");
-  print_RA_state(
-    "Initial",
-    &reg_universe,
-    &prioQ,
-    &per_real_reg,
-    &edit_list,
-    &vlr_env,
-    &frag_env,
-  );
+  if cfg!(debug) {
+    debug!("");
+    print_RA_state(
+      "Initial",
+      &reg_universe,
+      &prioQ,
+      &per_real_reg,
+      &edit_list,
+      &vlr_env,
+      &frag_env,
+    );
+  }
 
   // This is technically part of the running state, at least for now.
   let mut next_spill_slot: SpillSlot = SpillSlot::new(0);
@@ -1544,17 +1547,19 @@ pub fn alloc_main<F: Function>(
   'main_allocation_loop: loop {
     debug!("-- still TODO          {}", prioQ.len());
     if false {
-      debug!("");
-      print_RA_state(
-        "Loop Top",
-        &reg_universe,
-        &prioQ,
-        &per_real_reg,
-        &edit_list,
-        &vlr_env,
-        &frag_env,
-      );
-      debug!("");
+      if cfg!(debug) {
+        debug!("");
+        print_RA_state(
+          "Loop Top",
+          &reg_universe,
+          &prioQ,
+          &per_real_reg,
+          &edit_list,
+          &vlr_env,
+          &frag_env,
+        );
+        debug!("");
+      }
     }
 
     let mb_curr_vlrix = prioQ.get_longest_VirtualRange();
@@ -2098,16 +2103,18 @@ pub fn alloc_main<F: Function>(
   //    debug!("spill/reload: {}", pair.show());
   //}
 
-  debug!("");
-  print_RA_state(
-    "Final",
-    &reg_universe,
-    &prioQ,
-    &per_real_reg,
-    &edit_list,
-    &vlr_env,
-    &frag_env,
-  );
+  if cfg!(debug) {
+    debug!("");
+    print_RA_state(
+      "Final",
+      &reg_universe,
+      &prioQ,
+      &per_real_reg,
+      &edit_list,
+      &vlr_env,
+      &frag_env,
+    );
+  }
 
   // Gather up a vector of (RangeFrag, VirtualReg, RealReg) resulting from
   // the previous phase.  This fundamentally is the result of the allocation
