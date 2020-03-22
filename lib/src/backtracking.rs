@@ -7,7 +7,7 @@
 
 //! Core implementation of the backtracking allocator.
 
-use log::{debug, info};
+use log::{debug, info, log_enabled, Level};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
@@ -311,28 +311,31 @@ fn do_coalescing_analysis<F: Function>(
   let vlrEquivClasses: UnionFindEquivClasses<VirtualRangeIx> =
     vlrEquivClassesUF.get_equiv_classes();
 
-  info!("do_coalescing_analysis: end");
-  info!("");
-  debug!("Coalescing hints:");
-  let mut n = 0;
-  for hints_for_one_vlr in hints.iter() {
-    let mut s = "".to_string();
-    for hint in hints_for_one_vlr {
-      s = s + &show_hint(hint) + &" ".to_string();
+  if log_enabled!(Level::Debug) {
+    debug!("Coalescing hints:");
+    let mut n = 0;
+    for hints_for_one_vlr in hints.iter() {
+      let mut s = "".to_string();
+      for hint in hints_for_one_vlr {
+        s = s + &show_hint(hint) + &" ".to_string();
+      }
+      debug!("  hintsfor {:<4?} = {}", VirtualRangeIx::new(n), s);
+      n += 1;
     }
-    debug!("  hintsfor {:<4?} = {}", VirtualRangeIx::new(n), s);
-    n += 1;
+
+    for n in 0..vlr_env.len() {
+      let vlrix = VirtualRangeIx::new(n);
+      let mut tmpvec = vec![];
+      for elem in vlrEquivClasses.equiv_class_elems_iter(vlrix) {
+        tmpvec.reverse();
+        tmpvec.push(elem);
+      }
+      debug!("  eclassof {:?} = {:?}", vlrix, tmpvec);
+    }
   }
 
-  for n in 0..vlr_env.len() {
-    let vlrix = VirtualRangeIx::new(n);
-    let mut tmpvec = vec![];
-    for elem in vlrEquivClasses.equiv_class_elems_iter(vlrix) {
-      tmpvec.reverse();
-      tmpvec.push(elem);
-    }
-    debug!("  eclassof {:?} = {:?}", vlrix, tmpvec);
-  }
+  info!("do_coalescing_analysis: end");
+  info!("");
 
   (hints, vlrEquivClasses)
 }
@@ -1507,7 +1510,7 @@ pub fn alloc_main<F: Function>(
   }
 
   let mut edit_list = Vec::<EditListItem>::new();
-  if cfg!(debug) {
+  if log_enabled!(Level::Debug) {
     debug!("");
     print_RA_state(
       "Initial",
@@ -1547,7 +1550,7 @@ pub fn alloc_main<F: Function>(
   'main_allocation_loop: loop {
     debug!("-- still TODO          {}", prioQ.len());
     if false {
-      if cfg!(debug) {
+      if log_enabled!(Level::Debug) {
         debug!("");
         print_RA_state(
           "Loop Top",
@@ -1657,8 +1660,7 @@ pub fn alloc_main<F: Function>(
         rreg1.get_index().partial_cmp(&rreg2.get_index()).unwrap()
       });
 
-      //#[cfg(debug_assertions)]
-      {
+      if log_enabled!(Level::Debug) {
         if !hinted_regs.is_empty() {
           let mut candStr = "pri {".to_string();
           for (rreg, n) in hinted_regs.iter().zip(0..) {
@@ -2103,7 +2105,7 @@ pub fn alloc_main<F: Function>(
   //    debug!("spill/reload: {}", pair.show());
   //}
 
-  if cfg!(debug) {
+  if log_enabled!(Level::Debug) {
     debug!("");
     print_RA_state(
       "Final",
