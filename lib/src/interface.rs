@@ -271,6 +271,18 @@ pub trait Function {
     &self, insn: &Self::Inst, reg: VirtualReg, slot: SpillSlot,
   ) -> Option<Self::Inst>;
 
+  /// Return the slot number used to refer to a "combined slot".
+  /// When the number of spill slots required to spill a given
+  /// register class is greater than one, we use combined slots;
+  /// it is a client--defined detail which slot
+  /// number we use to refer to this combined slot in spill and
+  /// reload instructions. This function returns the value that
+  /// should be used.
+  ///
+  /// The slot given will be aligned to `num_slots`, and `num_slots`
+  /// will be a power of two.
+  fn combined_slot(first_slot: SpillSlot, num_slots: u32) -> SpillSlot;
+
   // ----------------------------------------------------------
   // Function liveins, liveouts, and direct-mode real registers
   // ----------------------------------------------------------
