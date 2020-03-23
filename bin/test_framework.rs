@@ -1972,6 +1972,10 @@ impl regalloc::Function for Func {
     None
   }
 
+  fn combined_slot(first_slot: SpillSlot, _num_slots: u32) -> SpillSlot {
+      first_slot
+  }
+
   fn func_liveins(&self) -> Set<RealReg> {
     Set::empty()
   }
