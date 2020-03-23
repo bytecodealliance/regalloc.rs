@@ -411,11 +411,19 @@ impl CFGInfo {
     // Throw out insanely large inputs.  They'll probably cause failure later
     // on.
     let nBlocksUSize = func.blocks().len();
-    if nBlocksUSize >= 16 * 1024 * 1024 {
-      // 16 million blocks should be enough for anyone.  That will soak up 24
-      // index bits, leaving a "safety margin" of 8 bits for indices for
+    if nBlocksUSize >= 1 * 1024 * 1024 {
+      // 1 million blocks should be enough for anyone.  That will soak up 20
+      // index bits, leaving a "safety margin" of 12 bits for indices for
       // induced structures (RangeFragIx, InstIx, VirtualRangeIx, RealRangeIx,
       // etc).
+      return Err(AnalysisError::ImplementationLimitsExceeded);
+    }
+    // Similarly, limit the number of instructions to 16 million.  This allows
+    // 16 insns per block with the worst-case number of blocks.  Because each
+    // insn typically generates somewhat less than one new value, this check
+    // also has the effect of limiting the number of virtual registers to
+    // roughly the same amount (16 million).
+    if func.insns().len() >= 16 * 1024 * 1024 {
       return Err(AnalysisError::ImplementationLimitsExceeded);
     }
 
@@ -1597,9 +1605,15 @@ pub fn run_analysis<F: Function>(
   AnalysisError,
 > {
   info!("run_analysis: begin");
+  info!(
+    "  run_analysis: {} blocks, {} insns",
+    func.blocks().len(),
+    func.insns().len()
+  );
   info!("  run_analysis: begin control flow analysis");
 
-  // First do control flow analysis.  This is (relatively) simple.
+  // First do control flow analysis.  This is (relatively) simple.  Note that
+  // this can fail, for various reasons; we propagate the failure if so.
   let cfg_info = CFGInfo::create(func)?;
 
   // Annotate each Block with its estimated execution frequency

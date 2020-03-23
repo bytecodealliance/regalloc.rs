@@ -1302,7 +1302,7 @@ impl PerRealReg {
         debug!("wlta = {:?}", vlr_env[would_like_to_add]);
         debug!("");
         debug!("");
-        panic!("find_Evict_Set");
+        panic!("find_Evict_Set: crosscheck failed");
       }
     }
 
@@ -1486,6 +1486,17 @@ pub fn alloc_main<F: Function>(
 
   // Create initial state
   info!("alloc_main: begin");
+  info!(
+    "alloc_main:   in: {} insns in {} blocks",
+    func.insns().len(),
+    func.blocks().len()
+  );
+  let num_vlrs_initially = vlr_env.len(); // stats only
+  info!(
+    "alloc_main:   in: {} VLRs, {} RLRs",
+    num_vlrs_initially,
+    rlr_env.len()
+  );
 
   // This is fully populated by the ::new call.
   let mut prioQ = VirtualRangePrioQ::new(&vlr_env);
@@ -1547,6 +1558,10 @@ pub fn alloc_main<F: Function>(
   info!("alloc_main:   main allocation loop: begin");
 
   // ======== BEGIN Main allocation loop ========
+  let mut num_vlrs_processed = 0; // stats only
+  let mut num_vlrs_spilled = 0; // stats only
+  let mut num_vlrs_evicted = 0; // stats only
+
   'main_allocation_loop: loop {
     debug!("-- still TODO          {}", prioQ.len());
     if false {
@@ -1570,6 +1585,7 @@ pub fn alloc_main<F: Function>(
       break 'main_allocation_loop;
     }
 
+    num_vlrs_processed += 1;
     let curr_vlrix = mb_curr_vlrix.unwrap();
     let curr_vlr = &vlr_env[curr_vlrix];
 
@@ -1738,6 +1754,7 @@ pub fn alloc_main<F: Function>(
           // it again (in this loop iteration).
           debug_assert!(vlr_env[*vlrix_to_evict].rreg.is_some());
           vlr_env[*vlrix_to_evict].rreg = None;
+          num_vlrs_evicted += 1;
         }
         // .. and reassign.
         debug!("--   CO alloc to       {}", reg_universe.regs[rregNo].1);
@@ -1863,6 +1880,7 @@ pub fn alloc_main<F: Function>(
         prioQ.add_VirtualRange(&vlr_env, *vlrix_to_evict);
         debug_assert!(vlr_env[*vlrix_to_evict].rreg.is_some());
         vlr_env[*vlrix_to_evict].rreg = None;
+        num_vlrs_evicted += 1;
       }
       // .. and reassign.
       debug!("--   DI alloc to       {}", reg_universe.regs[rregNo].1);
@@ -2034,6 +2052,7 @@ pub fn alloc_main<F: Function>(
     }
 
     next_spill_slot = next_spill_slot.inc(num_slots);
+    num_vlrs_spilled += 1;
     // And implicitly "continue 'main_allocation_loop"
   }
   // ======== END Main allocation loop ========
@@ -2046,6 +2065,8 @@ pub fn alloc_main<F: Function>(
   // the "edit list", which contains info on both how to generate the
   // instructions, and where to insert them.
   let mut spills_n_reloads = InstsAndPoints::new();
+  let mut num_spills = 0; // stats only
+  let mut num_reloads = 0; // stats only
   for eli in &edit_list {
     debug!("editlist entry: {:?}", eli);
     let vlr = &vlr_env[eli.vlrix];
@@ -2066,6 +2087,7 @@ pub fn alloc_main<F: Function>(
         };
         let whereToR = vlr_frag.first;
         spills_n_reloads.push(InstAndPoint::new(whereToR, insnR));
+        num_reloads += 1;
       }
       BridgeKind::RtoS => {
         debug_assert!(vlr_frag.first.pt.is_reload());
@@ -2085,6 +2107,8 @@ pub fn alloc_main<F: Function>(
         let whereToS = vlr_frag.last;
         spills_n_reloads.push(InstAndPoint::new(whereToR, insnR));
         spills_n_reloads.push(InstAndPoint::new(whereToS, insnS));
+        num_reloads += 1;
+        num_spills += 1;
       }
       BridgeKind::DtoS => {
         debug_assert!(vlr_frag.first.pt.is_def());
@@ -2097,6 +2121,7 @@ pub fn alloc_main<F: Function>(
         };
         let whereToS = vlr_frag.last;
         spills_n_reloads.push(InstAndPoint::new(whereToS, insnS));
+        num_spills += 1;
       }
     }
   }
@@ -2154,6 +2179,29 @@ pub fn alloc_main<F: Function>(
     next_spill_slot.get(),
     use_checker,
   );
+
+  match res {
+    Ok(ref rar) => {
+      info!(
+        "alloc_main:   out: VLRs: {} initially, {} processed",
+        num_vlrs_initially, num_vlrs_processed
+      );
+      info!(
+        "alloc_main:   out: VLRs: {} evicted, {} spilled",
+        num_vlrs_evicted, num_vlrs_spilled
+      );
+      info!(
+        "alloc_main:   out: insns: {} total, {} spills, {} reloads",
+        rar.insns.len(),
+        num_spills,
+        num_reloads
+      );
+      info!("alloc_main:   out: spill slots: {} used", next_spill_slot.get());
+    }
+    Err(_) => {
+      info!("alloc_main:   allocation failed!");
+    }
+  }
 
   info!("alloc_main: end");
 
