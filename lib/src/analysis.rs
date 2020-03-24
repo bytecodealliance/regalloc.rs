@@ -6,7 +6,6 @@
 #![allow(non_camel_case_types)]
 
 use log::{debug, info};
-//use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 
 use crate::data_structures::{
@@ -19,8 +18,10 @@ use crate::interface::Function;
 use crate::trees_maps_sets::{ToFromU32, UnionFind};
 
 // DEBUGGING: set to true to cross-check the merge_RangeFrags machinery.
-
 const CROSSCHECK_MERGE: bool = false;
+
+// DEBUGGING: set to true to cross-check the dominator-tree computation.
+const CROSSCHECK_DOMS: bool = false;
 
 //=============================================================================
 // Overall analysis return results, for both control- and data-flow analyses.
@@ -128,11 +129,13 @@ fn calc_preds_and_succs<F: Function>(
 //=============================================================================
 // Control flow analysis: calculation of block preorder and postorder sequences
 
-// Returned Vecs contain one element per block.
+// Returned Vecs contain one element per block.  |None| is returned if the
+// sequences do not contain |nBlocks| elements, in which case the input
+// contains blocks not reachable from the entry point, and is invalid.
 #[inline(never)]
 fn calc_preord_and_postord<F: Function>(
   func: &F, nBlocks: u32, succ_map: &TypedIxVec<BlockIx, Set<BlockIx>>,
-) -> (Vec<BlockIx>, Vec<BlockIx>) {
+) -> Option<(Vec<BlockIx>, Vec<BlockIx>)> {
   info!("      calc_preord_and_postord: begin");
 
   // This is per Fig 7.12 of Muchnick 1997
@@ -165,13 +168,12 @@ fn calc_preord_and_postord<F: Function>(
   assert!(pre_ord.len() == post_ord.len());
   assert!(pre_ord.len() <= nBlocks as usize);
   if pre_ord.len() < nBlocks as usize {
-    // This can happen if the graph contains nodes unreachable from
-    // the entry point.  In which case, deal with any leftovers.
-    for bix in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
-      if !visited[bix] {
-        dfs(&mut pre_ord, &mut post_ord, &mut visited, &succ_map, bix);
-      }
-    }
+    info!(
+      "      calc_preord_and_postord: invalid: {} blocks, {} reachable",
+      nBlocks,
+      pre_ord.len()
+    );
+    return None;
   }
 
   assert!(pre_ord.len() == nBlocks as usize);
@@ -190,8 +192,8 @@ fn calc_preord_and_postord<F: Function>(
     debug_assert!(post_ord_sorted == expected);
   }
 
-  info!("      calc_preord_and_postord: begin");
-  (pre_ord, post_ord)
+  info!("      calc_preord_and_postord: end.  {} blocks", nBlocks);
+  Some((pre_ord, post_ord))
 }
 
 //=============================================================================
@@ -203,11 +205,11 @@ fn calc_preord_and_postord<F: Function>(
 // dominate it. This algorithm is from Fig 7.14 of Muchnick 1997. The
 // algorithm is described as simple but not as performant as some others.
 #[inline(never)]
-fn calc_dom_sets(
+fn calc_dom_sets_SLOW(
   nBlocks: u32, pred_map: &TypedIxVec<BlockIx, Set<BlockIx>>,
   post_ord: &Vec<BlockIx>, start: BlockIx,
 ) -> TypedIxVec<BlockIx, Set<BlockIx>> {
-  info!("        calc_dom_sets: begin");
+  info!("          calc_dom_sets_SLOW: begin");
   // FIXME: nice up the variable names (D, T, etc) a bit.
   let mut dom_map = TypedIxVec::<BlockIx, Set<BlockIx>>::new();
   {
@@ -227,7 +229,7 @@ fn calc_dom_sets(
     let mut nnn = 0;
     loop {
       nnn += 1;
-      info!("        calc_dom_sets:   outer loop {}", nnn);
+      info!("          calc_dom_sets_SLOW:   outer loop {}", nnn);
       let mut change = false;
       for i in 0..nBlocks {
         // bixN travels in "reverse preorder"
@@ -251,8 +253,188 @@ fn calc_dom_sets(
       }
     }
   }
-  info!("        calc_dom_sets: end");
+
+  debug!("");
+  let mut n = 0;
+  for dom_set in dom_map.iter() {
+    debug!("{:<3?}   dom_set {:<16?}", BlockIx::new(n), dom_set);
+    n += 1;
+  }
+  info!("          calc_dom_sets_SLOW: end");
   dom_map
+}
+
+//=============================================================================
+// Computation of per-block dominator sets by first computing trees.
+
+// Unfortunately it seems like local consts are not allowed in Rust.
+const DT_INVALID_POSTORD: u32 = 0xFFFF_FFFF;
+const DT_INVALID_BLOCKIX: BlockIx = BlockIx::BlockIx(0xFFFF_FFFF);
+
+// Helper
+fn dt_merge_sets(
+  idom: &TypedIxVec<BlockIx, BlockIx>, bix2rpostord: &TypedIxVec<BlockIx, u32>,
+  mut node1: BlockIx, mut node2: BlockIx,
+) -> BlockIx {
+  while node1 != node2 {
+    if node1 == DT_INVALID_BLOCKIX || node2 == DT_INVALID_BLOCKIX {
+      return DT_INVALID_BLOCKIX;
+    }
+    let rpo1 = bix2rpostord[node1];
+    let rpo2 = bix2rpostord[node2];
+    if rpo1 > rpo2 {
+      node1 = idom[node1];
+    } else if rpo2 > rpo1 {
+      node2 = idom[node2];
+    }
+  }
+  assert!(node1 == node2);
+  node1
+}
+
+#[inline(never)]
+fn calc_dom_sets(
+  nBlocks: u32, pred_map: &TypedIxVec<BlockIx, Set<BlockIx>>,
+  post_ord: &Vec<BlockIx>, start: BlockIx,
+) -> TypedIxVec<BlockIx, Set<BlockIx>> {
+  info!("        calc_dom_sets: begin");
+
+  // We use 2^32-1 as a marker for an invalid BlockIx or postorder number.
+  // Hence we need this:
+  assert!(nBlocks < DT_INVALID_POSTORD);
+
+  // We have post_ord, which is the postorder sequence.
+
+  // Compute bix2rpostord, which maps a BlockIx to its reverse postorder
+  // number.  And rpostord2bix, which maps a reverse postorder number to its
+  // BlockIx.
+  let mut bix2rpostord = TypedIxVec::<BlockIx, u32>::new();
+  let mut rpostord2bix = Vec::<BlockIx>::new();
+  bix2rpostord.resize(nBlocks, DT_INVALID_POSTORD);
+  rpostord2bix.resize(nBlocks as usize, DT_INVALID_BLOCKIX);
+  for n in 0..nBlocks {
+    // bix visits the blocks in reverse postorder
+    let bix = post_ord[(nBlocks - 1 - n) as usize];
+    // Hence:
+    bix2rpostord[bix] = n;
+    // and
+    rpostord2bix[n as usize] = bix;
+  }
+  for n in 0..nBlocks {
+    debug_assert!(bix2rpostord[BlockIx::new(n)] < nBlocks);
+  }
+
+  let mut idom = TypedIxVec::<BlockIx, BlockIx>::new();
+  idom.resize(nBlocks, DT_INVALID_BLOCKIX);
+
+  // The start node must have itself as a parent.  Also, check that there are
+  // no blocks in the graph not reachable from the start node.  This is
+  // critical: any such blocks typically cause this algorithm to loop
+  // indefinitely in |dt_merge_sets|.  This should be assured us by the
+  // dead-blocks check performed by |calc_preord_and_postord| and the logic
+  // that checks its result.
+  idom[start] = start;
+  assert!(pred_map[start].is_empty());
+
+  for i in 0..nBlocks {
+    let bixI = BlockIx::new(i);
+    let preds_of_i = &pred_map[bixI];
+    assert!(preds_of_i.is_empty() == (bixI == start));
+  }
+
+  let mut changed = true;
+  while changed {
+    changed = false;
+    for n in 0..nBlocks {
+      // Consider blocks in reverse postorder.
+      let node = rpostord2bix[n as usize];
+      let node_preds = &pred_map[node];
+      let mut node_preds_iter = node_preds.iter();
+
+      let rponum = bix2rpostord[node];
+
+      let mut parent = DT_INVALID_BLOCKIX;
+      if node_preds.is_empty() {
+        // No preds, |parent| remains invalid.
+      } else {
+        while let Some(pred) = node_preds_iter.next() {
+          let pred_rpo = bix2rpostord[*pred];
+          if pred_rpo < rponum {
+            parent = *pred;
+            break;
+          }
+        }
+      }
+
+      if parent != DT_INVALID_BLOCKIX {
+        while let Some(pred) = node_preds_iter.next() {
+          if *pred == parent {
+            continue;
+          }
+          if idom[*pred] == DT_INVALID_BLOCKIX {
+            continue;
+          }
+          parent = dt_merge_sets(&idom, &bix2rpostord, parent, *pred);
+        }
+      }
+
+      if parent != DT_INVALID_BLOCKIX && parent != idom[node] {
+        idom[node] = parent;
+        changed = true;
+      }
+    }
+  }
+
+  // Check what we can.  The start node should be its own parent.  All other
+  // nodes should not be their own parent, since we are assured that there are
+  // no dead blocks in the graph, and hence that there is only one dominator
+  // tree, that covers the whole graph.
+  assert!(idom[start] == start);
+
+  for i in 0..nBlocks {
+    let bixI = BlockIx::new(i);
+    assert!(idom[bixI] != DT_INVALID_BLOCKIX);
+    assert!((idom[bixI] == bixI) == (bixI == start));
+  }
+
+  // Construct sets for each block, by walking up the tree.  At some point
+  // this (time wasting) exercise is likely to disappear, in favour of using
+  // the tree directly.
+  let mut tsets = TypedIxVec::<BlockIx, Set<BlockIx>>::new();
+  for i in 0..nBlocks {
+    let mut set = Set::<BlockIx>::empty();
+    let mut bixI = BlockIx::new(i);
+    loop {
+      set.insert(bixI);
+      let bixI2 = idom[bixI];
+      if bixI2 == bixI {
+        break;
+      }
+      bixI = bixI2;
+    }
+    tsets.push(set);
+  }
+
+  if CROSSCHECK_DOMS {
+    info!("        calc_dom_sets crosscheck: begin");
+    let slow_sets = calc_dom_sets_SLOW(nBlocks, pred_map, post_ord, start);
+    assert!(slow_sets.len() == tsets.len());
+
+    let mut n = 0;
+    for dom_tset in tsets.iter() {
+      debug!("{:<3?}   dom_tset {:<16?}", BlockIx::new(n), dom_tset);
+      n += 1;
+    }
+
+    for i in 0..tsets.len() {
+      let bixI = BlockIx::new(i);
+      assert!(tsets[bixI].to_vec() == slow_sets[bixI].to_vec());
+    }
+    info!("        calc_dom_sets crosscheck: end");
+  }
+
+  info!("        calc_dom_sets: end");
+  tsets
 }
 
 //=============================================================================
@@ -458,37 +640,17 @@ impl CFGInfo {
 
     // === BEGIN compute preord/postord sequences ===
     //
-    let (pre_ord, post_ord) = calc_preord_and_postord(func, nBlocks, &succ_map);
+    let mb_pre_ord_and_post_ord =
+      calc_preord_and_postord(func, nBlocks, &succ_map);
+    if mb_pre_ord_and_post_ord.is_none() {
+      return Err(AnalysisError::UnreachableBlocks);
+    }
+
+    let (pre_ord, post_ord) = mb_pre_ord_and_post_ord.unwrap();
     assert!(pre_ord.len() == nBlocks as usize);
     assert!(post_ord.len() == nBlocks as usize);
     //
     // === END compute preord/postord sequences ===
-
-    // sewardj 2020Mar19: if we do have to reinstate this, which I hope we
-    // don't, at least redo it to use a Vec::<bool> rather than a HashSet.
-    //
-    // Check that all blocks are reachable.
-    //{
-    //  let mut visited_blocks = HashSet::default();
-    //  let mut stack = vec![func.entry_block()];
-    //  while let Some(block) = stack.pop() {
-    //    if !visited_blocks.contains(&block) {
-    //      visited_blocks.insert(block);
-    //
-    //      use std::iter::FromIterator;
-    //      let mut succ = Vec::from_iter(succ_map[block].iter().cloned());
-    //
-    //      stack.append(&mut succ);
-    //    }
-    //  }
-    //
-    //  // cfallin 2020-03-12: disable this check -- we want to do the right
-    //  // thing in regalloc in the case of dead blocks, rather than error
-    //  // on them.
-    //  if visited_blocks.len() as u32 != nBlocks {
-    //    return Err(AnalysisError::UnreachableBlocks);
-    //  }
-    //}
 
     // === BEGIN compute loop depth of all Blocks
     //
