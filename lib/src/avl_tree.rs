@@ -876,6 +876,10 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
     }
   }
 
+  pub fn dfs_iter(&self) -> DfsIter<T> {
+    DfsIter::new(self)
+  }
+
   // Show the tree.  (For debugging only.)
   //pub fn show(&self, depth: i32, node: u32) {
   //  if node != AVL_NULL {
@@ -887,6 +891,51 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
   //    self.show(depth + 1, self.pool[node as usize].right);
   //  }
   //}
+}
+
+pub struct DfsIter<'t, T> {
+  tree: &'t AVLTree<T>,
+  stack: Vec<u32>,
+}
+
+impl<'t, T> DfsIter<'t, T> {
+  fn new(tree: &'t AVLTree<T>) -> Self {
+    let mut iter = DfsIter { tree, stack: Vec::new() };
+    if tree.root != AVL_NULL {
+      iter.stack.push(tree.root);
+      iter.visit_left_children(tree.root);
+    }
+    iter
+  }
+
+  fn visit_left_children(&mut self, root: u32) {
+    let mut cur = root;
+    loop {
+      let left = self.tree.pool[cur as usize].left;
+      if left == AVL_NULL {
+        break;
+      }
+      self.stack.push(left);
+      cur = left;
+    }
+  }
+}
+
+impl<'t, T: Copy> Iterator for DfsIter<'t, T> {
+  type Item = T;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    let ret = match self.stack.pop() {
+      Some(ret) => ret,
+      None => return None,
+    };
+    let right = self.tree.pool[ret as usize].right;
+    if right != AVL_NULL {
+      self.stack.push(right);
+      self.visit_left_children(right);
+    }
+    Some(self.tree.pool[ret as usize].item)
+  }
 }
 
 // ====== Testing machinery for AVLTree ======
@@ -1124,4 +1173,23 @@ fn test_avl_tree2() {
   // Final check
   assert!(tree.root == AVL_NULL);
   assert!(tree.count() == 0);
+}
+
+#[test]
+fn test_avl_tree_dfs_iter() {
+  let tree = AVLTree::<u32>::new(0);
+  assert!(tree.dfs_iter().next().is_none());
+
+  const FROM: u32 = 0;
+  const TO: u32 = 10000;
+
+  let mut tree = AVLTree::<u32>::new(0);
+  for i in FROM..TO {
+    tree.insert(i, Some(&|a: u32, b: u32| a.partial_cmp(&b)));
+  }
+
+  let as_vec = tree.to_vec();
+  for (i, val) in tree.dfs_iter().enumerate() {
+    assert_eq!(as_vec[i], val, "not equal for i={}", i);
+  }
 }

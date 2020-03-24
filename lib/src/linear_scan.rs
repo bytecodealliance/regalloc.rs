@@ -7,7 +7,6 @@
 //! This tries to follow the implementation as suggested by:
 //!   Optimized Interval Splitting in a Linear Scan Register Allocator,
 //!     by Wimmer et al., 2005
-//!
 
 // TODO brain dump:
 // - (perf) in try_allocate_reg, try to implement the fixed blocked heuristics, and see
@@ -814,9 +813,8 @@ fn lazy_compute_inactive<F: Function>(
   let reg_class = intervals.get(cur_id).reg_class;
   let cur_end = intervals.get(cur_id).end;
 
-  let dfs = &state.interval_tree.to_vec()[state.active.len()..];
-
-  for &(id, last_frag) in dfs.iter() {
+  for (id, last_frag) in state.interval_tree.dfs_iter().skip(state.active.len())
+  {
     let frags = &intervals.fragments(id);
     let cur_frag = &state.fragments[frags[last_frag]];
     if cur_end < cur_frag.first {
