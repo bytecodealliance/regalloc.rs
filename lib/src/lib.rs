@@ -10,6 +10,7 @@ pub mod analysis;
 #[cfg(not(feature = "fuzzing"))]
 mod analysis;
 
+mod avl_tree;
 mod backtracking;
 mod checker;
 mod data_structures;

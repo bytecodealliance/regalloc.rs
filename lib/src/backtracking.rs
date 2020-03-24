@@ -13,6 +13,7 @@ use std::collections::BinaryHeap;
 use std::fmt;
 
 use crate::analysis::run_analysis;
+use crate::avl_tree::{AVLTag, AVLTree, AVL_NULL};
 use crate::data_structures::{
   cmp_range_frags, BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx,
   RangeFragKind, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, Set,
@@ -24,9 +25,7 @@ use crate::inst_stream::{
   RangeAllocations,
 };
 use crate::interface::{Function, RegAllocError, RegAllocResult};
-use crate::trees_maps_sets::{
-  AVLTag, AVLTree, ToFromU32, UnionFind, UnionFindEquivClasses, AVL_NULL,
-};
+use crate::trees_maps_sets::{ToFromU32, UnionFind, UnionFindEquivClasses};
 
 // DEBUGGING: set to true to cross-check the CommitmentMap machinery.
 

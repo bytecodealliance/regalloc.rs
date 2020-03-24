@@ -23,13 +23,13 @@ use std::env;
 use std::fmt;
 
 use crate::analysis::run_analysis;
+use crate::avl_tree::AVLTree;
 use crate::data_structures::*;
 use crate::inst_stream::{
   edit_inst_stream, InstAndPoint, InstToInsert, InstsAndPoints,
   RangeAllocations,
 };
 use crate::interface::{Function, RegAllocError, RegAllocResult};
-use crate::trees_maps_sets::AVLTree;
 
 // Local shorthands.
 type Fragments = TypedIxVec<RangeFragIx, RangeFrag>;
