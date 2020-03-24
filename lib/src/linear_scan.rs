@@ -1695,12 +1695,14 @@ fn try_compress_ranges<F: Function>(
   func: &F, rlrs: &mut RealRanges, vlrs: &mut VirtualRanges,
   fragments: &mut Fragments,
 ) {
-  for vlr in vlrs.iter_mut() {
-    let old_size = vlr.sorted_frags.frag_ixs.len();
-    let mut i = vlr.sorted_frags.frag_ixs.len() - 1;
+  fn compress<F: Function>(
+    func: &F, frag_ixs: &mut Vec<RangeFragIx>, fragments: &mut Fragments,
+  ) {
+    let old_size = frag_ixs.len();
+    let mut i = frag_ixs.len() - 1;
     while i > 0 {
-      let cur_frag = &fragments[vlr.sorted_frags.frag_ixs[i]];
-      let prev_frag = &fragments[vlr.sorted_frags.frag_ixs[i - 1]];
+      let cur_frag = &fragments[frag_ixs[i]];
+      let prev_frag = &fragments[frag_ixs[i - 1]];
       if prev_frag.last.iix.get() + 1 == cur_frag.first.iix.get()
         && prev_frag.last.pt == Point::Def
         && cur_frag.first.pt == Point::Use
@@ -1715,20 +1717,24 @@ fn try_compress_ranges<F: Function>(
 
         let new_range_ix = RangeFragIx::new(fragments.len());
         fragments.push(new_range);
-        vlr.sorted_frags.frag_ixs[i - 1] = new_range_ix;
+        frag_ixs[i - 1] = new_range_ix;
 
-        let _ = vlr.sorted_frags.frag_ixs.remove(i);
+        let _ = frag_ixs.remove(i);
       }
       i -= 1;
     }
 
-    let new_size = vlr.sorted_frags.frag_ixs.len();
+    let new_size = frag_ixs.len();
     info!(
       "compress: {} -> {}; {}",
       old_size,
       new_size,
       100. * (old_size as f64 - new_size as f64) / (old_size as f64)
     );
+  }
+
+  for vlr in vlrs.iter_mut() {
+    compress(func, &mut vlr.sorted_frags.frag_ixs, fragments);
   }
 
   let mut reg_map: HashMap<RealReg, Vec<RangeFragIx>> = HashMap::default();
@@ -1745,6 +1751,9 @@ fn try_compress_ranges<F: Function>(
   rlrs.clear();
   for (rreg, mut sorted_frags) in reg_map {
     sorted_frags.sort_by_key(|frag_ix| fragments[*frag_ix].first);
+
+    compress(func, &mut sorted_frags, fragments);
+
     rlrs.push(RealRange {
       rreg,
       sorted_frags: SortedRangeFragIxs { frag_ixs: sorted_frags },
