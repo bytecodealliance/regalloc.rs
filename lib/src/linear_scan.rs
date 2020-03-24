@@ -222,10 +222,12 @@ impl Intervals {
     &mut self.data[int_id.0]
   }
 
-  fn fragments(&self, int_id: IntId) -> &SortedRangeFragIxs {
+  fn fragments(&self, int_id: IntId) -> &Vec<RangeFragIx> {
     match &self.data[int_id.0].kind {
-      LiveIntervalKind::Fixed(r) => &self.real_ranges[*r].sorted_frags,
-      LiveIntervalKind::Virtual(r) => &self.virtual_ranges[*r].sorted_frags,
+      LiveIntervalKind::Fixed(r) => &self.real_ranges[*r].sorted_frags.frag_ixs,
+      LiveIntervalKind::Virtual(r) => {
+        &self.virtual_ranges[*r].sorted_frags.frag_ixs
+      }
     }
   }
   fn fragments_mut(&mut self, int_id: IntId) -> &mut SortedRangeFragIxs {
@@ -256,7 +258,7 @@ impl Intervals {
     &self, int_id: IntId, pos: InstPoint, fragments: &Fragments,
   ) -> bool {
     // Fragments are sorted by start.
-    let frag_ixs = &self.fragments(int_id).frag_ixs;
+    let frag_ixs = self.fragments(int_id);
 
     // The binary search is useful only after some threshold number of elements;
     // This value has been determined after benchmarking a large program.
@@ -293,8 +295,8 @@ impl Intervals {
       return Some(left.start);
     }
 
-    let left_frags = &self.fragments(left_id).frag_ixs;
-    let right_frags = &self.fragments(right_id).frag_ixs;
+    let left_frags = &self.fragments(left_id);
+    let right_frags = &self.fragments(right_id);
 
     let mut left_i = left.last_frag;
     let mut right_i = right.last_frag;
@@ -373,7 +375,7 @@ impl Intervals {
     } else {
       format!("{:?}", self.vreg(int_id))
     };
-    let frag_ixs = &self.fragments(int_id).frag_ixs;
+    let frag_ixs = &self.fragments(int_id);
     let fragments = frag_ixs
       .iter()
       .map(|&ix| {
@@ -727,7 +729,7 @@ fn update_state<'a, F: Function>(cur_id: IntId, state: &mut State<'a, F>) {
     }
 
     // From this point, start <= int.end.
-    let frag_ixs = &intervals.fragments(int_id).frag_ixs;
+    let frag_ixs = &intervals.fragments(int_id);
     let mut cur_frag = &state.fragments[frag_ixs[last_frag_idx]];
 
     // If the current fragment still contains start, it is still active.
@@ -815,7 +817,7 @@ fn lazy_compute_inactive<F: Function>(
   let dfs = &state.interval_tree.to_vec()[state.active.len()..];
 
   for &(id, last_frag) in dfs.iter() {
-    let frags = &intervals.fragments(id).frag_ixs;
+    let frags = &intervals.fragments(id);
     let cur_frag = &state.fragments[frags[last_frag]];
     if cur_end < cur_frag.first {
       break;
@@ -977,7 +979,7 @@ fn next_use(
     intervals.vreg(id).to_reg()
   };
 
-  for &frag_id in &intervals.fragments(id).frag_ixs {
+  for &frag_id in intervals.fragments(id) {
     let frag = &fragments[frag_id];
     if frag.last < pos {
       continue;
@@ -1229,7 +1231,7 @@ fn last_use(
 
   let reg = intervals.vreg(id).to_reg();
 
-  for &i in intervals.fragments(id).frag_ixs.iter().rev() {
+  for &i in intervals.fragments(id).iter().rev() {
     let frag = fragments[i];
     if frag.first > pos {
       continue;
@@ -1751,9 +1753,9 @@ fn cmp_interval_tree(
   left_id: (IntId, usize), right_id: (IntId, usize), intervals: &Intervals,
   fragments: &Fragments,
 ) -> Option<Ordering> {
-  let left_frags = &intervals.fragments(left_id.0).frag_ixs;
+  let left_frags = &intervals.fragments(left_id.0);
   let left = fragments[left_frags[left_id.1]].first;
-  let right_frags = &intervals.fragments(right_id.0).frag_ixs;
+  let right_frags = &intervals.fragments(right_id.0);
   let right = fragments[right_frags[right_id.1]].first;
   (left, left_id).partial_cmp(&(right, right_id))
 }
@@ -2711,7 +2713,7 @@ fn apply_registers<F: Function>(
   for int_id in virtual_intervals {
     if let Some(rreg) = intervals.get(int_id).location.reg() {
       let vreg = intervals.vreg(int_id);
-      for &range_ix in &intervals.fragments(int_id).frag_ixs {
+      for &range_ix in intervals.fragments(int_id) {
         let range = &fragments[range_ix];
         trace!("in {:?}, {:?} lives in {:?}", range, vreg, rreg);
         frag_map.push((range_ix, vreg, rreg));
