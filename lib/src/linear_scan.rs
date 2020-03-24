@@ -1265,6 +1265,9 @@ fn last_use(
         }
       }
 
+      if inst.get() == 0 {
+        break;
+      }
       inst = inst.minus(1);
     }
   }
