@@ -75,6 +75,12 @@ impl Location {
       _ => None,
     }
   }
+  fn unwrap_reg(&self) -> RealReg {
+    match self {
+      Location::Reg(reg) => *reg,
+      _ => panic!("unwrap_reg called on non-reg location"),
+    }
+  }
   fn spill(&self) -> Option<SpillSlot> {
     match self {
       Location::Stack(slot) => Some(*slot),
@@ -776,10 +782,6 @@ fn update_state<'a, F: Function>(cur_id: IntId, state: &mut State<'a, F>) {
     }
   }
 
-  // Finally, add the current one for the next round.
-  let inserted_2 = state.interval_tree.insert((cur_id, 0), Some(&comparator));
-  debug_assert!(inserted_2);
-
   for (int_id, new_frag_idx) in interval_updates {
     intervals.get_mut(int_id).last_frag = new_frag_idx;
   }
@@ -801,12 +803,69 @@ fn update_state<'a, F: Function>(cur_id: IntId, state: &mut State<'a, F>) {
   trace!("state inactive: {:?}", state.inactive);
 }
 
+#[inline(never)]
+fn lazy_compute_inactive<F: Function>(
+  state: &State<F>, cur_id: IntId,
+  inactive_intersecting: &mut Vec<(IntId, InstPoint)>,
+) {
+  let intervals = &state.intervals;
+  let reg_class = intervals.get(cur_id).reg_class;
+  let cur_end = intervals.get(cur_id).end;
+
+  let dfs = &state.interval_tree.to_vec()[state.active.len()..];
+
+  for &(id, last_frag) in dfs.iter() {
+    let frags = &intervals.fragments(id).frag_ixs;
+    let cur_frag = &state.fragments[frags[last_frag]];
+    if cur_end < cur_frag.first {
+      break;
+    }
+
+    if let Some(reg) = intervals.get(id).location.reg() {
+      if reg.get_class() != reg_class {
+        continue;
+      }
+      if let Some(intersect_at) =
+        intervals.intersects_with(id, cur_id, &state.fragments)
+      {
+        inactive_intersecting.push((id, intersect_at));
+      }
+    }
+  }
+
+  #[cfg(debug_assertions)]
+  {
+    let former_inactive = {
+      let mut inactive = Vec::new();
+      for &id in &state.inactive {
+        if state.intervals.get(id).reg_class != reg_class {
+          continue;
+        }
+        if let Some(pos) =
+          state.intervals.intersects_with(id, cur_id, &state.fragments)
+        {
+          inactive.push((id, pos));
+        }
+      }
+      inactive.sort();
+      inactive
+    };
+    inactive_intersecting.sort();
+    trace!("inactive: reference/faster");
+    trace!("{:?}", former_inactive,);
+    trace!("{:?}", inactive_intersecting,);
+    debug_assert_eq!(former_inactive.len(), inactive_intersecting.len());
+    debug_assert_eq!(former_inactive, *inactive_intersecting);
+  }
+}
+
 /// Naive heuristic to select a register when we're not aware of any conflict.
 /// Currently, it chooses the register with the furthest next use.
 #[inline(never)]
 fn select_naive_reg<F: Function>(
   state: &State<F>, id: IntId, reg_class: RegClass,
   reg_universe: &RealRegUniverse,
+  inactive_intersecting: &mut Vec<(IntId, InstPoint)>,
 ) -> Option<(RealReg, InstPoint)> {
   let mut free_until_pos = RegisterMapping::with_default(
     reg_class,
@@ -814,47 +873,31 @@ fn select_naive_reg<F: Function>(
     state.scratches[reg_class as usize],
     InstPoint::max_value(),
   );
+  let mut num_free = free_until_pos.regs.len() - 1;
 
   // All registers currently in use are blocked.
   for &id in &state.active {
     if let Some(reg) = state.intervals.get(id).location.reg() {
       if reg.get_class() == reg_class {
         free_until_pos[reg] = InstPoint::min_value();
+        num_free -= 1;
       }
     }
   }
 
   // Shortcut: if all the registers are taken, don't even bother.
-  if free_until_pos.iter().all(|&(_reg, pos)| pos == InstPoint::min_value()) {
+  if num_free == 0 {
     return None;
   }
 
   // All registers that would be used at the same time as the current interval
   // are partially blocked, up to the point when they start being used.
-  {
-    let cur_id = id;
-    let cur_end = state.intervals.get(id).end;
+  lazy_compute_inactive(state, id, inactive_intersecting);
 
-    let intervals = &state.intervals;
-
-    for &id in &state.inactive {
-      if let Some(reg) = intervals.get(id).location.reg() {
-        if reg.get_class() != reg_class {
-          continue;
-        }
-        // This is the reverse of the check in try_allocate_reg.
-        if free_until_pos[reg] <= cur_end {
-          // Already partially blocked, skip.
-          continue;
-        }
-        if let Some(intersect_at) =
-          intervals.intersects_with(id, cur_id, &state.fragments)
-        {
-          if intersect_at < free_until_pos[reg] {
-            free_until_pos[reg] = intersect_at;
-          }
-        }
-      }
+  for &(id, intersect_at) in inactive_intersecting.iter() {
+    let reg = state.intervals.get(id).location.unwrap_reg();
+    if intersect_at < free_until_pos[reg] {
+      free_until_pos[reg] = intersect_at;
     }
   }
 
@@ -874,16 +917,21 @@ fn select_naive_reg<F: Function>(
 #[inline(never)]
 fn try_allocate_reg<F: Function>(
   id: IntId, state: &mut State<F>, reg_universe: &RealRegUniverse,
-) -> bool {
+) -> (bool, Option<Vec<(IntId, InstPoint)>>) {
   let reg_class = state.intervals.get(id).reg_class;
 
-  let (best_reg, best_pos) = if let Some(solution) =
-    select_naive_reg(state, id, reg_class, reg_universe)
-  {
+  let mut inactive_intersecting = Vec::new();
+  let (best_reg, best_pos) = if let Some(solution) = select_naive_reg(
+    state,
+    id,
+    reg_class,
+    reg_universe,
+    &mut inactive_intersecting,
+  ) {
     solution
   } else {
     debug!("try_allocate_reg: all registers taken, need to spill.");
-    return false;
+    return (false, Some(inactive_intersecting));
   };
   debug!(
     "try_allocate_reg: best register {:?} has next use at {:?}",
@@ -894,14 +942,14 @@ fn try_allocate_reg<F: Function>(
     // TODO Here, it should be possible to split the interval between the start
     // (or more precisely, the last use before best_pos) and the best_pos value.
     // See also issue #32.
-    return false;
+    return (false, Some(inactive_intersecting));
   }
 
   // At least a partial match: allocate.
   debug!("{:?}: {:?} <- {:?}", id, state.intervals.vreg(id), best_reg);
   state.intervals.set_reg(id, best_reg);
 
-  true
+  (true, None)
 }
 
 /// Finds the first use for the current interval that's located after the given
@@ -967,6 +1015,7 @@ fn next_use(
 #[inline(never)]
 fn allocate_blocked_reg<F: Function>(
   cur_id: IntId, state: &mut State<F>, reg_universe: &RealRegUniverse,
+  mut inactive_intersecting: Vec<(IntId, InstPoint)>,
 ) -> Result<(), RegAllocError> {
   // If the current interval has no uses, spill it directly.
   let first_use = match next_use(
@@ -1038,28 +1087,20 @@ fn allocate_blocked_reg<F: Function>(
     }
   }
 
-  for &id in &state.inactive {
-    if state.intervals.get(id).reg_class != reg_class {
-      continue;
-    }
+  if inactive_intersecting.len() == 0 {
+    lazy_compute_inactive(state, cur_id, &mut inactive_intersecting);
+  }
 
-    let reg = match state.intervals.get(id).location.reg() {
-      Some(reg) => reg,
-      None => continue,
-    };
+  for &(id, intersect_pos) in &inactive_intersecting {
+    debug_assert!(!state.active.iter().any(|active_id| *active_id == id));
+    debug_assert!(state.intervals.get(id).reg_class == reg_class);
 
+    let reg = state.intervals.get(id).location.unwrap_reg();
     if block_pos[reg] == InstPoint::min_value() {
       // This register is already blocked.
       debug_assert!(next_use_pos[reg] == InstPoint::min_value());
       continue;
     }
-
-    let intervals = &state.intervals;
-    let intersect_pos =
-      match intervals.intersects_with(id, cur_id, &state.fragments) {
-        Some(pos) => pos,
-        None => continue,
-      };
 
     if state.intervals.get(id).is_fixed() {
       block_pos[reg] = InstPoint::min(block_pos[reg], intersect_pos);
@@ -1131,10 +1172,10 @@ fn allocate_blocked_reg<F: Function>(
 
     // If there's an interference with a fixed interval, split at the
     // intersection.
-    let int = state.intervals.get(cur_id);
-    if block_pos[best_reg] <= int.end {
+    let int_end = state.intervals.get(cur_id).end;
+    if block_pos[best_reg] <= int_end {
       debug!("allocate_blocked_reg: fixed conflict! blocked at {:?}, while ending at {:?}",
-          block_pos[best_reg], int.end);
+          block_pos[best_reg], int_end);
       // TODO Here, it should be possible to only split the interval, and not
       // spill it. See also issue #32.
       split_and_spill(state, cur_id, block_pos[best_reg]);
@@ -1155,25 +1196,18 @@ fn allocate_blocked_reg<F: Function>(
       }
     }
 
-    // TODO sacrifice a goat to the borrowck gods, or have split_at take
-    // intervals/fragments/func to make the conflict disappear.
-    let inactive = state.inactive.clone();
-    for id in inactive {
+    for (id, _intersect_pos) in inactive_intersecting {
       let int = state.intervals.get(id);
-      if int.reg_class != reg_class {
+      if int.is_fixed() {
         continue;
       }
-      if let Some(reg) = int.location.reg() {
-        if reg == best_reg {
-          if let Some(_) =
-            state.intervals.intersects_with(id, cur_id, &state.fragments)
-          {
-            debug!("allocate_blocked_reg: split and spill inactive stolen reg");
-            // start_pos is in the middle of a hole in the split interval
-            // (otherwise it'd be active), so it's a great split position.
-            split_and_spill(state, id, start_pos);
-          }
-        }
+      let reg = int.location.unwrap_reg();
+      debug_assert_eq!(reg.get_class(), reg_class);
+      if reg == best_reg {
+        debug!("allocate_blocked_reg: split and spill inactive stolen reg");
+        // start_pos is in the middle of a hole in the split interval
+        // (otherwise it'd be active), so it's a great split position.
+        split_and_spill(state, id, start_pos);
       }
     }
   }
@@ -1684,8 +1718,7 @@ fn try_compress_ranges<F: Function>(
     }
 
     let new_size = vlr.sorted_frags.frag_ixs.len();
-    use log::warn;
-    warn!(
+    info!(
       "compress: {} -> {}; {}",
       old_size,
       new_size,
@@ -1822,14 +1855,32 @@ pub fn run<F: Function>(
 
         update_state(id, &mut state);
 
-        if !try_allocate_reg(id, &mut state, reg_universe) {
-          allocate_blocked_reg(id, &mut state, reg_universe)?;
+        let (allocated, inactive_intersecting) =
+          try_allocate_reg(id, &mut state, reg_universe);
+        if !allocated {
+          allocate_blocked_reg(
+            id,
+            &mut state,
+            reg_universe,
+            inactive_intersecting.unwrap(),
+          )?;
         }
 
-        #[cfg(debug_assertions)]
         {
           // Maintain active/inactive state for match_previous_update_state.
           if state.intervals.get(id).location.reg().is_some() {
+            // Add the current interval to the interval tree, if it's been
+            // allocated.
+            let fragments = &state.fragments;
+            let intervals = &state.intervals;
+            state.interval_tree.insert(
+              (id, 0),
+              Some(&|left, right| {
+                cmp_interval_tree(left, right, intervals, fragments)
+              }),
+            );
+
+            #[cfg(debug_assertions)]
             state.active.push(id);
           }
         }
