@@ -60,6 +60,65 @@ impl fmt::Debug for LiveIntervalKind {
   }
 }
 
+#[derive(Clone, PartialOrd, Ord, PartialEq, Eq)]
+struct Mention(u8);
+
+impl fmt::Debug for Mention {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    let mut comma = false;
+    if self.0 & 1 == 1 {
+      write!(fmt, "use")?;
+      comma = true;
+    }
+    if (self.0 >> 1) & 1 == 1 {
+      if comma {
+        write!(fmt, ",")?;
+      }
+      write!(fmt, "mod")?;
+      comma = true;
+    }
+    if (self.0 >> 2) & 1 == 1 {
+      if comma {
+        write!(fmt, ",")?;
+      }
+      write!(fmt, "def")?;
+    }
+    Ok(())
+  }
+}
+
+impl Mention {
+  // Setters.
+  fn new() -> Self {
+    Self(0)
+  }
+  fn add_def(&mut self) {
+    self.0 |= 1 << 2;
+  }
+  fn add_mod(&mut self) {
+    self.0 |= 1 << 1;
+  }
+  fn add_use(&mut self) {
+    self.0 |= 1 << 0;
+  }
+
+  // Getters.
+  fn is_empty(&self) -> bool {
+    self.0 == 0
+  }
+  fn is_use(&self) -> bool {
+    (self.0 & 0b1) != 0
+  }
+  fn is_use_or_mod(&self) -> bool {
+    (self.0 & 0b11) != 0
+  }
+  fn is_mod_or_def(&self) -> bool {
+    (self.0 & 0b110) != 0
+  }
+}
+
+type MentionMap = Vec<(InstIx, Mention)>;
+
 #[derive(Debug, Clone, Copy)]
 enum Location {
   None,
@@ -115,6 +174,8 @@ struct LiveInterval {
   /// Location assigned to this live interval.
   location: Location,
 
+  mentions: MentionMap,
+
   // Cached fields
   reg_class: RegClass,
   start: InstPoint,
@@ -147,7 +208,7 @@ struct Intervals {
 
 impl Intervals {
   fn new(
-    real_ranges: RealRanges, virtual_ranges: VirtualRanges,
+    reg_uses: &RegUses, real_ranges: RealRanges, virtual_ranges: VirtualRanges,
     fragments: &Fragments,
   ) -> Self {
     let mut data = Vec::with_capacity(
@@ -176,7 +237,7 @@ impl Intervals {
       .into_iter()
       .enumerate()
       .map(|(index, kind)| {
-        let (location, start, end, reg_class) = match kind {
+        let (location, start, end, reg, reg_class) = match kind {
           LiveIntervalKind::Fixed(ix) => {
             let range = &real_ranges[ix];
             let start = fragments[range.sorted_frags.frag_ixs[0]].first;
@@ -184,7 +245,7 @@ impl Intervals {
               fragments[*range.sorted_frags.frag_ixs.last().unwrap()].last;
             let reg_class = range.rreg.get_class();
             let location = Location::Reg(range.rreg);
-            (location, start, end, reg_class)
+            (location, start, end, range.rreg.to_reg(), reg_class)
           }
           LiveIntervalKind::Virtual(ix) => {
             let range = &virtual_ranges[ix];
@@ -193,9 +254,73 @@ impl Intervals {
               fragments[*range.sorted_frags.frag_ixs.last().unwrap()].last;
             let reg_class = range.vreg.get_class();
             let location = Location::None;
-            (location, start, end, reg_class)
+            (location, start, end, range.vreg.to_reg(), reg_class)
           }
         };
+
+        let mut mentions = MentionMap::new();
+
+        // Handle start.
+        {
+          let iix = start.iix;
+          let uses = &reg_uses[iix];
+          let mut set = Mention::new();
+          if start.pt == Point::Use {
+            if uses.san_used.contains(reg) {
+              set.add_use();
+            }
+            if uses.san_modified.contains(reg) {
+              set.add_mod();
+            }
+          } else {
+            if uses.san_defined.contains(reg) {
+              set.add_def();
+            }
+          }
+          if !set.is_empty() {
+            mentions.push((iix, set));
+          }
+        }
+
+        if start.iix != end.iix {
+          // Handle instructions in between.
+          for iix in start.iix.plus(1).dotdot(end.iix) {
+            let uses = &reg_uses[iix];
+            let mut set = Mention::new();
+            if uses.san_used.contains(reg) {
+              set.add_use();
+            }
+            if uses.san_modified.contains(reg) {
+              set.add_mod();
+            }
+            if uses.san_defined.contains(reg) {
+              set.add_def();
+            }
+            if !set.is_empty() {
+              mentions.push((iix, set))
+            }
+          }
+
+          // Handle end.
+          let iix = end.iix;
+          let uses = &reg_uses[iix];
+          let mut set = Mention::new();
+          if end.pt == Point::Use {
+            if uses.san_used.contains(reg) {
+              set.add_use();
+            }
+            // If it contains a mod, then the range should end at the Def point.
+            debug_assert!(!uses.san_modified.contains(reg));
+          } else if uses.san_defined.contains(reg) {
+            set.add_def();
+          }
+          if !set.is_empty() {
+            mentions.push((iix, set));
+          }
+        }
+
+        // Sort mentions by instruction index for fast lookup.
+        mentions.sort();
 
         LiveInterval {
           id: IntId(index),
@@ -207,6 +332,7 @@ impl Intervals {
           start,
           end,
           last_frag: 0,
+          mentions,
         }
       })
       .collect();
@@ -810,26 +936,42 @@ fn lazy_compute_inactive<F: Function>(
   inactive_intersecting: &mut Vec<(IntId, InstPoint)>,
 ) {
   let intervals = &state.intervals;
-  let reg_class = intervals.get(cur_id).reg_class;
-  let cur_end = intervals.get(cur_id).end;
 
-  for (id, last_frag) in state.interval_tree.dfs_iter().skip(state.active.len())
+  debug_assert_eq!(intervals.fragments(cur_id).len(), 1);
+  let int = intervals.get(cur_id);
+  let reg_class = int.reg_class;
+  //let cur_start = int.start;
+  let cur_end = int.end;
+
+  for (id, _last_frag) in
+    state.interval_tree.dfs_iter().skip(state.active.len())
   {
-    let frags = &intervals.fragments(id);
-    let cur_frag = &state.fragments[frags[last_frag]];
-    if cur_end < cur_frag.first {
+    let other_int = intervals.get(id);
+    debug_assert!(other_int.is_fixed() || intervals.fragments(id).len() == 1);
+
+    if cur_end < other_int.start {
       break;
     }
 
-    if let Some(reg) = intervals.get(id).location.reg() {
-      if reg.get_class() != reg_class {
-        continue;
-      }
+    if other_int.reg_class != reg_class {
+      continue;
+    }
+
+    debug_assert!(other_int.location.reg().is_some());
+    if other_int.is_fixed() {
       if let Some(intersect_at) =
         intervals.intersects_with(id, cur_id, &state.fragments)
       {
         inactive_intersecting.push((id, intersect_at));
       }
+    } else {
+      // cur_start < frag.start, otherwise the interval would be active.
+      debug_assert!(other_int.start <= cur_end);
+      debug_assert!(
+        intervals.intersects_with(id, cur_id, &state.fragments)
+          == Some(other_int.start)
+      );
+      inactive_intersecting.push((id, other_int.start));
     }
   }
 
@@ -966,6 +1108,75 @@ fn next_use(
     intervals.display(id, fragments),
     pos
   );
+
+  let mentions = &intervals.get(id).mentions;
+
+  let target = InstPoint::max(pos, intervals.get(id).start);
+
+  let ret =
+    match mentions.binary_search_by_key(&target.iix, |mention| mention.0) {
+      Ok(index) => {
+        // Either the selected index is a perfect match, or the next mention is
+        // the correct answer.
+        let mention = &mentions[index];
+        if target.pt == Point::Use {
+          if mention.1.is_use_or_mod() {
+            Some(InstPoint::new_use(mention.0))
+          } else {
+            Some(InstPoint::new_def(mention.0))
+          }
+        } else if target.pt == Point::Def && mention.1.is_mod_or_def() {
+          Some(target)
+        } else if index == mentions.len() - 1 {
+          None
+        } else {
+          let mention = &mentions[index + 1];
+          if mention.1.is_use_or_mod() {
+            Some(InstPoint::new_use(mention.0))
+          } else {
+            Some(InstPoint::new_def(mention.0))
+          }
+        }
+      }
+
+      Err(index) => {
+        if index == mentions.len() {
+          None
+        } else {
+          let mention = &mentions[index];
+          if mention.1.is_use_or_mod() {
+            Some(InstPoint::new_use(mention.0))
+          } else {
+            Some(InstPoint::new_def(mention.0))
+          }
+        }
+      }
+    };
+
+  // TODO once the mentions are properly split, this could be removed, in
+  // theory.
+  let ret = match ret {
+    Some(pos) => {
+      if pos <= intervals.get(id).end {
+        Some(pos)
+      } else {
+        None
+      }
+    }
+    None => None,
+  };
+
+  #[cfg(debug_assertions)]
+  debug_assert_eq!(ref_next_use(intervals, id, pos, reg_uses, fragments), ret);
+
+  ret
+}
+
+#[cfg(debug_assertions)]
+fn ref_next_use(
+  intervals: &Intervals, id: IntId, pos: InstPoint, reg_uses: &RegUses,
+  fragments: &Fragments,
+) -> Option<InstPoint> {
   let int = intervals.get(id);
   if int.end < pos {
     return None;
@@ -993,7 +1204,12 @@ fn next_use(
       if pos <= at_use && frag.contains(&at_use) {
         if uses.san_used.contains(reg) || uses.san_modified.contains(reg) {
           debug_assert!(intervals.covers(id, at_use, fragments));
-          trace!("found next use of {:?} after {:?} at {:?}", id, pos, at_use);
+          trace!(
+            "ref next_use: found next use of {:?} after {:?} at {:?}",
+            id,
+            pos,
+            at_use
+          );
           return Some(at_use);
         }
       }
@@ -1002,13 +1218,19 @@ fn next_use(
       if pos <= at_def && frag.contains(&at_def) {
         if uses.san_defined.contains(reg) || uses.san_modified.contains(reg) {
           debug_assert!(intervals.covers(id, at_def, fragments));
-          trace!("found next use of {:?} after {:?} at {:?}", id, pos, at_def);
+          trace!(
+            "ref next_use: found next use of {:?} after {:?} at {:?}",
+            id,
+            pos,
+            at_def
+          );
           return Some(at_def);
         }
       }
     }
   }
-  trace!("found no next use");
+
+  trace!("ref next_use: no next use");
   None
 }
 
@@ -1068,21 +1290,26 @@ fn allocate_blocked_reg<F: Function>(
   );
 
   for &id in &state.active {
-    if state.intervals.get(id).reg_class != reg_class {
+    let int = state.intervals.get(id);
+    if int.reg_class != reg_class {
       continue;
     }
-    if let Some(reg) = state.intervals.fixed_reg(id) {
-      block_pos[reg] = InstPoint::min_value();
-      next_use_pos[reg] = InstPoint::min_value();
-    } else if let Some(reg) = state.intervals.get(id).location.reg() {
-      if let Some(next_use) = next_use(
-        &state.intervals,
-        id,
-        start_pos,
-        &state.reg_uses,
-        &state.fragments,
-      ) {
-        next_use_pos[reg] = InstPoint::min(next_use_pos[reg], next_use);
+    if let Some(reg) = state.intervals.get(id).location.reg() {
+      if int.is_fixed() {
+        block_pos[reg] = InstPoint::min_value();
+        next_use_pos[reg] = InstPoint::min_value();
+      } else if next_use_pos[reg] != InstPoint::min_value() {
+        if let Some(reg) = state.intervals.get(id).location.reg() {
+          if let Some(next_use) = next_use(
+            &state.intervals,
+            id,
+            start_pos,
+            &state.reg_uses,
+            &state.fragments,
+          ) {
+            next_use_pos[reg] = InstPoint::min(next_use_pos[reg], next_use);
+          }
+        }
       }
     }
   }
@@ -1218,12 +1445,86 @@ fn allocate_blocked_reg<F: Function>(
 /// Finds the last use of a vreg before a given target, including it in possible
 /// return values.
 /// Extends to the right, that is, modified means "def".
-#[inline(never)]
 fn last_use(
   intervals: &Intervals, id: IntId, pos: InstPoint, reg_uses: &RegUses,
   fragments: &Fragments,
 ) -> Option<InstPoint> {
-  trace!("searching last use of {:?} before {:?}", id, pos,);
+  trace!(
+    "searching last use of {} before {:?}",
+    intervals.display(id, fragments),
+    pos,
+  );
+  let mentions = &intervals.get(id).mentions;
+
+  let target = InstPoint::min(pos, intervals.get(id).end);
+
+  let ret =
+    match mentions.binary_search_by_key(&target.iix, |mention| mention.0) {
+      Ok(index) => {
+        // Either the selected index is a perfect match, or the previous mention
+        // is the correct answer.
+        let mention = &mentions[index];
+        if target.pt == Point::Def {
+          if mention.1.is_mod_or_def() {
+            Some(InstPoint::new_def(mention.0))
+          } else {
+            Some(InstPoint::new_use(mention.0))
+          }
+        } else if target.pt == Point::Use && mention.1.is_use() {
+          Some(target)
+        } else if index == 0 {
+          None
+        } else {
+          let mention = &mentions[index - 1];
+          if mention.1.is_mod_or_def() {
+            Some(InstPoint::new_def(mention.0))
+          } else {
+            Some(InstPoint::new_use(mention.0))
+          }
+        }
+      }
+
+      Err(index) => {
+        if index == 0 {
+          None
+        } else {
+          let mention = &mentions[index - 1];
+          if mention.1.is_mod_or_def() {
+            Some(InstPoint::new_def(mention.0))
+          } else {
+            Some(InstPoint::new_use(mention.0))
+          }
+        }
+      }
+    };
+
+  // TODO once the mentions are properly split, this could be removed, in
+  // theory.
+  let ret = match ret {
+    Some(pos) => {
+      if pos >= intervals.get(id).start {
+        Some(pos)
+      } else {
+        None
+      }
+    }
+    None => None,
+  };
+
+  trace!("mentions: {:?}", mentions);
+  trace!("new algo: {:?}", ret);
+
+  #[cfg(debug_assertions)]
+  debug_assert_eq!(ref_last_use(intervals, id, pos, reg_uses, fragments), ret);
+
+  ret
+}
+
+#[inline(never)]
+fn ref_last_use(
+  intervals: &Intervals, id: IntId, pos: InstPoint, reg_uses: &RegUses,
+  fragments: &Fragments,
+) -> Option<InstPoint> {
   let int = intervals.get(id);
   debug_assert!(int.start <= pos);
 
@@ -1502,6 +1803,8 @@ fn split<F: Function>(
     start: child_start,
     end: child_end,
     last_frag: 0,
+    // TODO try to really split, and be careful about Mod points!
+    mentions: state.intervals.get(id).mentions.clone(),
   };
   state.intervals.push_interval(child_int);
 
@@ -1696,43 +1999,85 @@ fn try_compress_ranges<F: Function>(
   fn compress<F: Function>(
     func: &F, frag_ixs: &mut Vec<RangeFragIx>, fragments: &mut Fragments,
   ) {
-    let old_size = frag_ixs.len();
-    let mut i = frag_ixs.len() - 1;
-    while i > 0 {
-      let cur_frag = &fragments[frag_ixs[i]];
-      let prev_frag = &fragments[frag_ixs[i - 1]];
-      if prev_frag.last.iix.get() + 1 == cur_frag.first.iix.get()
-        && prev_frag.last.pt == Point::Def
-        && cur_frag.first.pt == Point::Use
-      {
-        let new_range = RangeFrag::new_multi_block(
-          func,
-          prev_frag.bix,
-          prev_frag.first,
-          cur_frag.last,
-          prev_frag.count + cur_frag.count,
-        );
-
-        let new_range_ix = RangeFragIx::new(fragments.len());
-        fragments.push(new_range);
-        frag_ixs[i - 1] = new_range_ix;
-
-        let _ = frag_ixs.remove(i);
-      }
-      i -= 1;
+    if frag_ixs.len() == 1 {
+      return;
     }
 
-    let new_size = frag_ixs.len();
-    info!(
-      "compress: {} -> {}; {}",
-      old_size,
-      new_size,
-      100. * (old_size as f64 - new_size as f64) / (old_size as f64)
+    let last_frag_end = fragments[*frag_ixs.last().unwrap()].last;
+    let first_frag = &mut fragments[frag_ixs[0]];
+
+    let new_range = RangeFrag::new_multi_block(
+      func,
+      first_frag.bix,
+      first_frag.first,
+      last_frag_end,
+      1,
     );
+
+    let new_range_ix = RangeFragIx::new(fragments.len());
+    fragments.push(new_range);
+    frag_ixs.clear();
+    frag_ixs.push(new_range_ix);
+
+    //let old_size = frag_ixs.len();
+    //let mut i = frag_ixs.len() - 1;
+    //while i > 0 {
+    //let cur_frag = &fragments[frag_ixs[i]];
+    //let prev_frag = &fragments[frag_ixs[i - 1]];
+    //if prev_frag.last.iix.get() + 1 == cur_frag.first.iix.get()
+    //&& prev_frag.last.pt == Point::Def
+    //&& cur_frag.first.pt == Point::Use
+    //{
+    //let new_range = RangeFrag::new_multi_block(
+    //func,
+    //prev_frag.bix,
+    //prev_frag.first,
+    //cur_frag.last,
+    //prev_frag.count + cur_frag.count,
+    //);
+
+    //let new_range_ix = RangeFragIx::new(fragments.len());
+    //fragments.push(new_range);
+    //frag_ixs[i - 1] = new_range_ix;
+
+    //let _ = frag_ixs.remove(i);
+    //}
+    //i -= 1;
+    //}
+
+    //let new_size = frag_ixs.len();
+    //info!(
+    //"compress: {} -> {}; {}",
+    //old_size,
+    //new_size,
+    //100. * (old_size as f64 - new_size as f64) / (old_size as f64)
+    //);
   }
 
+  let mut by_vreg: HashMap<VirtualReg, VirtualRange> = HashMap::default();
+
   for vlr in vlrs.iter_mut() {
-    compress(func, &mut vlr.sorted_frags.frag_ixs, fragments);
+    if let Some(vrange) = by_vreg.get(&vlr.vreg) {
+      let vlr_start = fragments[vlr.sorted_frags.frag_ixs[0]].first;
+      let vlr_last = fragments[*vlr.sorted_frags.frag_ixs.last().unwrap()].last;
+      let common_frags = &vrange.sorted_frags.frag_ixs;
+      if vlr_start < fragments[common_frags[0]].first {
+        fragments[vrange.sorted_frags.frag_ixs[0]].first = vlr_start;
+      }
+      if vlr_last > fragments[*common_frags.last().unwrap()].last {
+        fragments[*common_frags.last().unwrap()].last = vlr_last;
+      }
+    } else {
+      // First time we see this vreg, compress and insert it.
+      compress(func, &mut vlr.sorted_frags.frag_ixs, fragments);
+      // TODO try to avoid the clone?
+      by_vreg.insert(vlr.vreg, vlr.clone());
+    }
+  }
+
+  vlrs.clear();
+  for (_, vlr) in by_vreg {
+    vlrs.push(vlr);
   }
 
   let mut reg_map: HashMap<RealReg, Vec<RangeFragIx>> = HashMap::default();
@@ -1750,7 +2095,7 @@ fn try_compress_ranges<F: Function>(
   for (rreg, mut sorted_frags) in reg_map {
     sorted_frags.sort_by_key(|frag_ix| fragments[*frag_ix].first);
 
-    compress(func, &mut sorted_frags, fragments);
+    //compress(func, &mut sorted_frags, fragments);
 
     rlrs.push(RealRange {
       rreg,
@@ -1800,7 +2145,7 @@ pub fn run<F: Function>(
 
   try_compress_ranges(func, &mut rlrs, &mut vlrs, &mut fragments);
 
-  let intervals = Intervals::new(rlrs, vlrs, &fragments);
+  let intervals = Intervals::new(&reg_uses, rlrs, vlrs, &fragments);
 
   // Subset of fixed intervals, sorted by start point (as intervals are).
   let fixed_intervals = intervals
