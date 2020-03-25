@@ -33,6 +33,333 @@ use crate::trees_maps_sets::{
 const CROSSCHECK_CM: bool = false;
 
 //=============================================================================
+// A spill slot allocator.  This could be implemented more simply than it is.
+// The reason for the extra complexity is to support copy-coalescing at the
+// spill-slot level.  That is, it tries make it possible to allocate all
+// members of a VirtualRange group to the same spill slot, so that moves
+// between two spilled members of the same group can be turned into no-ops.
+//
+// All of the |size| metrics in this bit are in terms of "logical spill slot
+// units", per the interface's description for |get_spillslot_size|.
+
+// We keep one of these for every "logical spill slot" in use.
+enum LogicalSpillSlot {
+  // This slot is in use and can hold values of size |size| (only).  Note that
+  // |InUse| may only appear in |SpillSlotAllocator::slots| positions that
+  // have indices that are 0 % |size|.  Furthermore, after such an entry in
+  // |SpillSlotAllocator::slots|, the next |size| - 1 entries must be
+  // |Unavail|.  This is a hard invariant, violation of which will cause
+  // overlapping spill slots and potential chaos.
+  InUse { size: u32, tree: AVLTree<RangeFragIx> },
+  // This slot is unavailable, as described above.  It's unavailable because
+  // it holds some part of the values associated with the nearest lower
+  // numbered entry which isn't |Unavail|, and that entry must be an |InUse|
+  // entry.
+  Unavail,
+}
+impl LogicalSpillSlot {
+  fn is_Unavail(&self) -> bool {
+    match self {
+      LogicalSpillSlot::Unavail => true,
+      _ => false,
+    }
+  }
+  fn is_InUse(&self) -> bool {
+    !self.is_Unavail()
+  }
+  fn get_tree(&self) -> &AVLTree<RangeFragIx> {
+    match self {
+      LogicalSpillSlot::InUse { ref tree, .. } => tree,
+      LogicalSpillSlot::Unavail => panic!("LogicalSpillSlot::get_tree"),
+    }
+  }
+  fn get_mut_tree(&mut self) -> &mut AVLTree<RangeFragIx> {
+    match self {
+      LogicalSpillSlot::InUse { ref mut tree, .. } => tree,
+      LogicalSpillSlot::Unavail => panic!("LogicalSpillSlot::get_mut_tree"),
+    }
+  }
+  fn get_size(&self) -> u32 {
+    match self {
+      LogicalSpillSlot::InUse { size, .. } => *size,
+      LogicalSpillSlot::Unavail => panic!("LogicalSpillSlot::get_size"),
+    }
+  }
+}
+
+// HELPER FUNCTION
+// The custom comparator
+fn cmp_tree_entries_for_SpillSlotAllocator(
+  fix1: RangeFragIx, fix2: RangeFragIx,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+) -> Option<Ordering> {
+  cmp_range_frags(&frag_env[fix1], &frag_env[fix2])
+}
+
+// HELPER FUNCTION
+// Find out whether it is possible to add all of |frags| to |tree|.  Returns
+// true if possible, false if not.  This routine relies on the fact that
+// SortedFrags is non-overlapping.  However, this is a bit subtle.  We know
+// that both |tree| and |frags| individually are non-overlapping, but there's
+// no guarantee that elements of |frags| don't overlap |tree|.  Hence we have
+// to do a custom walk of |tree| to check for overlap; we can't just use
+// |AVLTree::contains|.
+fn ssal_is_add_possible(
+  tree: &AVLTree<RangeFragIx>, frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+  frags: &SortedRangeFragIxs,
+) -> bool {
+  // Figure out whether all the frags will go in.
+  for fix in &frags.frag_ixs {
+    // BEGIN check |fix| for any overlap against |tree|.
+    let frag = &frag_env[*fix];
+    let mut root = tree.root;
+    while root != AVL_NULL {
+      let root_node = &tree.pool[root as usize];
+      let root_fix = root_node.item;
+      let root_frag = &frag_env[root_fix];
+      if frag.last < root_frag.first {
+        // |frag| is entirely to the left of the |root|.  So there's no
+        // overlap with root.  Continue by inspecting the left subtree.
+        root = root_node.left;
+      } else if root_frag.last < frag.first {
+        // Ditto for the right subtree.
+        root = root_node.right;
+      } else {
+        // |frag| overlaps the |root|.  Give up.
+        return false;
+      }
+    }
+    // END check |fix| for any overlap against |tree|.
+    // |fix| doesn't overlap.  Move on to the next one.
+  }
+  true
+}
+
+// HELPER FUNCTION
+// Try to add all of |frags| to |tree|.  Return |true| if possible, |false| if
+// not possible.  If |false| is returned, |tree| is unchanged (this is
+// important).  This routine relies on the fact that SortedFrags is
+// non-overlapping.
+fn ssal_add_if_possible(
+  tree: &mut AVLTree<RangeFragIx>,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>, frags: &SortedRangeFragIxs,
+) -> bool {
+  // Check if all the frags will go in.
+  if !ssal_is_add_possible(tree, frag_env, frags) {
+    return false;
+  }
+  // They will.  So now insert them.
+  for fix in &frags.frag_ixs {
+    let inserted = tree.insert(
+      *fix,
+      Some(&|fix1, fix2| {
+        cmp_tree_entries_for_SpillSlotAllocator(fix1, fix2, frag_env)
+      }),
+    );
+    // This can't fail
+    assert!(inserted);
+  }
+  true
+}
+
+struct SpillSlotAllocator {
+  slots: Vec<LogicalSpillSlot>,
+}
+impl SpillSlotAllocator {
+  fn new() -> Self {
+    Self { slots: vec![] }
+  }
+
+  // This adds a new, empty slot, for items of the given size, and returns its
+  // index.  This isn't clever, in the sense that it fails to use some slots
+  // that it could use, but at least it's simple.
+  fn add_new_slot(&mut self, req_size: u32) -> u32 {
+    assert!(req_size == 1 || req_size == 2 || req_size == 4 || req_size == 8);
+    // Satisfy alignment constraints.  These entries will unfortunately be
+    // wasted (never used).
+    while self.slots.len() % (req_size as usize) != 0 {
+      self.slots.push(LogicalSpillSlot::Unavail);
+    }
+    // And now the new slot.
+    let dflt = RangeFragIx::new(0xFFFF_FFFF); // value is unimportant
+    let tree = AVLTree::<RangeFragIx>::new(dflt);
+    let res = self.slots.len() as u32;
+    self.slots.push(LogicalSpillSlot::InUse { size: req_size, tree });
+    // And now "block out subsequent slots that |req_size| implies.
+    // viz: req_size == 1  ->  block out 0 more
+    // viz: req_size == 2  ->  block out 1 more
+    // viz: req_size == 4  ->  block out 3 more
+    // viz: req_size == 8  ->  block out 7 more
+    for _ in 1..req_size {
+      self.slots.push(LogicalSpillSlot::Unavail);
+    }
+    assert!(self.slots.len() % (req_size as usize) == 0);
+    //println!("QQQQ   add_new_slot {} for size {}", res, req_size);
+    res
+  }
+
+  // Allocate spill slots for all the VirtualRanges in |vlrix|s eclass,
+  // including |vlrix| itself.  Since we are allocating spill slots for
+  // complete eclasses at once, none of the members of the class should
+  // currently have any allocation.  This routine will try to allocate all
+  // class members the same slot, but it can only guarantee to do so if the
+  // class members are mutually non-overlapping.  Hence it can't guarantee that
+  // in general.
+  fn alloc_spill_slots<F: Function>(
+    &mut self,
+    vlr_slot_env: &mut TypedIxVec<VirtualRangeIx, Option<SpillSlot>>, func: &F,
+    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
+    vlrEquivClasses: &UnionFindEquivClasses<VirtualRangeIx>,
+    vlrix: VirtualRangeIx,
+  ) {
+    //println!("QQQQ alloc_spill_slots: BEGIN");
+    for cand_vlrix in vlrEquivClasses.equiv_class_elems_iter(vlrix) {
+      assert!(vlr_slot_env[cand_vlrix].is_none());
+    }
+    // Do this in two passes.  It's a bit cumbersome.
+    //
+    // In the first pass, find a spill slot which can take all of the
+    // candidates when we try them *individually*, but don't update the tree
+    // yet.  We will always find such a slot, because if none of the existing
+    // slots can do it, we can always start a new one.
+    //
+    // Now, that doesn't guarantee that all the candidates can *together* can
+    // be assigned to the chosen slot.  That's only possible when they are
+    // non-overlapping.  Rather than laboriously try to determine that, simply
+    // proceed with the second pass, the assignment pass, as follows.  For
+    // each candidate, try to allocate it to our chosen slot.  If it goes in
+    // without interference, fine.  If not, that means it overlaps with some
+    // other member of the class -- in which case we must find some other slot
+    // for it.  It's too bad.
+    //
+    // The result is: all members will get a valid spill slot.  And if they
+    // were all non overlapping then we are guaranteed that they all get the
+    // same slot.  Which is as good as we can hope for.
+
+    // We need to know what regclass, and hence what slot size, we're looking
+    // for.  Just look at the representative; all VirtualRanges in the eclass
+    // must have the same regclass.  (If they don't, the client's is_move
+    // function has been giving us wrong information.)
+    let vlrix_vreg = vlr_env[vlrix].vreg;
+    let req_size = func.get_spillslot_size(vlrix_vreg.get_class(), vlrix_vreg);
+    assert!(req_size == 1 || req_size == 2 || req_size == 4 || req_size == 8);
+
+    // Pass 1: find a slot which can take VirtualRange when tested
+    // individually.
+    //
+    // 1a: search existing slots
+    let mut mb_chosen_slotno: Option<u32> = None;
+    'pass1_search_existing_slots: for cand_slot_no in 0..self.slots.len() as u32
+    {
+      let cand_slot = &self.slots[cand_slot_no as usize];
+      if !cand_slot.is_InUse() {
+        continue 'pass1_search_existing_slots;
+      }
+      if cand_slot.get_size() != req_size {
+        continue 'pass1_search_existing_slots;
+      }
+      let tree = &cand_slot.get_tree();
+      assert!(mb_chosen_slotno.is_none());
+
+      // BEGIN see if |cand_slot| can hold all eclass members individually
+      let mut all_cands_fit_individually = true;
+      for cand_vlrix in vlrEquivClasses.equiv_class_elems_iter(vlrix) {
+        let cand_vlr = &vlr_env[cand_vlrix];
+        let this_cand_fits =
+          ssal_is_add_possible(&tree, &frag_env, &cand_vlr.sorted_frags);
+        if !this_cand_fits {
+          all_cands_fit_individually = false;
+          break;
+        }
+      }
+      // END see if |cand_slot| can hold all eclass members individually
+      if !all_cands_fit_individually {
+        continue 'pass1_search_existing_slots;
+      }
+
+      // Ok.  All eclass members will fit individually in |cand_slot_no|.
+      mb_chosen_slotno = Some(cand_slot_no);
+      break;
+    } /* 'pass1_search_existing_slots */
+    // 1b. If we didn't find a usable slot, allocate a new one.
+    let chosen_slotno: u32 = if mb_chosen_slotno.is_none() {
+      //println!(
+      //    "QQQQ   alloc_spill_slots: no existing slot works.  Alloc new.");
+      self.add_new_slot(req_size)
+    } else {
+      //println!("QQQQ   alloc_spill_slots: use existing {} (for eclass)",
+      //         mb_chosen_slotno.unwrap());
+      mb_chosen_slotno.unwrap()
+    };
+    //println!("QQQQ   alloc_spill_slots: chosen = {}", chosen_slotno);
+
+    // Pass 2.  Try to allocate each eclass member individually to the chosen
+    // slot.  If that fails, just allocate them anywhere.
+    let mut _all_in_chosen = true;
+    'pass2_per_equiv_class: for cand_vlrix in
+      vlrEquivClasses.equiv_class_elems_iter(vlrix)
+    {
+      let cand_vlr = &vlr_env[cand_vlrix];
+      let mut tree = self.slots[chosen_slotno as usize].get_mut_tree();
+      let added =
+        ssal_add_if_possible(&mut tree, &frag_env, &cand_vlr.sorted_frags);
+      if added {
+        vlr_slot_env[cand_vlrix] = Some(SpillSlot::new(chosen_slotno));
+        continue 'pass2_per_equiv_class;
+      }
+      // It won't fit in |chosen_slotno|, so try somewhere (anywhere) else.
+      for alt_slotno in 0..self.slots.len() as u32 {
+        let alt_slot = &self.slots[alt_slotno as usize];
+        if !alt_slot.is_InUse() {
+          continue;
+        }
+        if alt_slot.get_size() != req_size {
+          continue;
+        }
+        if alt_slotno == chosen_slotno {
+          // We already know this won't work.
+          continue;
+        }
+        let mut tree = self.slots[alt_slotno as usize].get_mut_tree();
+        let added =
+          ssal_add_if_possible(&mut tree, &frag_env, &cand_vlr.sorted_frags);
+        if added {
+          vlr_slot_env[cand_vlrix] = Some(SpillSlot::new(alt_slotno));
+          continue 'pass2_per_equiv_class;
+        }
+      }
+      // If we get here, it means it won't fit in any slot we currently have.
+      // So allocate a new one and use that.
+      _all_in_chosen = false;
+      let new_slotno = self.add_new_slot(req_size);
+      let mut tree = self.slots[new_slotno as usize].get_mut_tree();
+      let added =
+        ssal_add_if_possible(&mut tree, &frag_env, &cand_vlr.sorted_frags);
+      if added {
+        vlr_slot_env[cand_vlrix] = Some(SpillSlot::new(new_slotno));
+        continue 'pass2_per_equiv_class;
+      }
+      // We failed to allocate it to any empty slot!  This can't happen.
+      panic!("SpillSlotAllocator: alloc_spill_slots: failed?!?!");
+      /*NOTREACHED*/
+    } /* 'pass2_per_equiv_class */
+
+    for eclass_vlrix in vlrEquivClasses.equiv_class_elems_iter(vlrix) {
+      assert!(vlr_slot_env[eclass_vlrix].is_some());
+      debug!(
+        "--     alloc_spill_sls  {:?} -> {:?}",
+        eclass_vlrix,
+        vlr_slot_env[eclass_vlrix].unwrap()
+      );
+    }
+    //println!("QQQQ alloc_spill_slots: END, all in same = {}",
+    //         if all_in_chosen { "YES" } else { "no" });
+    //println!("QQQQ");
+  }
+}
+
+//=============================================================================
 // Analysis in support of copy coalescing.
 //
 // This detects and collects information about, all copy coalescing
@@ -749,7 +1076,7 @@ impl fmt::Debug for CommitmentMapFAST {
 }
 
 // The custom comparator
-fn cmp_tree_entries(
+fn cmp_tree_entries_for_CommitmentMapFAST(
   e1: FIxAndVLRIx, e2: FIxAndVLRIx,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
 ) -> Option<Ordering> {
@@ -779,7 +1106,9 @@ impl CommitmentMapFAST {
       let to_add = FIxAndVLRIx::new(*fix, to_add_mb_vlrix);
       let added = self.tree.insert(
         to_add,
-        Some(&|pair1, pair2| cmp_tree_entries(pair1, pair2, fenv)),
+        Some(&|pair1, pair2| {
+          cmp_tree_entries_for_CommitmentMapFAST(pair1, pair2, fenv)
+        }),
       );
       // If this fails, it means the fragment overlaps one that has already
       // been committed to.  That's a serious error.
@@ -798,7 +1127,9 @@ impl CommitmentMapFAST {
       let to_del = FIxAndVLRIx::new(*fix, None);
       let deleted = self.tree.delete(
         to_del,
-        Some(&|pair1, pair2| cmp_tree_entries(pair1, pair2, fenv)),
+        Some(&|pair1, pair2| {
+          cmp_tree_entries_for_CommitmentMapFAST(pair1, pair2, fenv)
+        }),
       );
       // If this fails, it means the fragment wasn't already committed to.
       // That's also a serious error.
@@ -1491,12 +1822,8 @@ pub fn alloc_main<F: Function>(
     func.insns().len(),
     func.blocks().len()
   );
-  let num_vlrs_initially = vlr_env.len(); // stats only
-  info!(
-    "alloc_main:   in: {} VLRs, {} RLRs",
-    num_vlrs_initially,
-    rlr_env.len()
-  );
+  let num_vlrs_initial = vlr_env.len(); // stats only
+  info!("alloc_main:   in: {} VLRs, {} RLRs", num_vlrs_initial, rlr_env.len());
 
   // This is fully populated by the ::new call.
   let mut prioQ = VirtualRangePrioQ::new(&vlr_env);
@@ -1534,8 +1861,13 @@ pub fn alloc_main<F: Function>(
     );
   }
 
-  // This is technically part of the running state, at least for now.
-  let mut next_spill_slot: SpillSlot = SpillSlot::new(0);
+  // This is also part of the running state.  |vlr_slot_env| tells us the
+  // assigned spill slot for each VirtualRange, if any.
+  // |spill_slot_allocator| decides on the assignments and writes them into
+  // |vlr_slot_env|.
+  let mut vlr_slot_env = TypedIxVec::<VirtualRangeIx, Option<SpillSlot>>::new();
+  vlr_slot_env.resize(num_vlrs_initial, None);
+  let mut spill_slot_allocator = SpillSlotAllocator::new();
 
   // Main allocation loop.  Each time round, pull out the longest
   // unallocated VirtualRange, and do one of three things:
@@ -1545,7 +1877,7 @@ pub fn alloc_main<F: Function>(
   //
   // * spill it.  This causes the VirtualRange to disappear.  It is replaced
   //   by a set of very short VirtualRanges to carry the spill and reload
-  //  values.  Or,
+  //   values.  Or,
   //
   // * split it.  This causes it to disappear but be replaced by two
   //   VirtualRanges which together constitute the original.
@@ -1763,8 +2095,8 @@ pub fn alloc_main<F: Function>(
         // We're done!
         continue 'main_allocation_loop;
       }
-    } // for rreg in hinted_regs {
-      // === END try to use the hints for |curr_vlr| ===
+    } /* for rreg in hinted_regs */
+    // === END try to use the hints for |curr_vlr| ===
 
     // ====== END Try to do coalescing ======
 
@@ -1931,9 +2263,10 @@ pub fn alloc_main<F: Function>(
              }
           }
     */
-    /* We will be spilling vreg |curr_vlr.reg| with VirtualRange
-    |curr_vlr| to ..  well, we better invent a new spill slot number.
-    Just hand them out sequentially for now. */
+
+    // We will be spilling vreg |curr_vlr.reg| with VirtualRange |curr_vlr| to
+    // a spill slot that the spill slot allocator will choose for us, just a
+    // bit further down this function.
 
     // This holds enough info to create reload or spill (or both)
     // instructions around an instruction that references a VirtualReg
@@ -1945,7 +2278,6 @@ pub fn alloc_main<F: Function>(
     }
     let mut sri_vec = Vec::<SpillAndOrReloadInfo>::new();
     let curr_vlr_vreg = curr_vlr.vreg;
-    let curr_vlr_class = curr_vlr_vreg.get_class();
     let curr_vlr_reg = curr_vlr_vreg.to_reg();
 
     for fix in &curr_vlr.sorted_frags.frag_ixs {
@@ -2003,8 +2335,29 @@ pub fn alloc_main<F: Function>(
     // Now that we no longer need to access |frag_env| or |vlr_env| for
     // the remainder of this iteration of the main allocation loop, we can
     // actually generate the required spill/reload artefacts.
-    let num_slots = func.get_spillslot_size(curr_vlr_class, curr_vlr_vreg);
-    next_spill_slot = next_spill_slot.round_up(num_slots);
+
+    // First off, poke the spill slot allocator to get an intelligent choice
+    // of slot.  Note that this will fail for "non-initial" VirtualRanges; but
+    // the only non-initial ones will have been created by spilling anyway,
+    // any we definitely shouldn't be trying to spill them again.  Hence we
+    // can assert.
+    assert!(vlr_slot_env.len() == num_vlrs_initial);
+    assert!(curr_vlrix < VirtualRangeIx::new(num_vlrs_initial));
+    if vlr_slot_env[curr_vlrix].is_none() {
+      // It hasn't been decided yet.  Cause it to be so by asking for an
+      // allocation for the entire eclass that |curr_vlrix| belongs to.
+      spill_slot_allocator.alloc_spill_slots(
+        &mut vlr_slot_env,
+        func,
+        &frag_env,
+        &vlr_env,
+        &vlrEquivClasses,
+        curr_vlrix,
+      );
+      assert!(vlr_slot_env[curr_vlrix].is_some());
+    }
+    let spill_slot_to_use = vlr_slot_env[curr_vlrix].unwrap();
+
     for sri in sri_vec {
       // For a spill for a MOD use, the new value will be referenced
       // three times.  For DEF and USE uses, it'll only be ref'd twice.
@@ -2043,7 +2396,7 @@ pub fn alloc_main<F: Function>(
       prioQ.add_VirtualRange(&vlr_env, new_vlrix);
 
       let new_eli = EditListItem {
-        slot: next_spill_slot,
+        slot: spill_slot_to_use,
         vlrix: new_vlrix,
         kind: sri.kind,
       };
@@ -2051,7 +2404,6 @@ pub fn alloc_main<F: Function>(
       edit_list.push(new_eli);
     }
 
-    next_spill_slot = next_spill_slot.inc(num_slots);
     num_vlrs_spilled += 1;
     // And implicitly "continue 'main_allocation_loop"
   }
@@ -2176,7 +2528,7 @@ pub fn alloc_main<F: Function>(
     frag_map,
     &frag_env,
     &reg_universe,
-    next_spill_slot.get(),
+    spill_slot_allocator.slots.len() as u32,
     false, // multiple blocks per frag
     use_checker,
   );
@@ -2185,7 +2537,7 @@ pub fn alloc_main<F: Function>(
     Ok(ref rar) => {
       info!(
         "alloc_main:   out: VLRs: {} initially, {} processed",
-        num_vlrs_initially, num_vlrs_processed
+        num_vlrs_initial, num_vlrs_processed
       );
       info!(
         "alloc_main:   out: VLRs: {} evicted, {} spilled",
@@ -2197,7 +2549,10 @@ pub fn alloc_main<F: Function>(
         num_spills,
         num_reloads
       );
-      info!("alloc_main:   out: spill slots: {} used", next_spill_slot.get());
+      info!(
+        "alloc_main:   out: spill slots: {} used",
+        spill_slot_allocator.slots.len()
+      );
     }
     Err(_) => {
       info!("alloc_main:   allocation failed!");

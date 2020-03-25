@@ -9,19 +9,24 @@
 
 === Interface =============================================================
 
+- Important: have a way for clients to specify spill slot relative ordering
+  and alignment issues.  (This is actually required for correctness).
+  https://github.com/bnjbvr/regalloc.rs/pull/35 has the current proposal.
+
 - Require clients to specify the number of virtual regs in the input, so that
   we can use DenseSet<VirtualReg>.
 
 - Allow clients to specify an is_leaf_function flag, so we can switch
   allocation ordering to favour leaf functions in such cases.
 
+=== BT allocation quality =================================================
+
+- Implement stack slot move coalescing.  This is obviously going to be
+  important for inputs with very large numbers of simultaneously live values.
+
 === Allocator run time (analysis phase, algorithmic) ======================
 
 Estimated most-important-first:
-
-- Dominator computation: switch to "A Simple, Fast Dominance Algorithm (Keith
-  D. Cooper, Timothy J. Harvey, and Ken Kennedy)" and reimplement the
-  loop-finder on top of that.
 
 - (Longer term) merge_RangeFrags: can we do even better?
 
@@ -45,6 +50,13 @@ Estimated most-important-first:
 
 - Inst rewrite loop: don't clone map_defs; just use it as soon as it's
   available.
+
+- Core allocation loop: see if we can reduce the amount of wasted effort
+  checking to see whether a VirtualRange can be accommodated by a register, by
+  reducing the number of registers we have to try.
+
+- Spill slot allocator: don't repeatedly search all slots if likelyhood of
+  them being able to take a new group of VirtualRanges is low.
 
 === Allocator run time (representational) =================================
 
@@ -70,12 +82,6 @@ Estimated most-important-first:
   currently RangeFragIx.
 
 === Functionality =====================================================
-
-MVP (without these, the implementation is useless in practice):
-
-- add a spill-slot allocation mechanism, even if it is pretty crude.  At
-  least for BT, organise this so that it supports coalescing of moves
-  between spill slots.  LSRA should ideally support that too.
 
 Post-MVP:
 
