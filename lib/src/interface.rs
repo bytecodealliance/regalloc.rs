@@ -14,6 +14,7 @@
 //! to use this library in your own code, you would be well advised to read
 //! the comments in this file very carefully.
 
+use log::info;
 use std::fmt;
 
 use crate::backtracking;
@@ -353,7 +354,9 @@ impl fmt::Display for RegAllocError {
 pub fn allocate_registers<F: Function>(
   func: &mut F, algorithm: RegAllocAlgorithm, rreg_universe: &RealRegUniverse,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
-  match algorithm {
+  info!("");
+  info!("================ regalloc.rs: BEGIN function ================");
+  let res = match algorithm {
     RegAllocAlgorithm::Backtracking
     | RegAllocAlgorithm::BacktrackingChecked => {
       let use_checker = algorithm == RegAllocAlgorithm::BacktrackingChecked;
@@ -363,5 +366,7 @@ pub fn allocate_registers<F: Function>(
       let use_checker = algorithm == RegAllocAlgorithm::LinearScanChecked;
       linear_scan::run(func, rreg_universe, use_checker)
     }
-  }
+  };
+  info!("================ regalloc.rs: END function ================");
+  res
 }
