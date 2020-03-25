@@ -1429,7 +1429,9 @@ impl Func {
     println!("}}");
   }
 
-  /// Prints the function in a way the parser can comprehend.
+  /// Prints the function in a way the parser can comprehend. This is used by
+  /// the fuzzer, but not otherwise, so allow dead code here.
+  #[allow(dead_code)]
   pub fn render(&self, who: &str, fmt: &mut String) -> fmt::Result {
     use std::fmt::Write;
     use std::iter::FromIterator;
