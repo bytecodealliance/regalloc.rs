@@ -2263,28 +2263,6 @@ pub fn run<F: Function>(
 }
 
 #[inline(never)]
-fn is_block_start<F: Function>(func: &F, pos: InstPoint) -> bool {
-  for block in func.blocks() {
-    let insts = func.block_insns(block);
-    if pos.iix == insts.first() && pos.pt == Point::Use {
-      return true;
-    }
-  }
-  false
-}
-
-#[inline(never)]
-fn is_block_end<F: Function>(func: &F, pos: InstPoint) -> bool {
-  for block in func.blocks() {
-    let insts = func.block_insns(block);
-    if pos.iix == insts.last() && pos.pt == Point::Def {
-      return true;
-    }
-  }
-  false
-}
-
-#[inline(never)]
 fn find_enclosing_interval(
   vreg: VirtualReg, inst: InstPoint, intervals: &Intervals,
   fragments: &Fragments, virtual_intervals: &Vec<IntId>,
@@ -2336,6 +2314,14 @@ fn resolve_moves<F: Function>(
 
   info!("resolve_moves");
 
+  let mut block_ends = HashSet::default();
+  let mut block_starts = HashSet::default();
+  for bix in func.blocks() {
+    let insts = func.block_insns(bix);
+    block_ends.insert(insts.last());
+    block_starts.insert(insts.first());
+  }
+
   for &int_id in virtual_intervals {
     let (parent_end, parent_loc, loc) = {
       let interval = intervals.get(int_id);
@@ -2366,9 +2352,13 @@ fn resolve_moves<F: Function>(
       };
 
       let parent = intervals.get(parent_id);
-      if is_block_end(func, parent.end) && is_block_start(func, interval.start)
+
+      // If this is a move between blocks, handle it as such.
+      if parent.end.pt == Point::Def
+        && interval.start.pt == Point::Use
+        && block_ends.contains(&parent.end.iix)
+        && block_starts.contains(&interval.start.iix)
       {
-        // This is a move between blocks, and should be handled as such.
         continue;
       }
 
