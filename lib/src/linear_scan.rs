@@ -103,9 +103,6 @@ impl Mention {
   }
 
   // Getters.
-  fn is_empty(&self) -> bool {
-    self.0 == 0
-  }
   fn is_use(&self) -> bool {
     (self.0 & 0b1) != 0
   }
@@ -215,11 +212,43 @@ impl Intervals {
       real_ranges.len() as usize + virtual_ranges.len() as usize,
     );
 
+    // Maps reg to its mentions.
+    let mut reg_mentions: HashMap<Reg, MentionMap> = HashMap::default();
+
     for rlr in 0..real_ranges.len() {
       data.push(LiveIntervalKind::Fixed(RealRangeIx::new(rlr)));
     }
     for vlr in 0..virtual_ranges.len() {
       data.push(LiveIntervalKind::Virtual(VirtualRangeIx::new(vlr)));
+    }
+
+    // Collect all the mentions.
+    for (i, uses) in reg_uses.iter().enumerate() {
+      let iix = InstIx::new(i as u32);
+
+      for reg in uses.san_used.iter() {
+        let mentions = reg_mentions.entry(*reg).or_default();
+        if mentions.is_empty() || mentions.last().unwrap().0 != iix {
+          mentions.push((iix, Mention::new()));
+        }
+        mentions.last_mut().unwrap().1.add_use();
+      }
+
+      for reg in uses.san_modified.iter() {
+        let mentions = reg_mentions.entry(*reg).or_default();
+        if mentions.is_empty() || mentions.last().unwrap().0 != iix {
+          mentions.push((iix, Mention::new()));
+        }
+        mentions.last_mut().unwrap().1.add_mod();
+      }
+
+      for reg in uses.san_defined.iter() {
+        let mentions = reg_mentions.entry(*reg).or_default();
+        if mentions.is_empty() || mentions.last().unwrap().0 != iix {
+          mentions.push((iix, Mention::new()));
+        }
+        mentions.last_mut().unwrap().1.add_def();
+      }
     }
 
     // Sort before assigning indexes.
@@ -258,70 +287,6 @@ impl Intervals {
           }
         };
 
-        let mut mentions = MentionMap::new();
-
-        // Handle start.
-        {
-          let iix = start.iix;
-          let uses = &reg_uses[iix];
-          let mut set = Mention::new();
-          if start.pt == Point::Use {
-            if uses.san_used.contains(reg) {
-              set.add_use();
-            }
-            if uses.san_modified.contains(reg) {
-              set.add_mod();
-            }
-          } else {
-            if uses.san_defined.contains(reg) {
-              set.add_def();
-            }
-          }
-          if !set.is_empty() {
-            mentions.push((iix, set));
-          }
-        }
-
-        if start.iix != end.iix {
-          // Handle instructions in between.
-          for iix in start.iix.plus(1).dotdot(end.iix) {
-            let uses = &reg_uses[iix];
-            let mut set = Mention::new();
-            if uses.san_used.contains(reg) {
-              set.add_use();
-            }
-            if uses.san_modified.contains(reg) {
-              set.add_mod();
-            }
-            if uses.san_defined.contains(reg) {
-              set.add_def();
-            }
-            if !set.is_empty() {
-              mentions.push((iix, set))
-            }
-          }
-
-          // Handle end.
-          let iix = end.iix;
-          let uses = &reg_uses[iix];
-          let mut set = Mention::new();
-          if end.pt == Point::Use {
-            if uses.san_used.contains(reg) {
-              set.add_use();
-            }
-            // If it contains a mod, then the range should end at the Def point.
-            debug_assert!(!uses.san_modified.contains(reg));
-          } else if uses.san_defined.contains(reg) {
-            set.add_def();
-          }
-          if !set.is_empty() {
-            mentions.push((iix, set));
-          }
-        }
-
-        // Sort mentions by instruction index for fast lookup.
-        mentions.sort();
-
         LiveInterval {
           id: IntId(index),
           kind,
@@ -332,7 +297,7 @@ impl Intervals {
           start,
           end,
           last_frag: 0,
-          mentions,
+          mentions: reg_mentions.remove(&reg).unwrap(),
         }
       })
       .collect();
@@ -359,15 +324,6 @@ impl Intervals {
     match &mut self.data[int_id.0].kind {
       LiveIntervalKind::Fixed(r) => &mut self.real_ranges[*r].sorted_frags,
       LiveIntervalKind::Virtual(r) => &mut self.virtual_ranges[*r].sorted_frags,
-    }
-  }
-
-  fn fixed_reg(&self, int_id: IntId) -> Option<RealReg> {
-    let int = self.get(int_id);
-    if int.is_fixed() {
-      Some(int.location.reg().unwrap())
-    } else {
-      None
     }
   }
 
