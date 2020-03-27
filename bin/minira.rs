@@ -612,3 +612,8 @@ fn lsra_analysis_fuzz1() {
 fn lsra_analysis_fuzz2() {
   test_utils::check_lsra("fuzz2", 3, 3);
 }
+
+#[test]
+fn lsra_sort_fixed() {
+  test_utils::check_lsra("lsra_sort_fixed", 5, 5);
+}

@@ -1,0 +1,25 @@
+v0I = I32
+r0I = real I32 0
+r1I = real I32 1
+r2I = real I32 2
+r3I = real I32 3
+
+b0:
+    imm     v0I, 4294967295
+    cmp_gtm v0I, v0I
+    mulm    v0I, 808728375
+    cmp_lem v0I, v0I
+    imm     r1I, 0
+    imm     r3I, 4294967295
+    cmp_gtm r3I, r3I
+    goto    b1:b1
+
+b1:
+    cmp_gtm r3I, r3I
+    cmp_gtm r3I, 4244438268
+    imm     r0I, 0
+    add     r3I, r3I, r3I
+    copy    r2I, v0I
+    cmp_gtm r3I, 0
+    imm     r1I, 3048584629
+    finish  r2I

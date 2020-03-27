@@ -876,8 +876,11 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
     }
   }
 
-  pub fn dfs_iter(&self) -> DfsIter<T> {
-    DfsIter::new(self)
+  pub fn dfs_iter<'t, 's>(
+    &'t self, storage: &'s mut Vec<u32>,
+  ) -> DfsIter<'t, 's, T> {
+    storage.clear();
+    DfsIter::new(self, storage)
   }
 
   // Show the tree.  (For debugging only.)
@@ -893,14 +896,14 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
   //}
 }
 
-pub struct DfsIter<'t, T> {
+pub struct DfsIter<'t, 's, T> {
   tree: &'t AVLTree<T>,
-  stack: Vec<u32>,
+  stack: &'s mut Vec<u32>,
 }
 
-impl<'t, T> DfsIter<'t, T> {
-  fn new(tree: &'t AVLTree<T>) -> Self {
-    let mut iter = DfsIter { tree, stack: Vec::new() };
+impl<'t, 's, T> DfsIter<'t, 's, T> {
+  fn new(tree: &'t AVLTree<T>, stack: &'s mut Vec<u32>) -> Self {
+    let mut iter = DfsIter { tree, stack };
     if tree.root != AVL_NULL {
       iter.stack.push(tree.root);
       iter.visit_left_children(tree.root);
@@ -921,7 +924,7 @@ impl<'t, T> DfsIter<'t, T> {
   }
 }
 
-impl<'t, T: Copy> Iterator for DfsIter<'t, T> {
+impl<'s, 't, T: Copy> Iterator for DfsIter<'s, 't, T> {
   type Item = T;
 
   fn next(&mut self) -> Option<Self::Item> {
@@ -1177,8 +1180,9 @@ fn test_avl_tree2() {
 
 #[test]
 fn test_avl_tree_dfs_iter() {
+  let mut storage = Vec::new();
   let tree = AVLTree::<u32>::new(0);
-  assert!(tree.dfs_iter().next().is_none());
+  assert!(tree.dfs_iter(&mut storage).next().is_none());
 
   const FROM: u32 = 0;
   const TO: u32 = 10000;
@@ -1189,7 +1193,7 @@ fn test_avl_tree_dfs_iter() {
   }
 
   let as_vec = tree.to_vec();
-  for (i, val) in tree.dfs_iter().enumerate() {
+  for (i, val) in tree.dfs_iter(&mut storage).enumerate() {
     assert_eq!(as_vec[i], val, "not equal for i={}", i);
   }
 }
