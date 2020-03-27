@@ -1,0 +1,13 @@
+
+;; This caused an assertion failure in merge_RangeFrags, in the small-group
+;; merge logic.
+
+v5I = i32
+
+b0:
+    imm     v5I, 1768515945
+    goto    b1:b1
+
+b1:
+    store   [v5I, 1768515945], v5I
+    goto    b1:b1

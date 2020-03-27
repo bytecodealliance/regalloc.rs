@@ -1,0 +1,6 @@
+
+;; This caused assertion failures in the dominator tree analysis, since
+;; having the start node have a self-loop is something of a boundary case.
+
+b0:
+    goto    b0:b0

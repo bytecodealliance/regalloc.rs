@@ -594,3 +594,21 @@ fn lsra_split_unused() {
 fn lsra_split_positions() {
   test_utils::check_lsra("lsra_split_positions", 5, 2);
 }
+
+#[test]
+fn bt_analysis_fuzz1() {
+  test_utils::check_bt("fuzz1", 3, 3);
+}
+#[test]
+fn bt_analysis_fuzz2() {
+  test_utils::check_bt("fuzz2", 3, 3);
+}
+
+#[test]
+fn lsra_analysis_fuzz1() {
+  test_utils::check_lsra("fuzz1", 3, 3);
+}
+#[test]
+fn lsra_analysis_fuzz2() {
+  test_utils::check_lsra("fuzz2", 3, 3);
+}
