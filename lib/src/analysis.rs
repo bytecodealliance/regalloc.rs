@@ -327,19 +327,20 @@ fn calc_dom_sets(
   let mut idom = TypedIxVec::<BlockIx, BlockIx>::new();
   idom.resize(nBlocks, DT_INVALID_BLOCKIX);
 
-  // The start node must have itself as a parent.  Also, check that there are
-  // no blocks in the graph not reachable from the start node.  This is
-  // critical: any such blocks typically cause this algorithm to loop
-  // indefinitely in |dt_merge_sets|.  This should be assured us by the
-  // dead-blocks check performed by |calc_preord_and_postord| and the logic
-  // that checks its result.
+  // The start node must have itself as a parent.
   idom[start] = start;
-  assert!(pred_map[start].is_empty());
 
   for i in 0..nBlocks {
     let bixI = BlockIx::new(i);
     let preds_of_i = &pred_map[bixI];
-    assert!(preds_of_i.is_empty() == (bixI == start));
+    // All nodes must be reachable from the root.  That means that all nodes
+    // that aren't |start| must have at least one predecessor.  However, we
+    // can't assert the inverse case -- that the start node has no
+    // predecessors -- because the start node might be a self-loop, in which
+    // case it will have itself as a pred.  See tests/domtree_fuzz1.rat.
+    if bixI != start {
+      assert!(!preds_of_i.is_empty());
+    }
   }
 
   let mut changed = true;
@@ -1518,8 +1519,9 @@ fn merge_RangeFrags(
               // Now we know that liveness for this reg "flows" from
               // |triples[ix]| to |triples[ix2]|.  So those two frags must be
               // part of the same live range.  Note this.
-              debug_assert!(ix != ix2);
-              eclasses_uf.union(ix, ix2); // Order of args irrelevant
+              if ix != ix2 {
+                eclasses_uf.union(ix, ix2); // Order of args irrelevant
+              }
             }
           }
         }
