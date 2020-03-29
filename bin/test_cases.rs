@@ -9,7 +9,7 @@ use regalloc::{Reg, RegClass};
 use crate::parser;
 use crate::test_framework::*;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Reduced sort test.
 fn test_sort2() -> Func {
@@ -1444,6 +1444,16 @@ pub fn find_func(name: &str) -> Result<Func, Vec<String>> {
     }
   }
 
+  fn ends_in_tilde(path: &PathBuf) -> bool {
+    if let Some(strr) = path.to_str() {
+      let n = strr.len();
+      if n >= 2 && strr[n - 1..n - 0] == *"~" {
+        return true;
+      }
+    }
+    false
+  }
+
   let test_dir = Path::new("tests");
   match test_dir.read_dir() {
     Err(err) => {
@@ -1453,6 +1463,13 @@ pub fn find_func(name: &str) -> Result<Func, Vec<String>> {
       for entry in entries {
         if let Ok(entry) = entry {
           let path = entry.path();
+          // Skip emacs backup files.  These have names ending in '~'.  Not
+          // skipping them it impossible to edit .rat files with emacs,
+          // because this logic will often read the backup file in preference
+          // to the the real one.
+          if ends_in_tilde(&path) {
+            continue;
+          }
           let basename = path.file_stem().unwrap().to_str().unwrap();
           if basename == name {
             let func = parser::parse_file(path).expect("unparseable test file");
