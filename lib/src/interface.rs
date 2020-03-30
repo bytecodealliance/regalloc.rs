@@ -257,6 +257,9 @@ pub trait Function {
     &self, to_reg: Writable<RealReg>, from_reg: RealReg, for_vreg: VirtualReg,
   ) -> Self::Inst;
 
+  /// Generate an instruction which is a no-op and has zero length.
+  fn gen_zero_len_nop(&self) -> Self::Inst;
+
   /// Try to alter an existing instruction to use a value directly in a
   /// spillslot (accessing memory directly) instead of the given register. May
   /// be useful on ISAs that have mem/reg ops, like x86.

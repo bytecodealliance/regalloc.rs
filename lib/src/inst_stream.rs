@@ -85,8 +85,8 @@ impl InstAndPoint {
 pub(crate) type InstsAndPoints = Vec<InstAndPoint>;
 
 pub(crate) fn edit_inst_stream<F: Function>(
-  func: &mut F, insts_to_add: InstsAndPoints, frag_map: RangeAllocations,
-  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+  func: &mut F, insts_to_add: InstsAndPoints, iixs_to_nop_out: &Vec<InstIx>,
+  frag_map: RangeAllocations, frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
   reg_universe: &RealRegUniverse, num_spill_slots: u32,
   has_multiple_blocks_per_frag: bool, use_checker: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
@@ -95,6 +95,7 @@ pub(crate) fn edit_inst_stream<F: Function>(
     frag_map,
     frag_env,
     &insts_to_add,
+    iixs_to_nop_out,
     reg_universe,
     has_multiple_blocks_per_frag,
     use_checker,
@@ -107,13 +108,18 @@ pub(crate) fn edit_inst_stream<F: Function>(
 fn apply_reg_uses<F: Function>(
   func: &mut F, frag_map: RangeAllocations,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>, insts_to_add: &InstsAndPoints,
-  reg_universe: &RealRegUniverse, has_multiple_blocks_per_frag: bool,
-  use_checker: bool,
+  iixs_to_nop_out: &Vec<InstIx>, reg_universe: &RealRegUniverse,
+  has_multiple_blocks_per_frag: bool, use_checker: bool,
 ) -> Result<(), CheckerErrors> {
   // Set up checker state, if indicated by our configuration.
   let mut checker: Option<CheckerContext> = None;
   if use_checker {
     checker = Some(CheckerContext::new(func, reg_universe, insts_to_add));
+  }
+
+  // Nop out any insns that we've been requested to.
+  for iix in iixs_to_nop_out {
+    *func.get_insn_mut(*iix) = func.gen_zero_len_nop();
   }
 
   // Make two copies of the fragment mapping, one sorted by the fragment start

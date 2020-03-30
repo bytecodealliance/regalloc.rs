@@ -3156,6 +3156,7 @@ fn apply_registers<F: Function>(
   edit_inst_stream(
     func,
     memory_moves,
+    &vec![],
     frag_map,
     fragments,
     reg_universe,

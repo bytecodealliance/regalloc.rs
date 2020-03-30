@@ -417,6 +417,7 @@ fn do_coalescing_analysis<F: Function>(
 ) -> (
   TypedIxVec<VirtualRangeIx, Vec<Hint>>,
   UnionFindEquivClasses<VirtualRangeIx>,
+  TypedIxVec<InstIx, bool>,
 ) {
   info!("");
   info!("do_coalescing_analysis: begin");
@@ -570,6 +571,9 @@ fn do_coalescing_analysis<F: Function>(
   let mut hints = TypedIxVec::<VirtualRangeIx, Vec<Hint>>::new();
   hints.resize(vlr_env.len(), vec![]);
 
+  let mut is_vv_boundary_move = TypedIxVec::<InstIx, bool>::new();
+  is_vv_boundary_move.resize(func.insns().len() as u32, false);
+
   let mut vlrEquivClassesUF =
     UnionFind::<VirtualRangeIx>::new(vlr_env.len() as usize);
 
@@ -593,6 +597,7 @@ fn do_coalescing_analysis<F: Function>(
           hints[vlrSrc].push(Hint::SameAs(vlrDst, eef));
           hints[vlrDst].push(Hint::SameAs(vlrSrc, eef));
           vlrEquivClassesUF.union(vlrDst, vlrSrc);
+          is_vv_boundary_move[iix] = true;
         }
       }
       (true, false) => {
@@ -658,12 +663,18 @@ fn do_coalescing_analysis<F: Function>(
       }
       debug!("  eclassof {:?} = {:?}", vlrix, tmpvec);
     }
+
+    for (b, i) in is_vv_boundary_move.iter().zip(0..) {
+      if *b {
+        debug!("  vv_boundary_move at {:?}", InstIx::new(i));
+      }
+    }
   }
 
   info!("do_coalescing_analysis: end");
   info!("");
 
-  (hints, vlrEquivClasses)
+  (hints, vlrEquivClasses, is_vv_boundary_move)
 }
 
 //=============================================================================
@@ -1663,7 +1674,8 @@ fn print_RA_state(
   // State components
   prioQ: &VirtualRangePrioQ,
   perRealReg: &Vec<PerRealReg>,
-  edit_list: &Vec<EditListItem>,
+  edit_list_move: &Vec<EditListItem>,
+  edit_list_other: &Vec<EditListItem>,
   // The context (environment)
   vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
@@ -1685,8 +1697,11 @@ fn print_RA_state(
       debug!("{}", s);
     }
   }
-  for eli in edit_list {
-    debug!("{:?}", eli);
+  for eli in edit_list_move {
+    debug!("ELI MOVE: {:?}", eli);
+  }
+  for eli in edit_list_other {
+    debug!("ELI other: {:?}", eli);
   }
   debug!(">>>>");
 }
@@ -1732,7 +1747,7 @@ fn show_commit_tab(commit_tab: &Vec::<SortedRangeFragIxs>,
 
 // VirtualRanges created by spilling all pertain to a single InstIx.  But
 // within that InstIx, there are three kinds of "bridges":
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum BridgeKind {
   RtoU, // A bridge for a USE.  This connects the reload to the use.
   RtoS, // a bridge for a MOD.  This connects the reload, the use/def
@@ -1751,7 +1766,8 @@ impl fmt::Debug for BridgeKind {
   }
 }
 
-pub(crate) struct EditListItem {
+#[derive(Clone, Copy)]
+struct EditListItem {
   // This holds enough information to create a spill or reload instruction,
   // or both, and also specifies where in the instruction stream it/they
   // should be added.  Note that if the edit list as a whole specifies
@@ -1759,20 +1775,25 @@ pub(crate) struct EditListItem {
   // in which they execute isn't important.
   //
   // Some of the relevant info can be found via the VirtualRangeIx link:
-  // * the real reg involved
-  // * the place where the insn should go, since the VirtualRange should only
-  //   have one RangeFrag, and we can deduce the correct location from that.
-  pub slot: SpillSlot,
-  pub vlrix: VirtualRangeIx,
-  pub kind: BridgeKind,
+  // (1) the real reg involved
+  // (2) the place where the insn should go, since the VirtualRange should
+  //    only have one RangeFrag, and we can deduce the correct location
+  //    from that.
+  // Despite (2) we also carry here the InstIx of the affected instruction
+  // (there should be only one) since computing it via (2) is expensive.
+  // This however gives a redundancy in representation against (2).  Beware!
+  slot: SpillSlot,
+  vlrix: VirtualRangeIx,
+  kind: BridgeKind,
+  iix: InstIx,
 }
 
 impl fmt::Debug for EditListItem {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
     write!(
       fmt,
-      "(ELI: for {:?} add {:?}, slot={:?})",
-      self.vlrix, self.kind, self.slot
+      "(ELI: at {:?} for {:?} add {:?}, slot={:?})",
+      self.iix, self.vlrix, self.kind, self.slot
     )
   }
 }
@@ -1810,6 +1831,7 @@ pub fn alloc_main<F: Function>(
   let hints: TypedIxVec<VirtualRangeIx, Vec<Hint>> = coalescing_info.0;
   let vlrEquivClasses: UnionFindEquivClasses<VirtualRangeIx> =
     coalescing_info.1;
+  let is_vv_boundary_move: TypedIxVec<InstIx, bool> = coalescing_info.2;
   debug_assert!(hints.len() == vlr_env.len());
 
   // -------- Alloc main --------
@@ -1846,7 +1868,8 @@ pub fn alloc_main<F: Function>(
     per_real_reg[rregIndex].add_RealRange(&rlr, &frag_env, &vlr_env);
   }
 
-  let mut edit_list = Vec::<EditListItem>::new();
+  let mut edit_list_move = Vec::<EditListItem>::new();
+  let mut edit_list_other = Vec::<EditListItem>::new();
   if log_enabled!(Level::Debug) {
     debug!("");
     print_RA_state(
@@ -1854,7 +1877,8 @@ pub fn alloc_main<F: Function>(
       &reg_universe,
       &prioQ,
       &per_real_reg,
-      &edit_list,
+      &edit_list_move,
+      &edit_list_other,
       &vlr_env,
       &frag_env,
     );
@@ -1903,7 +1927,8 @@ pub fn alloc_main<F: Function>(
           &reg_universe,
           &prioQ,
           &per_real_reg,
-          &edit_list,
+          &edit_list_move,
+          &edit_list_other,
           &vlr_env,
           &frag_env,
         );
@@ -2398,9 +2423,15 @@ pub fn alloc_main<F: Function>(
         slot: spill_slot_to_use,
         vlrix: new_vlrix,
         kind: sri.kind,
+        iix: sri.iix,
       };
-      debug!("--     new ELI          {:?}", &new_eli);
-      edit_list.push(new_eli);
+      if is_vv_boundary_move[sri.iix] {
+        debug!("--     new ELI MOVE     {:?}", &new_eli);
+        edit_list_move.push(new_eli);
+      } else {
+        debug!("--     new ELI other    {:?}", &new_eli);
+        edit_list_other.push(new_eli);
+      }
     }
 
     num_vlrs_spilled += 1;
@@ -2410,7 +2441,148 @@ pub fn alloc_main<F: Function>(
 
   info!("alloc_main:   main allocation loop: end");
 
-  info!("alloc_main:   create spills_n_reloads");
+  if log_enabled!(Level::Debug) {
+    debug!("");
+    print_RA_state(
+      "Final",
+      &reg_universe,
+      &prioQ,
+      &per_real_reg,
+      &edit_list_move,
+      &edit_list_other,
+      &vlr_env,
+      &frag_env,
+    );
+  }
+
+  // ======== BEGIN Do spill slot coalescing ========
+
+  debug!("");
+  info!("alloc_main:   create spills_n_reloads for MOVE insns");
+
+  // Sort |edit_list_move| by the insn with which each item is associated.
+  edit_list_move.sort_unstable_by(|eli1, eli2| eli1.iix.cmp(&eli2.iix));
+
+  // Now go through |edit_list_move| and find pairs which constitute a
+  // spillslot-to-the-same-spillslot move.  What we have in |edit_list_move| is
+  // heavily constrained, as follows:
+  //
+  // * each entry should reference an InstIx which the coalescing analysis
+  //   identified as a virtual-to-virtual copy which exists at the boundary
+  //   between two VirtualRanges.  The "boundary" aspect is important; we
+  //   can't coalesce out moves in which the source vreg is not the "last use"
+  //   or for which the destination vreg is not the "first def".  (The same is
+  //   true for coalescing of unspilled moves).
+  //
+  // * the each entry must reference a VirtualRange which has only a single
+  //   RangeFrag, and that frag must exist entirely "within" the referenced
+  //   instruction.  Specifically, it may only be a R->U frag (bridge) or a
+  //   D->S frag.
+  //
+  // * For a referenced instruction, there may be at most two entries in this
+  //   list: one that references the R->U frag and one that references the
+  //   D->S frag.  Furthermore, the two entries must carry values of the same
+  //   RegClass; if that isn't true, the client's |is_move| function is
+  //   defective.
+  //
+  // For any such pair identified, if both frags mention the same spill slot,
+  // we skip generating both the reload and the spill instruction.  We also
+  // note that the instruction itself is to be deleted (converted to a
+  // zero-len nop).  In a sense we have "cancelled out" a reload/spill pair.
+  // Entries that can't be cancelled out are handled the same way as for
+  // entries in |edit_list_other|, by simply copying them there.
+  //
+  // Since |edit_list_move| is sorted by insn ix, we can scan linearly over
+  // it, looking for adjacent pairs.  We'll have to accept them in either
+  // order though (first R->U then D->S, or the other way round).  There's no
+  // fixed ordering since there is no particular ordering in the way
+  // VirtualRanges are allocated.
+
+  // As a result of spill slot coalescing, we'll need to delete the move
+  // instructions leading to a mergable spill slot move.  The insn stream
+  // editor can't delete instructions, so instead it'll replace them with zero
+  // len nops obtained from the client.  |iixs_to_nop_out| records the insns
+  // that this has to happen to.  It is in increasing order of InstIx (because
+  // |edit_list_sorted| is), and the indices in it refer to the original
+  // virtual-registerised code.
+  let mut iixs_to_nop_out = Vec::<InstIx>::new();
+
+  let n_edit_list_move = edit_list_move.len();
+  let mut n_edit_list_move_processed = 0; // for assertions only
+  let mut i_min = 0;
+  loop {
+    if i_min >= n_edit_list_move {
+      break;
+    }
+    // Find the bounds of the current group.
+    debug!("editlist entry (MOVE): min: {:?}", &edit_list_move[i_min]);
+    let i_min_iix = edit_list_move[i_min].iix;
+    let mut i_max = i_min;
+    while i_max + 1 < n_edit_list_move
+      && edit_list_move[i_max + 1].iix == i_min_iix
+    {
+      i_max += 1;
+      debug!("editlist entry (MOVE): max: {:?}", &edit_list_move[i_max]);
+    }
+    // Current group is from i_min to i_max inclusive.  At most 2 entries are
+    // allowed per group.
+    assert!(i_max - i_min <= 1);
+    // Check for a mergeable pair.
+    if i_max - i_min == 1 {
+      assert!(is_vv_boundary_move[i_min_iix]);
+      let vlrix1 = edit_list_move[i_min].vlrix;
+      let vlrix2 = edit_list_move[i_max].vlrix;
+      assert!(vlrix1 != vlrix2);
+      let vlr1 = &vlr_env[vlrix1];
+      let vlr2 = &vlr_env[vlrix2];
+      let fixs1 = &vlr1.sorted_frags;
+      let fixs2 = &vlr2.sorted_frags;
+      assert!(fixs1.frag_ixs.len() == 1);
+      assert!(fixs2.frag_ixs.len() == 1);
+      let frag1 = &frag_env[fixs1.frag_ixs[0]];
+      let frag2 = &frag_env[fixs2.frag_ixs[0]];
+      assert!(frag1.first.iix == i_min_iix);
+      assert!(frag1.last.iix == i_min_iix);
+      assert!(frag2.first.iix == i_min_iix);
+      assert!(frag2.last.iix == i_min_iix);
+      // frag1 must be R->U and frag2 must be D->S, or vice versa
+      match (frag1.first.pt, frag1.last.pt, frag2.first.pt, frag2.last.pt) {
+        (Point::Reload, Point::Use, Point::Def, Point::Spill)
+        | (Point::Def, Point::Spill, Point::Reload, Point::Use) => {
+          let slot1 = edit_list_move[i_min].slot;
+          let slot2 = edit_list_move[i_max].slot;
+          if slot1 == slot2 {
+            // Yay.  We've found a coalescable pair.  We can just ignore the
+            // two entries and move on.  Except we have to mark the insn
+            // itself for deletion.
+            debug!("editlist entry (MOVE): delete {:?}", i_min_iix);
+            iixs_to_nop_out.push(i_min_iix);
+            i_min = i_max + 1;
+            n_edit_list_move_processed += 2;
+            continue;
+          }
+        }
+        (_, _, _, _) => {
+          panic!("spill slot coalescing, edit_list_move: unexpected frags");
+        }
+      }
+    }
+    // If we get here for whatever reason, this group is uninteresting.  Copy
+    // in to |edit_list_other| so that it gets processed in the normal way.
+    for i in i_min..=i_max {
+      edit_list_other.push(edit_list_move[i]);
+      n_edit_list_move_processed += 1;
+    }
+    i_min = i_max + 1;
+  }
+  assert!(n_edit_list_move_processed == n_edit_list_move);
+
+  // ======== END Do spill slot coalescing ========
+
+  // ======== BEGIN Create all other spills and reloads ========
+
+  debug!("");
+  info!("alloc_main:   create spills_n_reloads for other insns");
 
   // Reload and spill instructions are missing.  To generate them, go through
   // the "edit list", which contains info on both how to generate the
@@ -2418,8 +2590,8 @@ pub fn alloc_main<F: Function>(
   let mut spills_n_reloads = InstsAndPoints::new();
   let mut num_spills = 0; // stats only
   let mut num_reloads = 0; // stats only
-  for eli in &edit_list {
-    debug!("editlist entry: {:?}", eli);
+  for eli in &edit_list_other {
+    debug!("editlist entry (other): {:?}", eli);
     let vlr = &vlr_env[eli.vlrix];
     let vlr_sfrags = &vlr.sorted_frags;
     debug_assert!(vlr.sorted_frags.frag_ixs.len() == 1);
@@ -2477,22 +2649,11 @@ pub fn alloc_main<F: Function>(
     }
   }
 
+  // ======== END Create all other spills and reloads ========
+
   //for pair in &spillsAndReloads {
   //    debug!("spill/reload: {}", pair.show());
   //}
-
-  if log_enabled!(Level::Debug) {
-    debug!("");
-    print_RA_state(
-      "Final",
-      &reg_universe,
-      &prioQ,
-      &per_real_reg,
-      &edit_list,
-      &vlr_env,
-      &frag_env,
-    );
-  }
 
   // Gather up a vector of (RangeFrag, VirtualReg, RealReg) resulting from
   // the previous phase.  This fundamentally is the result of the allocation
@@ -2524,6 +2685,7 @@ pub fn alloc_main<F: Function>(
   let res = edit_inst_stream(
     func,
     spills_n_reloads,
+    &iixs_to_nop_out,
     frag_map,
     &frag_env,
     &reg_universe,
@@ -2543,10 +2705,11 @@ pub fn alloc_main<F: Function>(
         num_vlrs_evicted, num_vlrs_spilled
       );
       info!(
-        "alloc_main:   out: insns: {} total, {} spills, {} reloads",
+        "alloc_main:   out: insns: {} total, {} spills, {} reloads, {} nopzs",
         rar.insns.len(),
         num_spills,
-        num_reloads
+        num_reloads,
+        iixs_to_nop_out.len()
       );
       info!(
         "alloc_main:   out: spill slots: {} used",

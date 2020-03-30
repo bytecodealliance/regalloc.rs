@@ -316,6 +316,7 @@ impl BinOpF {
 
 #[derive(Clone)]
 pub enum Inst {
+  NopZ {},
   Imm { dst: Reg, imm: u32 },
   ImmF { dst: Reg, imm: f32 },
   Copy { dst: Reg, src: Reg },
@@ -564,6 +565,7 @@ impl fmt::Debug for Inst {
     }
 
     match self {
+      Inst::NopZ {} => write!(fmt, "nopz"),
       Inst::Imm { dst, imm } => write!(fmt, "imm     {:?}, {:?}", dst, imm),
       Inst::ImmF { dst, imm } => write!(fmt, "immf    {:?}, {:?}", dst, imm),
       Inst::Copy { dst, src } => write!(fmt, "copy    {:?}, {:?}", dst, src),
@@ -662,6 +664,7 @@ impl Inst {
     let mut used = Set::<Reg>::empty();
 
     match self {
+      Inst::NopZ {} => {}
       Inst::Imm { dst, imm: _ } => {
         defined.insert(Writable::from_reg(*dst));
       }
@@ -746,6 +749,7 @@ impl Inst {
     map_uses: &Map<VirtualReg, RealReg>,
   ) {
     match self {
+      Inst::NopZ {} => {}
       Inst::Imm { dst, imm: _ } => {
         dst.apply_defs_or_uses(map_defs);
       }
@@ -839,6 +843,7 @@ impl Inst {
     use RegClass::*;
     // Always check uses before defs.
     match self {
+      Inst::NopZ {} => true,
       Inst::Imm { dst, imm: _ } => cx.check_reg_rc(dst, RegRef::Def, I32),
       Inst::ImmF { dst, imm: _ } => cx.check_reg_rc(dst, RegRef::Def, F32),
       Inst::Copy { dst, src } => {
@@ -1190,6 +1195,9 @@ impl<'a> IState<'a> {
 
     let insn = &self.func.insns[iix];
     match insn {
+      Inst::NopZ {} => {
+        self.num_insts -= 1;
+      }
       Inst::Imm { dst, imm } => self.set_reg_u32(*dst, *imm),
       Inst::ImmF { dst, imm } => self.set_reg_f32(*dst, *imm),
       Inst::Copy { dst, src } => {
@@ -1957,6 +1965,11 @@ impl regalloc::Function for Func {
       }
       _ => unimplemented!("gen_move for non i32/f32"),
     }
+  }
+
+  /// Generate an instruction which is a no-op and has zero length.
+  fn gen_zero_len_nop(&self) -> Self::Inst {
+    Inst::NopZ {}
   }
 
   /// Try to alter an existing instruction to use a value directly in a
