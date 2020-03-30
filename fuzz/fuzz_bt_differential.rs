@@ -18,11 +18,14 @@ fuzz_target!(|func: ir::Func| {
 
   let result = match regalloc::allocate_registers(
     &mut func,
-    regalloc::RegAllocAlgorithm::Backtracking,
+    regalloc::RegAllocAlgorithm::BacktrackingChecked,
     &reg_universe,
   ) {
     Ok(result) => result,
     Err(err) => {
+      if let regalloc::RegAllocError::RegChecker(_) = &err {
+        panic!(err);
+      }
       println!("allocation error: {}", err);
       return;
     }
