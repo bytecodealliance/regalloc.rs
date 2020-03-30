@@ -1200,9 +1200,6 @@ impl InstPoint {
   pub fn new_spill(iix: InstIx) -> Self {
     InstPoint { iix, pt: Point::Spill }
   }
-  pub fn at_use(&self) -> Self {
-    InstPoint { iix: self.iix, pt: Point::Use }
-  }
 }
 impl PartialOrd for InstPoint {
   // Again .. don't assume anything about the #derive'd version.  These have
@@ -1412,16 +1409,6 @@ impl SortedRangeFragIxs {
 }
 
 impl SortedRangeFragIxs {
-  pub fn show_with_fenv(
-    &self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
-  ) -> String {
-    let mut frags = TypedIxVec::<RangeFragIx, RangeFrag>::new();
-    for fix in &self.frag_ixs {
-      frags.push(fenv[*fix]);
-    }
-    format!("(SRFIxs {:?})", &frags)
-  }
-
   pub fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
     let mut ok = true;
     for i in 1..self.frag_ixs.len() {
@@ -1522,12 +1509,6 @@ impl SpillCost {
   }
   pub fn is_finite(&self) -> bool {
     !self.is_infinite()
-  }
-  pub fn unwrap(&self) -> f32 {
-    match self {
-      SpillCost::Infinite => panic!("SpillCost::unwrap"),
-      SpillCost::Finite(c) => *c,
-    }
   }
   pub fn is_less_than(&self, other: &Self) -> bool {
     match (self, other) {
