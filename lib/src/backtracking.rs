@@ -1809,16 +1809,6 @@ impl fmt::Debug for EditListItem {
 pub fn alloc_main<F: Function>(
   func: &mut F, reg_universe: &RealRegUniverse, use_checker: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
-  // Tmp kludge: create dummy uses for the AVL functions to silence
-  // compiler warnings.
-  if false {
-    let mut t = AVLTree::<u32>::new(0);
-    let _ = t.insert::<fn(u32, u32) -> Option<Ordering>>(42, None);
-    let _ = t.delete::<fn(u32, u32) -> Option<Ordering>>(99, None);
-    let _ = t.contains::<fn(u32, u32) -> Option<Ordering>>(1337, None);
-    let _ = t.count() + t.depth();
-  }
-
   // -------- Perform initial liveness analysis --------
   // Note that the analysis phase can fail; hence we propagate any error.
   let (san_reg_uses, rlr_env, mut vlr_env, mut frag_env, _liveouts, est_freqs) =

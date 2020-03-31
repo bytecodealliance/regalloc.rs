@@ -868,8 +868,7 @@ fn update_state<'a, F: Function>(
 
   let mut next_are_all_inactive = false;
 
-  for (int_id, last_frag_idx) in
-    state.interval_tree.dfs_iter(&mut reusable.vec_u32)
+  for (int_id, last_frag_idx) in state.interval_tree.iter(&mut reusable.vec_u32)
   {
     if next_are_all_inactive {
       next_inactive.push(int_id);
@@ -987,7 +986,7 @@ fn lazy_compute_inactive(
   let cur_end = int.end;
 
   for (id, _last_frag) in
-    interval_tree.dfs_iter(reusable_vec_u32).skip(active.len())
+    interval_tree.iter(reusable_vec_u32).skip(active.len())
   {
     let other_int = intervals.get(id);
     debug_assert!(other_int.is_fixed() || intervals.fragments(id).len() == 1);

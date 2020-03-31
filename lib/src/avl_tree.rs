@@ -1,9 +1,16 @@
+/* -*- Mode: Rust; tab-width: 8; indent-tabs-mode: nil; rust-indent-offset: 2 -*-
+ * vim: set ts=8 sts=2 et sw=2 tw=80:
+*/
+
 //! AVL trees with a private allocation pool.
 //!
 //! AVL tree internals are public, so that backtracking.rs can do custom
 //! traversals of the tree as it wishes.
 
 use std::cmp::Ordering;
+
+//=============================================================================
+// Data structures for AVLTree
 
 #[derive(Clone, PartialEq)]
 pub enum AVLTag {
@@ -46,7 +53,8 @@ pub struct AVLTree<T> {
   pub root: u32,
 }
 
-// ====== Storage management functions for AVLTree ======
+//=============================================================================
+// Storage management functions for AVLTree
 
 impl<T: Copy> AVLTree<T> {
   // Create a new tree and its associated storage pool.  This requires knowing
@@ -112,7 +120,8 @@ impl<T: Copy> AVLTree<T> {
   }
 }
 
-// ====== Tree-wrangling machinery for AVLTree (private) ======
+//=============================================================================
+// Tree-wrangling machinery for AVLTree (private)
 
 // For the public interface, see below.
 
@@ -715,6 +724,7 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
   }
 
   // Private fn: count the number of items in the tree.  Warning: costs O(N) !
+  #[cfg(test)]
   fn count_wrk(&self, n: u32) -> usize {
     if n == AVL_NULL {
       return 0;
@@ -724,6 +734,7 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
   }
 
   // Private fn: find the max depth of the tree.  Warning: costs O(N) !
+  #[cfg(test)]
   fn depth_wrk(&self, n: u32) -> usize {
     if n == AVL_NULL {
       return 0;
@@ -734,19 +745,64 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
   }
 }
 
-// ====== Public interface for AVLTree ======
+// Machinery for iterating over the tree, enumerating nodes in ascending order.
+// Unfortunately AVLTreeIter has to be public.
+pub struct AVLTreeIter<'t, 's, T> {
+  tree: &'t AVLTree<T>,
+  stack: &'s mut Vec<u32>,
+}
+
+impl<'t, 's, T> AVLTreeIter<'t, 's, T> {
+  fn new(tree: &'t AVLTree<T>, stack: &'s mut Vec<u32>) -> Self {
+    let mut iter = AVLTreeIter { tree, stack };
+    if tree.root != AVL_NULL {
+      iter.stack.push(tree.root);
+      iter.visit_left_children(tree.root);
+    }
+    iter
+  }
+
+  fn visit_left_children(&mut self, root: u32) {
+    let mut cur = root;
+    loop {
+      let left = self.tree.pool[cur as usize].left;
+      if left == AVL_NULL {
+        break;
+      }
+      self.stack.push(left);
+      cur = left;
+    }
+  }
+}
+
+impl<'s, 't, T: Copy> Iterator for AVLTreeIter<'s, 't, T> {
+  type Item = T;
+  fn next(&mut self) -> Option<Self::Item> {
+    let ret = match self.stack.pop() {
+      Some(ret) => ret,
+      None => return None,
+    };
+    let right = self.tree.pool[ret as usize].right;
+    if right != AVL_NULL {
+      self.stack.push(right);
+      self.visit_left_children(right);
+    }
+    Some(self.tree.pool[ret as usize].item)
+  }
+}
+
+//=============================================================================
+// Public interface for AVLTree
 
 impl<T: Copy + PartialOrd> AVLTree<T> {
   // The core functions (insert, delete, contains) take a comparator argument
   //
   //   mb_cmp: Option<&F>
   //   where
-  //     T: ToFromU32,
   //     F: Fn(T, T) -> Option<Ordering>
   //
   // which allows control over how node comparison is done.  If this is None,
-  // then comparison is done directly using the u32 values underlying the T
-  // values (after passing them through ToFromU32::to_u32).
+  // then comparison is done directly using PartialOrd for the T values.
   //
   // If this is Some(cmp), then comparison is done by passing the two T values
   // to |cmp|.  In this case, the routines will complain (panic) if |cmp|
@@ -784,6 +840,10 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
   }
 
   // Determine whether an item is in the tree.
+  // sewardj 2020Mar31: this is not used; I assume all users of the trees
+  // do their own custom traversals.  Remove #[cfg(test)] if any real uses
+  // appear.
+  #[cfg(test)]
   pub fn contains<F>(&self, item: T, mb_cmp: Option<&F>) -> bool
   where
     F: Fn(T, T) -> Option<Ordering>,
@@ -844,43 +904,44 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
   }
 
   // Count the number of items in the tree.  Warning: costs O(N) !
-  pub fn count(&self) -> usize {
+  #[cfg(test)]
+  fn count(&self) -> usize {
     self.count_wrk(self.root)
   }
 
   // Private fn: find the max depth of the tree.  Warning: costs O(N) !
-  pub fn depth(&self) -> usize {
+  #[cfg(test)]
+  fn depth(&self) -> usize {
     self.depth_wrk(self.root)
   }
 
   pub fn to_vec(&self) -> Vec<T> {
-    let mut res = Vec::<T>::new();
-    if self.root != AVL_NULL {
-      walk_dfs(&mut res, self.root, &self.pool);
-    }
-    return res;
-    /*NOTREACHED*/
-
-    pub fn walk_dfs<U: Copy>(
-      res: &mut Vec<U>, root: u32, pool: &Vec<AVLNode<U>>,
-    ) {
+    // BEGIN helper fn
+    fn walk<U: Copy>(res: &mut Vec<U>, root: u32, pool: &Vec<AVLNode<U>>) {
       let root_left = pool[root as usize].left;
       if root_left != AVL_NULL {
-        walk_dfs(res, root_left, pool);
+        walk(res, root_left, pool);
       }
       res.push(pool[root as usize].item);
       let root_right = pool[root as usize].right;
       if root_right != AVL_NULL {
-        walk_dfs(res, root_right, pool);
+        walk(res, root_right, pool);
       }
     }
+    // END helper fn
+
+    let mut res = Vec::<T>::new();
+    if self.root != AVL_NULL {
+      walk(&mut res, self.root, &self.pool);
+    }
+    res
   }
 
-  pub fn dfs_iter<'t, 's>(
+  pub fn iter<'t, 's>(
     &'t self, storage: &'s mut Vec<u32>,
-  ) -> DfsIter<'t, 's, T> {
+  ) -> AVLTreeIter<'t, 's, T> {
     storage.clear();
-    DfsIter::new(self, storage)
+    AVLTreeIter::new(self, storage)
   }
 
   // Show the tree.  (For debugging only.)
@@ -896,52 +957,8 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
   //}
 }
 
-pub struct DfsIter<'t, 's, T> {
-  tree: &'t AVLTree<T>,
-  stack: &'s mut Vec<u32>,
-}
-
-impl<'t, 's, T> DfsIter<'t, 's, T> {
-  fn new(tree: &'t AVLTree<T>, stack: &'s mut Vec<u32>) -> Self {
-    let mut iter = DfsIter { tree, stack };
-    if tree.root != AVL_NULL {
-      iter.stack.push(tree.root);
-      iter.visit_left_children(tree.root);
-    }
-    iter
-  }
-
-  fn visit_left_children(&mut self, root: u32) {
-    let mut cur = root;
-    loop {
-      let left = self.tree.pool[cur as usize].left;
-      if left == AVL_NULL {
-        break;
-      }
-      self.stack.push(left);
-      cur = left;
-    }
-  }
-}
-
-impl<'s, 't, T: Copy> Iterator for DfsIter<'s, 't, T> {
-  type Item = T;
-
-  fn next(&mut self) -> Option<Self::Item> {
-    let ret = match self.stack.pop() {
-      Some(ret) => ret,
-      None => return None,
-    };
-    let right = self.tree.pool[ret as usize].right;
-    if right != AVL_NULL {
-      self.stack.push(right);
-      self.visit_left_children(right);
-    }
-    Some(self.tree.pool[ret as usize].item)
-  }
-}
-
-// ====== Testing machinery for AVLTree ======
+//=============================================================================
+// Testing machinery for AVLTree
 
 #[cfg(test)]
 mod avl_tree_test_utils {
@@ -1179,10 +1196,10 @@ fn test_avl_tree2() {
 }
 
 #[test]
-fn test_avl_tree_dfs_iter() {
+fn test_avl_tree_iter() {
   let mut storage = Vec::new();
   let tree = AVLTree::<u32>::new(0);
-  assert!(tree.dfs_iter(&mut storage).next().is_none());
+  assert!(tree.iter(&mut storage).next().is_none());
 
   const FROM: u32 = 0;
   const TO: u32 = 10000;
@@ -1193,7 +1210,7 @@ fn test_avl_tree_dfs_iter() {
   }
 
   let as_vec = tree.to_vec();
-  for (i, val) in tree.dfs_iter(&mut storage).enumerate() {
+  for (i, val) in tree.iter(&mut storage).enumerate() {
     assert_eq!(as_vec[i], val, "not equal for i={}", i);
   }
 }
