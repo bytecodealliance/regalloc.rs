@@ -266,6 +266,17 @@ fn calc_dom_sets_SLOW(
 
 //=============================================================================
 // Computation of per-block dominator sets by first computing trees.
+//
+// This is an implementation of the algorithm described in
+//
+//   A Simple, Fast Dominance Algorithm
+//   Keith D. Cooper, Timothy J. Harvey, and Ken Kennedy
+//   Department of Computer Science, Rice University, Houston, Texas, USA
+//   TR-06-33870
+//   https://www.cs.rice.edu/~keith/EMBED/dom.pdf
+//
+// which appears to be the de-facto standard scheme for computing dominance
+// quickly nowadays.
 
 // Unfortunately it seems like local consts are not allowed in Rust.
 const DT_INVALID_POSTORD: u32 = 0xFFFF_FFFF;
