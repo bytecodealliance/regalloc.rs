@@ -48,7 +48,7 @@ fn main() {
         .short("a")
         .takes_value(true)
         .required(true)
-        .possible_values(&["bt", "lsra"])
+        .possible_values(&["bt", "lsra", "btc", "lsrac"])
         .help("algorithm name"),
     );
   let matches = app.get_matches();
@@ -82,9 +82,17 @@ fn main() {
       info!("Using the backtracking allocator");
       RegAllocAlgorithm::Backtracking
     }
+    "btc" => {
+      info!("Using the backtracking allocator, with checking");
+      RegAllocAlgorithm::BacktrackingChecked
+    }
     "lsra" => {
-      info!("Using the linear scan allocator.");
+      info!("Using the linear scan allocator");
       RegAllocAlgorithm::LinearScan
+    }
+    "lsrac" => {
+      info!("Using the linear scan allocator, with checking");
+      RegAllocAlgorithm::LinearScanChecked
     }
     // Unreachable because of defined "possible_values".
     _ => unreachable!(),
