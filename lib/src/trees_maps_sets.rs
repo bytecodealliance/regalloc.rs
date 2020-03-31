@@ -57,6 +57,12 @@ impl ToFromU32 for u32 {
 //     produces one value from each equivalence class.  By presenting each of
 //     these to (3), it is possible to enumerate all the equivalence classes
 //     exactly once.
+//
+// |UnionFind| and the operations |union| and |find| are loosely based on the
+// discussion in Chapter 8 of "Data Structures and Algorithm Analysis in C"
+// (Mark Allen Weiss, 1993).  |UnionFindEquivClasses| and the algorithm to
+// construct it is home-grown; although I'm sure the same idea has been
+// implemented many times before.
 
 pub struct UnionFind<T: ToFromU32> {
   // These are the trees that we are building.  A value that is negative means
