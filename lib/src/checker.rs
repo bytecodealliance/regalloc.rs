@@ -342,6 +342,12 @@ impl Checker {
     &mut self, block: BlockIx, inst_ix: InstIx, iru: &SanitizedInstRegUses,
     pre_map: &Map<VirtualReg, RealReg>, post_map: &Map<VirtualReg, RealReg>,
   ) -> Result<(), CheckerErrors> {
+    debug!(
+      "add_op: block {} inst {} iru {:?}",
+      block.get(),
+      inst_ix.get(),
+      iru
+    );
     let mut uses_set = iru.san_used.clone();
     let mut defs_set = iru.san_defined.clone();
     uses_set.union(&iru.san_modified);
@@ -355,7 +361,9 @@ impl Checker {
     let uses = map_regs(inst_ix, pre_map, &uses_orig[..])?;
     let defs = map_regs(inst_ix, post_map, &defs_orig[..])?;
     let insts = self.bb_insts.get_mut(&block).unwrap();
-    insts.push(Inst::Op { inst_ix, uses_orig, defs_orig, uses, defs });
+    let op = Inst::Op { inst_ix, uses_orig, defs_orig, uses, defs };
+    debug!("add_op: adding {:?}", op);
+    insts.push(op);
     Ok(())
   }
 
@@ -367,16 +375,25 @@ impl Checker {
     while !queue.is_empty() {
       let block = queue.pop_front().unwrap();
       let mut state = self.bb_in.get(&block).cloned().unwrap();
+      debug!("analyze: block {} has state {:?}", block.get(), state);
       for inst in self.bb_insts.get(&block).unwrap() {
         state.update(inst);
+        debug!("analyze: inst {:?} -> state {:?}", inst, state);
       }
 
       for succ in self.bb_succs.get(&block).unwrap() {
         let cur_succ_in = self.bb_in.get(succ).unwrap();
-        state.meet_with(cur_succ_in);
-        let changed = &state != cur_succ_in;
+        let mut new_state = state.clone();
+        new_state.meet_with(cur_succ_in);
+        let changed = &new_state != cur_succ_in;
         if changed {
-          self.bb_in.insert(*succ, state.clone());
+          debug!(
+            "analyze: block {} state changed from {:?} to {:?}; pushing onto queue",
+            succ.get(),
+            cur_succ_in,
+            new_state
+          );
+          self.bb_in.insert(*succ, new_state);
           queue.push_back(*succ);
         }
       }
