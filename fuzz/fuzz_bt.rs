@@ -20,7 +20,7 @@ fuzz_target!(|func: ir::Func| {
     Ok(result) => result,
     Err(err) => {
       if let regalloc::RegAllocError::RegChecker(_) = &err {
-        panic!(err);
+        panic!(format!("fuzz_bt.rs: checker error: {:?}", err));
       }
       let mut rendered = String::new();
       func_backup.render("validation error", &mut rendered).unwrap();

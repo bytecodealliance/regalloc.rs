@@ -34,7 +34,7 @@ fuzz_target!(|func: ir::Func| {
     Ok(result) => result,
     Err(err) => {
       if let regalloc::RegAllocError::RegChecker(_) = &err {
-        panic!(err);
+        panic!(format!("fuzz_lsra_differential.rs: checker error: {:?}", err));
       }
       println!("allocation error: {}", err);
       return;
