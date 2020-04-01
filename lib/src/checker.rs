@@ -325,7 +325,7 @@ impl Checker {
     Checker { bb_entry: f.entry_block(), bb_in, bb_succs, bb_insts }
   }
 
-  /// Add an abstract instruction (spill, reload, oor move) to a BB.
+  /// Add an abstract instruction (spill, reload, or move) to a BB.
   ///
   /// Can also accept an `Inst::Op`, but `add_op()` is better-suited
   /// for this.
@@ -470,6 +470,7 @@ impl CheckerContext {
     }
 
     let iru = func.get_regs(func.get_insn(iix)); // AUDITED
+    debug!("at inst {:?}: iru {:?}", iix, iru);
     let sru = SanitizedInstRegUses::create_by_sanitizing(&iru, ru)
       .expect("only existing real registers at this point");
     debug!(

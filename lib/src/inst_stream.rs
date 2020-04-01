@@ -113,14 +113,21 @@ fn apply_reg_uses<F: Function>(
 ) -> Result<(), CheckerErrors> {
   // Set up checker state, if indicated by our configuration.
   let mut checker: Option<CheckerContext> = None;
+  let mut insn_blocks: Vec<BlockIx> = vec![];
   if use_checker {
     checker = Some(CheckerContext::new(func, reg_universe, insts_to_add));
+    insn_blocks.resize(func.insns().len(), BlockIx::new(0));
+    for blockIx in func.blocks() {
+      for insnIx in func.block_insns(blockIx) {
+        insn_blocks[insnIx.get() as usize] = blockIx;
+      }
+    }
   }
 
-  // Nop out any insns that we've been requested to.
-  for iix in iixs_to_nop_out {
-    *func.get_insn_mut(*iix) = func.gen_zero_len_nop();
-  }
+  // Sort the insn nop-out index list, so we can advance through it
+  // during the main loop.
+  let mut iixs_to_nop_out = iixs_to_nop_out.clone();
+  iixs_to_nop_out.sort();
 
   // Make two copies of the fragment mapping, one sorted by the fragment start
   // points (just the InstIx numbers, ignoring the Point), and one sorted by
@@ -154,6 +161,7 @@ fn apply_reg_uses<F: Function>(
 
   let mut cursor_starts = 0;
   let mut cursor_ends = 0;
+  let mut cursor_nop = 0;
 
   let mut map = Map::<VirtualReg, RealReg>::default();
 
@@ -199,209 +207,235 @@ fn apply_reg_uses<F: Function>(
     false
   }
 
-  for blockIx in func.blocks() {
-    for insnIx in func.block_insns(blockIx) {
-      //debug!("");
-      //debug!("QQQQ insn {}: {}",
-      //         insnIx, func.insns[insnIx].show());
-      //debug!("QQQQ init map {}", showMap(&map));
-      // advance [cursorStarts, +numStarts) to the group for insnIx
-      while cursor_starts < frag_maps_by_start.len()
-        && frag_env[frag_maps_by_start[cursor_starts].0].first.iix < insnIx
-      {
-        cursor_starts += 1;
+  let mut lastInsnIx = -1;
+  for insnIx in func.insn_indices() {
+    // Ensure instruction indices are in order. Logic below requires this.
+    assert!(insnIx.get() as i32 > lastInsnIx);
+    lastInsnIx = insnIx.get() as i32;
+
+    //debug!("");
+    //debug!("QQQQ insn {}: {}",
+    //         insnIx, func.insns[insnIx].show());
+    //debug!("QQQQ init map {}", showMap(&map));
+    // advance [cursorStarts, +numStarts) to the group for insnIx
+    while cursor_starts < frag_maps_by_start.len()
+      && frag_env[frag_maps_by_start[cursor_starts].0].first.iix < insnIx
+    {
+      cursor_starts += 1;
+    }
+    let mut numStarts = 0;
+    while cursor_starts + numStarts < frag_maps_by_start.len()
+      && frag_env[frag_maps_by_start[cursor_starts + numStarts].0].first.iix
+        == insnIx
+    {
+      numStarts += 1;
+    }
+
+    // advance [cursorEnds, +numEnds) to the group for insnIx
+    while cursor_ends < frag_maps_by_end.len()
+      && frag_env[frag_maps_by_end[cursor_ends].0].last.iix < insnIx
+    {
+      cursor_ends += 1;
+    }
+    let mut numEnds = 0;
+    while cursor_ends + numEnds < frag_maps_by_end.len()
+      && frag_env[frag_maps_by_end[cursor_ends + numEnds].0].last.iix == insnIx
+    {
+      numEnds += 1;
+    }
+
+    // advance cursor_nop in the iixs_to_nop_out list.
+    while cursor_nop < iixs_to_nop_out.len()
+      && iixs_to_nop_out[cursor_nop] < insnIx
+    {
+      cursor_nop += 1;
+    }
+
+    let nop_this_insn = cursor_nop < iixs_to_nop_out.len()
+      && iixs_to_nop_out[cursor_nop] == insnIx;
+
+    // So now, fragMapsByStart[cursorStarts, +numStarts) are the mappings
+    // for fragments that begin at this instruction, in no particular
+    // order.  And fragMapsByEnd[cursorEnd, +numEnd) are the RangeFragIxs
+    // for fragments that end at this instruction.
+
+    //debug!("insn no {}:", insnIx);
+    //for j in cursorStarts .. cursorStarts + numStarts {
+    //    debug!("   s: {} {}",
+    //             (fragMapsByStart[j].1, fragMapsByStart[j].2).show(),
+    //             frag_env[ fragMapsByStart[j].0 ]
+    //             .show());
+    //}
+    //for j in cursorEnds .. cursorEnds + numEnds {
+    //    debug!("   e: {} {}",
+    //             (fragMapsByEnd[j].1, fragMapsByEnd[j].2).show(),
+    //             frag_env[ fragMapsByEnd[j].0 ]
+    //             .show());
+    //}
+
+    // Sanity check all frags.  In particular, reload and spill frags are
+    // heavily constrained.  No functional effect.
+    for j in cursor_starts..cursor_starts + numStarts {
+      let frag = &frag_env[frag_maps_by_start[j].0];
+      // "It really starts here, as claimed."
+      debug_assert!(frag.first.iix == insnIx);
+      debug_assert!(is_sane(&frag));
+    }
+    for j in cursor_ends..cursor_ends + numEnds {
+      let frag = &frag_env[frag_maps_by_end[j].0];
+      // "It really ends here, as claimed."
+      debug_assert!(frag.last.iix == insnIx);
+      debug_assert!(is_sane(frag));
+    }
+
+    // Here's the plan, in summary:
+    // Update map for I.r:
+    //   add frags starting at I.r
+    //   no frags should end at I.r (it's a reload insn)
+    // Update map for I.u:
+    //   add frags starting at I.u
+    //   map_uses := map
+    //   remove frags ending at I.u
+    // Update map for I.d:
+    //   add frags starting at I.d
+    //   map_defs := map
+    //   remove frags ending at I.d
+    // Update map for I.s:
+    //   no frags should start at I.s (it's a spill insn)
+    //   remove frags ending at I.s
+    // apply map_uses/map_defs to I
+
+    //debug!("QQQQ mapping insn {:?}", insnIx);
+    //debug!("QQQQ current map {}", showMap(&map));
+    trace!("current map {:?}", map);
+
+    // Update map for I.r:
+    //   add frags starting at I.r
+    //   no frags should end at I.r (it's a reload insn)
+    for j in cursor_starts..cursor_starts + numStarts {
+      let frag = &frag_env[frag_maps_by_start[j].0];
+      if frag.first.pt.is_reload() {
+        //////// STARTS at I.r
+        map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
+        //debug!(
+        //  "QQQQ inserted frag from reload: {:?} -> {:?}",
+        //  fragMapsByStart[j].1, fragMapsByStart[j].2
+        //);
       }
-      let mut numStarts = 0;
-      while cursor_starts + numStarts < frag_maps_by_start.len()
-        && frag_env[frag_maps_by_start[cursor_starts + numStarts].0].first.iix
-          == insnIx
-      {
-        numStarts += 1;
+    }
+
+    // Update map for I.u:
+    //   add frags starting at I.u
+    //   map_uses := map
+    //   remove frags ending at I.u
+    for j in cursor_starts..cursor_starts + numStarts {
+      let frag = &frag_env[frag_maps_by_start[j].0];
+      if frag.first.pt.is_use() {
+        //////// STARTS at I.u
+        map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
+        //debug!(
+        //  "QQQQ inserted frag from use: {:?} -> {:?}",
+        //  fragMapsByStart[j].1, fragMapsByStart[j].2
+        //);
       }
-
-      // advance [cursorEnds, +numEnds) to the group for insnIx
-      while cursor_ends < frag_maps_by_end.len()
-        && frag_env[frag_maps_by_end[cursor_ends].0].last.iix < insnIx
-      {
-        cursor_ends += 1;
+    }
+    let map_uses = map.clone();
+    for j in cursor_ends..cursor_ends + numEnds {
+      let frag = &frag_env[frag_maps_by_end[j].0];
+      if frag.last.pt.is_use() {
+        //////// ENDS at I.U
+        map.remove(&frag_maps_by_end[j].1);
+        //debug!("QQQQ removed frag after use: {:?}", fragMapsByStart[j].1);
       }
-      let mut numEnds = 0;
-      while cursor_ends + numEnds < frag_maps_by_end.len()
-        && frag_env[frag_maps_by_end[cursor_ends + numEnds].0].last.iix
-          == insnIx
-      {
-        numEnds += 1;
+    }
+
+    trace!("use map {:?}", map_uses);
+    trace!("map after I.u {:?}", map);
+
+    // Update map for I.d:
+    //   add frags starting at I.d
+    //   map_defs := map
+    //   remove frags ending at I.d
+    for j in cursor_starts..cursor_starts + numStarts {
+      let frag = &frag_env[frag_maps_by_start[j].0];
+      if frag.first.pt.is_def() {
+        //////// STARTS at I.d
+        map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
+        //debug!(
+        //  "QQQQ inserted frag from def: {:?} -> {:?}",
+        //  fragMapsByStart[j].1, fragMapsByStart[j].2
+        //);
       }
-
-      // So now, fragMapsByStart[cursorStarts, +numStarts) are the mappings
-      // for fragments that begin at this instruction, in no particular
-      // order.  And fragMapsByEnd[cursorEnd, +numEnd) are the RangeFragIxs
-      // for fragments that end at this instruction.
-
-      //debug!("insn no {}:", insnIx);
-      //for j in cursorStarts .. cursorStarts + numStarts {
-      //    debug!("   s: {} {}",
-      //             (fragMapsByStart[j].1, fragMapsByStart[j].2).show(),
-      //             frag_env[ fragMapsByStart[j].0 ]
-      //             .show());
-      //}
-      //for j in cursorEnds .. cursorEnds + numEnds {
-      //    debug!("   e: {} {}",
-      //             (fragMapsByEnd[j].1, fragMapsByEnd[j].2).show(),
-      //             frag_env[ fragMapsByEnd[j].0 ]
-      //             .show());
-      //}
-
-      // Sanity check all frags.  In particular, reload and spill frags are
-      // heavily constrained.  No functional effect.
-      for j in cursor_starts..cursor_starts + numStarts {
-        let frag = &frag_env[frag_maps_by_start[j].0];
-        // "It really starts here, as claimed."
-        debug_assert!(frag.first.iix == insnIx);
-        debug_assert!(is_sane(&frag));
+    }
+    let map_defs = map.clone();
+    for j in cursor_ends..cursor_ends + numEnds {
+      let frag = &frag_env[frag_maps_by_end[j].0];
+      if frag.last.pt.is_def() {
+        //////// ENDS at I.d
+        map.remove(&frag_maps_by_end[j].1);
+        //debug!("QQQQ ended frag from def: {:?}", fragMapsByEnd[j].1);
       }
-      for j in cursor_ends..cursor_ends + numEnds {
-        let frag = &frag_env[frag_maps_by_end[j].0];
-        // "It really ends here, as claimed."
-        debug_assert!(frag.last.iix == insnIx);
-        debug_assert!(is_sane(frag));
+    }
+
+    trace!("map defs {:?}", map_defs);
+    trace!("map after I.d {:?}", map);
+
+    // Update map for I.s:
+    //   no frags should start at I.s (it's a spill insn)
+    //   remove frags ending at I.s
+    for j in cursor_ends..cursor_ends + numEnds {
+      let frag = &frag_env[frag_maps_by_end[j].0];
+      if frag.last.pt.is_spill() {
+        //////// ENDS at I.s
+        map.remove(&frag_maps_by_end[j].1);
+        //debug!("QQQQ ended frag from spill: {:?}", fragMapsByEnd[j].1);
       }
+    }
 
-      // Here's the plan, in summary:
-      // Update map for I.r:
-      //   add frags starting at I.r
-      //   no frags should end at I.r (it's a reload insn)
-      // Update map for I.u:
-      //   add frags starting at I.u
-      //   map_uses := map
-      //   remove frags ending at I.u
-      // Update map for I.d:
-      //   add frags starting at I.d
-      //   map_defs := map
-      //   remove frags ending at I.d
-      // Update map for I.s:
-      //   no frags should start at I.s (it's a spill insn)
-      //   remove frags ending at I.s
-      // apply map_uses/map_defs to I
+    //debug!("QQQQ map_uses {}", showMap(&map_uses));
+    //debug!("QQQQ map_defs {}", showMap(&map_defs));
 
-      //debug!("QQQQ mapping insn {:?}", insnIx);
-      //debug!("QQQQ current map {}", showMap(&map));
-      trace!("current map {:?}", map);
+    // If we have a checker, update it with spills, reloads, moves, and this
+    // instruction, while we have `map_uses` and `map_defs` available.
+    if let &mut Some(ref mut checker) = &mut checker {
+      let blockIx = insn_blocks[insnIx.get() as usize];
+      checker.handle_insn(
+        reg_universe,
+        func,
+        blockIx,
+        insnIx,
+        &map_uses,
+        &map_defs,
+      )?;
 
-      // Update map for I.r:
-      //   add frags starting at I.r
-      //   no frags should end at I.r (it's a reload insn)
-      for j in cursor_starts..cursor_starts + numStarts {
-        let frag = &frag_env[frag_maps_by_start[j].0];
-        if frag.first.pt.is_reload() {
-          //////// STARTS at I.r
-          map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
-          //debug!(
-          //  "QQQQ inserted frag from reload: {:?} -> {:?}",
-          //  fragMapsByStart[j].1, fragMapsByStart[j].2
-          //);
-        }
-      }
-
-      // Update map for I.u:
-      //   add frags starting at I.u
-      //   map_uses := map
-      //   remove frags ending at I.u
-      for j in cursor_starts..cursor_starts + numStarts {
-        let frag = &frag_env[frag_maps_by_start[j].0];
-        if frag.first.pt.is_use() {
-          //////// STARTS at I.u
-          map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
-          //debug!(
-          //  "QQQQ inserted frag from use: {:?} -> {:?}",
-          //  fragMapsByStart[j].1, fragMapsByStart[j].2
-          //);
-        }
-      }
-      let map_uses = map.clone();
-      for j in cursor_ends..cursor_ends + numEnds {
-        let frag = &frag_env[frag_maps_by_end[j].0];
-        if frag.last.pt.is_use() {
-          //////// ENDS at I.U
-          map.remove(&frag_maps_by_end[j].1);
-          //debug!("QQQQ removed frag after use: {:?}", fragMapsByStart[j].1);
-        }
-      }
-
-      trace!("use map {:?}", map_uses);
-      trace!("map after I.u {:?}", map);
-
-      // Update map for I.d:
-      //   add frags starting at I.d
-      //   map_defs := map
-      //   remove frags ending at I.d
-      for j in cursor_starts..cursor_starts + numStarts {
-        let frag = &frag_env[frag_maps_by_start[j].0];
-        if frag.first.pt.is_def() {
-          //////// STARTS at I.d
-          map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
-          //debug!(
-          //  "QQQQ inserted frag from def: {:?} -> {:?}",
-          //  fragMapsByStart[j].1, fragMapsByStart[j].2
-          //);
-        }
-      }
-      let map_defs = map.clone();
-      for j in cursor_ends..cursor_ends + numEnds {
-        let frag = &frag_env[frag_maps_by_end[j].0];
-        if frag.last.pt.is_def() {
-          //////// ENDS at I.d
-          map.remove(&frag_maps_by_end[j].1);
-          //debug!("QQQQ ended frag from def: {:?}", fragMapsByEnd[j].1);
-        }
-      }
-
-      trace!("map defs {:?}", map_defs);
-      trace!("map after I.d {:?}", map);
-
-      // Update map for I.s:
-      //   no frags should start at I.s (it's a spill insn)
-      //   remove frags ending at I.s
-      for j in cursor_ends..cursor_ends + numEnds {
-        let frag = &frag_env[frag_maps_by_end[j].0];
-        if frag.last.pt.is_spill() {
-          //////// ENDS at I.s
-          map.remove(&frag_maps_by_end[j].1);
-          //debug!("QQQQ ended frag from spill: {:?}", fragMapsByEnd[j].1);
-        }
-      }
-
-      //debug!("QQQQ map_uses {}", showMap(&map_uses));
-      //debug!("QQQQ map_defs {}", showMap(&map_defs));
-
-      // If we have a checker, update it with spills, reloads, moves, and this
-      // instruction, while we have `map_uses` and `map_defs` available.
-      if let &mut Some(ref mut checker) = &mut checker {
-        checker.handle_insn(
-          reg_universe,
-          func,
-          blockIx,
-          insnIx,
-          &map_uses,
-          &map_defs,
-        )?;
-      }
-
-      // Finally, we have map_uses/map_defs set correctly for this instruction.
-      // Apply it.
-      let mut insn = func.get_insn_mut(insnIx);
-      trace!("map_regs for {:?}", insnIx);
-      F::map_regs(&mut insn, &map_uses, &map_defs);
-
-      // Update cursorStarts and cursorEnds for the next iteration
-      cursor_starts += numStarts;
-      cursor_ends += numEnds;
-
+      // We only build the insn->block index when the checker is enabled, so we can only perform
+      // this debug-assert here.
       if func.block_insns(blockIx).last() == insnIx {
         //debug!("Block end");
         debug_assert!(has_multiple_blocks_per_frag || map.is_empty());
       }
     }
+
+    // Finally, we have map_uses/map_defs set correctly for this instruction.
+    // Apply it.
+    if !nop_this_insn {
+      trace!("map_regs for {:?}", insnIx);
+      let mut insn = func.get_insn_mut(insnIx);
+      F::map_regs(&mut insn, &map_uses, &map_defs);
+      trace!("mapped instruction: {:?}", insn);
+    } else {
+      // N.B. We nop out instructions as requested only *here*, after the checker call, because
+      // the checker must observe even elided moves (they may carry useful information about a
+      // move between two virtual locations mapped to the same physical location).
+      trace!("nop'ing out {:?}", insnIx);
+      let nop = func.gen_zero_len_nop();
+      let insn = func.get_insn_mut(insnIx);
+      *insn = nop;
+    }
+
+    // Update cursorStarts and cursorEnds for the next iteration
+    cursor_starts += numStarts;
+    cursor_ends += numEnds;
   }
 
   debug_assert!(map.is_empty());
