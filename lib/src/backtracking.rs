@@ -1629,20 +1629,23 @@ impl PerRealReg {
         vlr_env,
         frag_env,
       );
-      // Big hack
+      // Big hack.  Note that this hack depends on <Debug for Set> printing
+      // set elements in some fixed sequence that depends only on what is in
+      // the set, and not on any other factors (eg, the history of how it
+      // was constructed.)
       let str_fast: String = format!("{:?}", result_fast);
       let str_crosscheck: String = format!("{:?}", result_crosscheck);
       if str_fast != str_crosscheck {
-        debug!(
+        println!(
           "QQQQ find_Evict_Set: fast {}, crosscheck {}",
           str_fast, str_crosscheck
         );
-        debug!("");
-        debug!("self.commitments = {:?}", self.committed);
-        debug!("");
-        debug!("wlta = {:?}", vlr_env[would_like_to_add]);
-        debug!("");
-        debug!("");
+        println!("");
+        println!("self.commitments = {:?}", self.committed);
+        println!("");
+        println!("wlta = {:?}", vlr_env[would_like_to_add]);
+        println!("");
+        println!("");
         panic!("find_Evict_Set: crosscheck failed");
       }
     }

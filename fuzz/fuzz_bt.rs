@@ -14,6 +14,15 @@ fuzz_target!(|func: ir::Func| {
   let n = unsafe { COUNTER += 1; COUNTER };
   println!("==== BEGIN fuzz_bt.rs fuzz_target! {:?} =========================",
            n);
+
+  if false {
+    println!("BEGIN INPUT:");
+    let mut rendered = String::new();
+    func.render("==== fuzz_bt.rs: failing input:", &mut rendered).unwrap();
+    println!("{}", rendered);
+    println!("END INPUT:");
+  }
+
   let mut func = func;
 
   let num_regs = minira::fuzzing::NUM_REAL_REGS_PER_RC as usize;

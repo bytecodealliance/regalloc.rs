@@ -127,6 +127,7 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
     for item in self.set.iter() {
       res.push(*item)
     }
+    // Don't delete this.  It is important.
     res.sort_unstable();
     res
   }
@@ -175,7 +176,20 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
 impl<T: Eq + Ord + Hash + Copy + fmt::Debug> fmt::Debug for Set<T> {
   #[inline(never)]
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(fmt, "{:?}", self.set)
+    // Print the elements in some way which depends only on what is
+    // present in the set, and not on any other factor.  In particular,
+    // <Debug for FxHashSet> has been observed to to print the elements
+    // of a two element set in both orders on different occasions.
+    let sorted_vec = self.to_vec();
+    let mut s = "{".to_string();
+    for i in 0..sorted_vec.len() {
+      if i > 0 {
+        s = s + &", ".to_string();
+      }
+      s = s + &format!("{:?}", &sorted_vec[i]);
+    }
+    s = s + &"}".to_string();
+    write!(fmt, "{}", s)
   }
 }
 
