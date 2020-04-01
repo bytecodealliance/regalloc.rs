@@ -1,0 +1,31 @@
+
+;; This is believed to show a checker problem related to spill slot
+;; coalescing.  Run thusly:
+;;
+;; RUST_LOG=debug cargo run -- -a btc -t fuzz_checker2 -f 3 -i 3
+
+v7I = I32
+v11I = I32
+v13I = I32
+v15I = I32
+r0I = real I32 0
+r1I = real I32 1
+
+b0:
+    imm     r0I, 3123165882
+    store   [r0I, r0I], r0I
+    store   [r0I, 3132799674], r0I
+    copy    r1I, r0I
+    copy    v11I, r1I
+    copy    r0I, r0I
+    cmp_gt  v15I, r1I, v11I
+    goto    b1:b1
+
+b1:
+    mod     v11I, v15I, v15I
+    copy    v13I, v15I
+    store   [r0I, v11I], v11I
+    store   [r1I, r0I], v13I
+    copy    v15I, r1I
+    mod     v7I, v15I, v15I
+    if_then_else v7I, b1:b1, b1:b1
