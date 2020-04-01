@@ -1,0 +1,68 @@
+
+;; This showed up a bug in the dominator tree construction.  I think
+;; the problem wasn't noticed before because this is perhaps the first
+;; irreducible flow graph that has been tested with the dom tree stuff
+;; being checked against the old, slow, correct dom set algorithm.
+;;
+;; Blocks 3 4 and 7 form an irreducible (multiple entry) loop.  There
+;; are two entry nodes to this loop: 3, which is jumped to from 5,
+;; and 4, which is jumped to from 1 and 2.
+
+v11I = I32
+v13I = I32
+v15I = I32
+
+r0I = real I32 0
+r6F = real F32 6
+
+b0:
+;; I had to add these 3 initialisations in order that dataflow analysis
+;; doesn't reject this test case for containing uninitialised values.
+imm r0I, 99
+imm v13I, 88
+immf r6F, 0.0
+
+imm     v15I, 4294967295
+addm    v15I, v15I
+store   [v15I, 1162167621], v15I
+store   [v15I, v15I], v15I
+if_then_else v15I, b6:b6, b5:b5
+
+b1:
+loadf   r6F, [v15I, v15I]
+store   [v15I, v15I], v15I
+cmp_ge  r0I, v15I, 3840206052
+imm     r0I, 3840206052
+imm     r0I, 3840206052
+goto    b4:b4
+
+b2:
+imm     r0I, 3840206052
+imm     r0I, 3840206052
+imm     r0I, 3840206052
+imm     r0I, 3840206052
+goto    b4:b4
+
+b3:
+imm     v15I, 4294967295
+cmp_lt  v13I, r0I, r0I
+load    v13I, [r0I, 2913840557]
+load    v15I, [v15I, 4282101165]
+goto    b7:b7
+
+b4:
+cmp_gt  v11I, v13I, v13I
+if_then_else v15I, b3:b3, b3:b3
+
+b5:
+if_then_else v15I, b3:b3, b3:b3
+
+b6:
+if_then_else v15I, b1:b1, b2:b2
+
+b7:
+storef  [r0I, v13I], r6F
+store   [v13I, v13I], v13I
+store   [v13I, 4294967295], v15I
+cmp_ge  r0I, r0I, 3840206052
+goto    b4:b4

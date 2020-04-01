@@ -360,16 +360,15 @@ fn calc_dom_sets(
     for n in 0..nBlocks {
       // Consider blocks in reverse postorder.
       let node = rpostord2bix[n as usize];
+      assert!(node != DT_INVALID_BLOCKIX);
       let node_preds = &pred_map[node];
-      let mut node_preds_iter = node_preds.iter();
-
       let rponum = bix2rpostord[node];
 
       let mut parent = DT_INVALID_BLOCKIX;
       if node_preds.is_empty() {
         // No preds, |parent| remains invalid.
       } else {
-        while let Some(pred) = node_preds_iter.next() {
+        for pred in node_preds.iter() {
           let pred_rpo = bix2rpostord[*pred];
           if pred_rpo < rponum {
             parent = *pred;
@@ -379,7 +378,7 @@ fn calc_dom_sets(
       }
 
       if parent != DT_INVALID_BLOCKIX {
-        while let Some(pred) = node_preds_iter.next() {
+        for pred in node_preds.iter() {
           if *pred == parent {
             continue;
           }
