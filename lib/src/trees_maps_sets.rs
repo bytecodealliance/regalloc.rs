@@ -758,3 +758,113 @@ impl<T: ToFromU32> DenseSet<T> {
 }
 
 */
+
+//=============================================================================
+// SparseSet
+
+/*
+use core::mem::MaybeUninit;
+use core::ptr;
+use rustc_hash::FxHashSet;
+use std::hash::Hash;
+
+// Types that can be used as the backing store for a SparseSet.
+trait Array {
+  // The type of the array's elements.
+  type Item;
+  // Returns the number of items the array can hold.
+  fn size() -> usize;
+}
+macro_rules! impl_array(
+    ($($size:expr),+) => {
+        $(
+            impl<T> Array for [T; $size] {
+                type Item = T;
+                fn size() -> usize { $size }
+            }
+        )+
+    }
+);
+impl_array!(
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 24, 32, 36,
+  0x40, 0x60, 0x80, 0x100
+);
+
+enum SparseSet<A: Array> {
+  Small { card: usize, sdata: MaybeUninit<A> },
+  Large { card: usize, ldata: FxHashSet<A::Item> },
+}
+
+impl<A: Array> SparseSet<A> {
+  fn empty() -> Self {
+    SparseSet::Small { card: 0, sdata: MaybeUninit::uninit() }
+  }
+  fn is_small(&self) -> bool {
+    match self {
+      SparseSet::Small { .. } => true,
+      SparseSet::Large { .. } => false,
+    }
+  }
+  fn is_large(&self) -> bool {
+    !self.is_small()
+  }
+
+  fn insert(&mut self, item: A::Item)
+  where
+    A::Item: PartialEq + Eq + Hash,
+  {
+    match self {
+      SparseSet::Small { card, sdata } => {
+        assert!(*card <= A::size());
+        let sdata_p = sdata.as_mut_ptr() as *mut A::Item;
+        // Do we already have it?
+        for i in 0..*card {
+          if unsafe { ptr::read(sdata_p.add(i)) } == item {
+            return;
+          }
+        }
+        // No.
+        println!("QQQQ card {} ASize {}", *card, A::size());
+        if *card < A::size() {
+          // Stay small
+          unsafe {
+            ptr::write(sdata_p.add(*card), item);
+          }
+          *card += 1;
+        } else {
+          // Transition up
+          assert!(*card == A::size());
+          let mut ldata = FxHashSet::<A::Item>::default();
+          for i in 0..*card {
+            ldata.insert(unsafe { ptr::read(sdata_p.add(i)) });
+          }
+          ldata.insert(item);
+          debug_assert!(ldata.len() == 1 + *card);
+          *self = SparseSet::Large { card: 1 + *card, ldata };
+        }
+      }
+      SparseSet::Large { card, ldata } => {
+        debug_assert!(ldata.len() == *card);
+        let inserted = ldata.insert(item);
+        if inserted {
+          *card += 1;
+        }
+      }
+    }
+  }
+}
+
+#[test]
+fn test_sparse_set() {
+  let mut set = SparseSet::<[u32; 3]>::empty();
+  assert!(set.is_small());
+  set.insert(3);
+  assert!(set.is_small());
+  set.insert(1);
+  assert!(set.is_small());
+  set.insert(4);
+  assert!(set.is_small());
+  set.insert(7);
+  assert!(set.is_large());
+}
+*/
