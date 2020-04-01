@@ -8,12 +8,22 @@ use libfuzzer_sys::fuzz_target;
 use minira::{self, test_framework as ir};
 use regalloc;
 
-static mut COUNTER: usize = 0;
+// This is the number of test cases the fuzzing framework has given to us so
+// far.  More then half of these get rejected as having unreachable blocks, or
+// critical edges, or live values into the start node, or for whatever reason
+// they are invalid.  Hence ..
+static mut COUNTER_GEN: usize = 0;
+
+// .. this is used to count the number of test cases which actually made it
+// through the allocator.  This number gives a better measure of the extent of
+// test coverage.
+static mut COUNTER_OK: usize = 0;
 
 fuzz_target!(|func: ir::Func| {
-  let n = unsafe { COUNTER += 1; COUNTER };
-  println!("==== BEGIN fuzz_bt.rs fuzz_target! {:?} =========================",
-           n);
+  let n_gen = unsafe { COUNTER_GEN += 1; COUNTER_GEN };
+  let n_ok = unsafe { COUNTER_OK };
+  println!("==== BEGIN fuzz_bt.rs: #gen'd {:?} #ok {} ========================",
+           n_gen, n_ok);
 
   if false {
     println!("BEGIN INPUT:");
@@ -39,6 +49,7 @@ fuzz_target!(|func: ir::Func| {
   match ra_result {
     Ok(result) => {
       func.update_from_alloc(result);
+      unsafe { COUNTER_OK += 1; }
       return;
     }
     Err(err) => {
