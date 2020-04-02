@@ -9,9 +9,10 @@
 
 === Interface =============================================================
 
-- Important: have a way for clients to specify spill slot relative ordering
-  and alignment issues.  (This is actually required for correctness).
-  https://github.com/bnjbvr/regalloc.rs/pull/35 has the current proposal.
+- Important: have a way for clients to specify spill slot relative ordering and
+  alignment issues.  (This is actually required for correctness).
+  https://github.com/bytecodealliance/regalloc.rs/pull/35 has the current
+  proposal.
 
 - Require clients to specify the number of virtual regs in the input, so that
   we can use DenseSet<VirtualReg>.
