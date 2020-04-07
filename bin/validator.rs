@@ -181,11 +181,7 @@ pub fn validate(
     }
   }
 
-  if let Err(err) = regalloc::analysis::run_analysis(
-    func,
-    real_reg_universe,
-    /* sanitize scratch */ false,
-  ) {
+  if let Err(err) = regalloc::analysis::run_analysis(func, real_reg_universe) {
     return Err(err.to_string());
   }
 

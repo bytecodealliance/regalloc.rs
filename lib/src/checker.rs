@@ -1,3 +1,7 @@
+/* -*- Mode: Rust; tab-width: 8; indent-tabs-mode: nil; rust-indent-offset: 2 -*-
+ * vim: set ts=8 sts=2 et sw=2 tw=80:
+*/
+
 //! Checker: verifies that spills/reloads/moves retain equivalent dataflow to original, vreg-based
 //! code.
 //!
@@ -55,9 +59,10 @@
 
 #![allow(dead_code)]
 
+use crate::analysis::get_san_reg_sets_for_insn;
 use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Map, Point, RealReg, RealRegUniverse, Reg,
-  SanitizedInstRegUses, SpillSlot, VirtualReg, Writable,
+  RegSets, SpillSlot, VirtualReg, Writable,
 };
 use crate::inst_stream::{InstAndPoint, InstsAndPoints};
 use crate::interface::Function;
@@ -339,19 +344,20 @@ impl Checker {
   /// provided to give the virtual -> real mappings at the program points immediately before and
   /// after this instruction.
   pub(crate) fn add_op(
-    &mut self, block: BlockIx, inst_ix: InstIx, iru: &SanitizedInstRegUses,
+    &mut self, block: BlockIx, inst_ix: InstIx, regsets: &RegSets,
     pre_map: &Map<VirtualReg, RealReg>, post_map: &Map<VirtualReg, RealReg>,
   ) -> Result<(), CheckerErrors> {
     debug!(
-      "add_op: block {} inst {} iru {:?}",
+      "add_op: block {} inst {} regsets {:?}",
       block.get(),
       inst_ix.get(),
-      iru
+      regsets
     );
-    let mut uses_set = iru.san_used.clone();
-    let mut defs_set = iru.san_defined.clone();
-    uses_set.union(&iru.san_modified);
-    defs_set.union(&iru.san_modified);
+    assert!(regsets.is_sanitized());
+    let mut uses_set = regsets.uses.clone();
+    let mut defs_set = regsets.defs.clone();
+    uses_set.union(&regsets.mods);
+    defs_set.union(&regsets.mods);
     if uses_set.is_empty() && defs_set.is_empty() {
       return Ok(());
     }
@@ -469,15 +475,15 @@ impl CheckerContext {
       self.checker.add_inst(bix, checker_inst.clone());
     }
 
-    let iru = func.get_regs(func.get_insn(iix)); // AUDITED
-    debug!("at inst {:?}: iru {:?}", iix, iru);
-    let sru = SanitizedInstRegUses::create_by_sanitizing(&iru, ru)
+    let regsets = get_san_reg_sets_for_insn::<F>(func.get_insn(iix), ru)
       .expect("only existing real registers at this point");
+    assert!(regsets.is_sanitized());
+
     debug!(
-      "at inst {:?}: sru {:?} use-map {:?} def-map {:?}",
-      iix, sru, pre_map, post_map
+      "at inst {:?}: regsets {:?} use-map {:?} def-map {:?}",
+      iix, regsets, pre_map, post_map
     );
-    self.checker.add_op(bix, iix, &sru, pre_map, post_map)?;
+    self.checker.add_op(bix, iix, &regsets, pre_map, post_map)?;
 
     for checker_inst in self.checker_inst_map.get(&post_point).unwrap_or(&empty)
     {

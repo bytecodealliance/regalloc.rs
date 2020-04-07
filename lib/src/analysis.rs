@@ -5,14 +5,14 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
-use log::{debug, info};
+use log::{debug, info, log_enabled, Level};
 use std::fmt;
 
 use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Map, Queue, RangeFrag, RangeFragIx,
   RangeFragKind, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg,
-  SanitizedInstRegUses, Set, SortedRangeFragIxs, SpillCost, TypedIxVec,
-  VirtualRange, VirtualRangeIx,
+  RegSets, RegUsageCollector, RegVecBounds, RegVecs, RegVecsAndBounds, Set,
+  SortedRangeFragIxs, SpillCost, TypedIxVec, VirtualRange, VirtualRangeIx,
 };
 use crate::interface::Function;
 use crate::trees_maps_sets::{ToFromU32, UnionFind};
@@ -25,6 +25,8 @@ const CROSSCHECK_DOMS: bool = false;
 
 //=============================================================================
 // Overall analysis return results, for both control- and data-flow analyses.
+// All of these failures refer to various problems with the code that the
+// client (caller) supplied to us.
 
 #[derive(Clone, Debug)]
 pub enum AnalysisError {
@@ -32,17 +34,25 @@ pub enum AnalysisError {
   /// removed by the caller in the first place.
   CriticalEdge { from: BlockIx, to: BlockIx },
 
-  /// Some values in the entry block are livein to the function, while not being
-  /// marked as such.
+  /// Some values in the entry block are live in to the function, but are not
+  /// declared as such.
   EntryLiveinValues,
 
-  /// A non-existing real register has been seen in the code.
-  NonExistingRealReg(RealReg),
+  /// The incoming code has an explicit or implicit mention (use, def or mod)
+  /// of a real register, which either (1) isn't listed in the universe at
+  /// all, or (2) is one of the |suggested_scratch| registers in the universe.
+  /// (1) isn't allowed because the client must mention *all* real registers
+  /// in the universe.  (2) isn't allowed because the client promises to us
+  /// that the |suggested_scratch| registers really are completely unused in
+  /// the incoming code, so that the allocator can use them at literally any
+  /// point it wants.
+  IllegalRealReg(RealReg),
 
   /// At least one block is dead.
   UnreachableBlocks,
 
-  /// Implementation limits exceeded
+  /// Implementation limits exceeded.  The incoming function is too big.  It
+  /// may contain at most 1 million basic blocks and 16 million instructions.
   ImplementationLimitsExceeded,
 }
 
@@ -55,14 +65,14 @@ impl ToString for AnalysisError {
       AnalysisError::EntryLiveinValues => {
         "entry block has live-in value not present in function liveins".into()
       }
-      AnalysisError::NonExistingRealReg(reg) => {
-        format!("instructions mention real register {:?}, which isn't defined in the register universe", reg)
+      AnalysisError::IllegalRealReg(reg) => {
+        format!("instructions mention real register {:?}, which either isn't defined in the register universe, or is a 'suggested_scratch' register", reg)
       }
       AnalysisError::UnreachableBlocks => {
         "at least one block is unreachable".to_string()
       }
       AnalysisError::ImplementationLimitsExceeded => {
-        "implementation limits exceeded (too many blocks, insns, etc)".to_string()
+        "implementation limits exceeded (more than 1 million blocks or 16 million insns)".to_string()
       }
     }
   }
@@ -688,38 +698,495 @@ impl CFGInfo {
 //===========================================================================//
 
 //=============================================================================
-// Extraction and sanitization of reg-use information.
+// Data flow analysis: extraction and sanitization of reg-use information: low
+// level interface
+
+// === The meaning of "sanitization" ===
 //
-// This calls the client's |get_regs| function on each instruction, then
-// "sanitizes" the sets.  See definition of |SanitizedInstRegUses| for meaning
-// of "sanitized".
+// The meaning of "sanitization" is as follows.  Incoming virtual-registerised
+// code may mention a mixture of virtual and real registers.  Those real
+// registers may include some which aren't available for the allocators to
+// use.  Rather than scatter ad-hoc logic all over the analysis phase and the
+// allocators, we simply remove all non-available real registers from the
+// per-instruction use/def/mod sets.  The effect is that, after this point, we
+// can operate on the assumption that any register we come across is either a
+// virtual register or a real register available to the allocator.
+//
+// A real register is available to the allocator iff its index number is less
+// than |RealRegUniverse.allocable|.
+//
+// Furthermore, it is not allowed that any incoming instruction mentions one
+// of the per-class scratch registers listed in
+// |RealRegUniverse.allocable_by_class[..].suggested_scratch| in either a use
+// or mod role.  Sanitisation will also detect this case and return an error.
+// Mentions of a scratch register in a def role are tolerated; however, since
+// no instruction may use or modify a scratch register, all such writes are
+// dead..
+//
+// In all of the above, "mentions" of a real register really means "uses,
+// defines or modifications of said register".  It doesn't matter whether the
+// instruction explicitly mentions the register or whether it is an implicit
+// mention (eg, %cl in x86 shift-by-a-variable-amount instructions).  In other
+// words, a "mention" is any use, def or mod as detected by the client's
+// |get_regs| routine.
 
+// === Filtering of register groups in |RegVec|s ===
+//
+// Filtering on a group is done by leaving the start point unchanged, sliding
+// back retained registers to fill the holes from non-retained registers, and
+// reducing the group length accordingly.  The effect is to effectively "leak"
+// some registers in the group, but that's not a problem.
+//
+// Extraction of register usages for the whole function is done by
+// |get_sanitized_reg_uses_for_func|.  For each instruction, their used,
+// defined and modified register sets are acquired by calling the client's
+// |get_regs| function.  Then each of those three sets are cleaned up as
+// follows:
+//
+// (1) duplicates are removed (after which they really are sets)
+//
+// (2) any registers in the modified set are removed from the used and defined
+//     sets.  This enforces the invariant that |intersect(modified,
+//     union(used, defined))| is the empty set.  Live range fragment
+//     computation (get_RangeFrags_for_block) depends on this property.
+//
+// (3) real registers unavailable to the allocator are removed, per the
+//     abovementioned sanitization rules.
+
+// ==== LOCAL FN ====
+// Given a register group in |regs[start, +len)|, remove duplicates from the
+// group.  The new group size is written to |*len|.
 #[inline(never)]
-fn get_sanitized_reg_uses<F: Function>(
-  func: &F, reg_universe: &RealRegUniverse, sanitize_scratch: bool,
-) -> Result<TypedIxVec<InstIx, SanitizedInstRegUses>, RealReg> {
-  let mut san_reg_uses = TypedIxVec::new();
+fn remove_dups_from_group(regs: &mut Vec<Reg>, start: u32, len: &mut u8) {
+  // First sort the group, to facilitate de-duplication.
+  regs[start as usize..start as usize + *len as usize].sort_unstable();
 
-  let mut scratch_set: Set<Reg> = Set::empty();
-  if sanitize_scratch {
-    for reg_info in &reg_universe.allocable_by_class {
-      if let Some(reg_info) = reg_info {
-        if let Some(scratch_idx) = &reg_info.suggested_scratch {
-          let scratch_reg = reg_universe.regs[*scratch_idx].0;
-          scratch_set.insert(scratch_reg.to_reg());
+  // Now make a compacting pass over the group.  'rd' = read point in the
+  // group, 'wr' = write point in the group.
+  let mut wr = start as usize;
+  for rd in start as usize..start as usize + *len as usize {
+    let reg = regs[rd];
+    if rd == start as usize || regs[rd - 1] != reg {
+      // It's not a duplicate.
+      if wr != rd {
+        regs[wr] = reg;
+      }
+      wr += 1;
+    }
+  }
+
+  let new_len_usize = wr - start as usize;
+  assert!(new_len_usize <= *len as usize);
+  // This narrowing is safe because the old |len| fitted in 8 bits.
+  *len = new_len_usize as u8;
+}
+
+// ==== LOCAL FN ====
+// Remove from |group[group_start, +group_len)| any registers mentioned in
+// |mods[mods_start, +mods_len)|, and update |*group_len| accordingly.
+#[inline(never)]
+fn remove_mods_from_group(
+  group: &mut Vec<Reg>, group_start: u32, group_len: &mut u8, mods: &Vec<Reg>,
+  mods_start: u32, mods_len: u8,
+) {
+  let mut wr = group_start as usize;
+  for rd in group_start as usize..group_start as usize + *group_len as usize {
+    let reg = group[rd];
+    // Only retain |reg| if it is not mentioned in |mods[mods_start, +mods_len)|
+    let mut retain = true;
+    for i in mods_start as usize..mods_start as usize + mods_len as usize {
+      if reg == mods[i] {
+        retain = false;
+        break;
+      }
+    }
+    if retain {
+      if wr != rd {
+        group[wr] = reg;
+      }
+      wr += 1;
+    }
+  }
+  let new_group_len_usize = wr - group_start as usize;
+  assert!(new_group_len_usize <= *group_len as usize);
+  // This narrowing is safe because the old |group_len| fitted in 8 bits.
+  *group_len = new_group_len_usize as u8;
+}
+
+// ==== EXPORTED FN ====
+// For instruction |inst|, add the register uses to the ends of |reg_vecs|,
+// and write bounds information into |bounds|.  The register uses are raw
+// (unsanitized) but they are guaranteed to be duplicate-free and also to have
+// no |mod| mentions in the |use| or |def| groups.  That is, cleanups (1) and
+// (2) above have been done.
+#[inline(never)]
+pub fn add_raw_reg_vecs_for_insn<F: Function>(
+  inst: &F::Inst, reg_vecs: &mut RegVecs, bounds: &mut RegVecBounds,
+) {
+  bounds.uses_start = reg_vecs.uses.len() as u32;
+  bounds.defs_start = reg_vecs.defs.len() as u32;
+  bounds.mods_start = reg_vecs.mods.len() as u32;
+
+  let mut collector = RegUsageCollector::new(reg_vecs);
+  F::get_regs(inst, &mut collector);
+
+  let uses_len = collector.reg_vecs.uses.len() as u32 - bounds.uses_start;
+  let defs_len = collector.reg_vecs.defs.len() as u32 - bounds.defs_start;
+  let mods_len = collector.reg_vecs.mods.len() as u32 - bounds.mods_start;
+
+  // This assertion is important -- the cleanup logic also depends on it.
+  assert!((uses_len | defs_len | mods_len) < 256);
+  bounds.uses_len = uses_len as u8;
+  bounds.defs_len = defs_len as u8;
+  bounds.mods_len = mods_len as u8;
+
+  // First, de-dup the three new groups.
+  if bounds.uses_len > 0 {
+    remove_dups_from_group(
+      &mut collector.reg_vecs.uses,
+      bounds.uses_start,
+      &mut bounds.uses_len,
+    );
+  }
+  if bounds.defs_len > 0 {
+    remove_dups_from_group(
+      &mut collector.reg_vecs.defs,
+      bounds.defs_start,
+      &mut bounds.defs_len,
+    );
+  }
+  if bounds.mods_len > 0 {
+    remove_dups_from_group(
+      &mut collector.reg_vecs.mods,
+      bounds.mods_start,
+      &mut bounds.mods_len,
+    );
+  }
+
+  // And finally, remove modified registers from the set of used and defined
+  // registers, so we don't have to make the client do so.
+  if bounds.mods_len > 0 {
+    if bounds.uses_len > 0 {
+      remove_mods_from_group(
+        &mut collector.reg_vecs.uses,
+        bounds.uses_start,
+        &mut bounds.uses_len,
+        &collector.reg_vecs.mods,
+        bounds.mods_start,
+        bounds.mods_len,
+      );
+    }
+    if bounds.defs_len > 0 {
+      remove_mods_from_group(
+        &mut collector.reg_vecs.defs,
+        bounds.defs_start,
+        &mut bounds.defs_len,
+        &collector.reg_vecs.mods,
+        bounds.mods_start,
+        bounds.mods_len,
+      );
+    }
+  }
+}
+
+// ==== LOCAL FN ====
+// This is the fundamental keep-or-don't-keep? predicate for sanitization.  To
+// do this exactly right we also need to know whether the register is
+// mentioned in a def role (as opposed to a use or mod role).  Note that this
+// function can fail, and the error must be propagated.
+#[inline(never)]
+fn sanitize_should_retain_reg(
+  reg_universe: &RealRegUniverse, reg: Reg, reg_is_defd: bool,
+) -> Result<bool, RealReg> {
+  // Retain all virtual regs.
+  if reg.is_virtual() {
+    return Ok(true);
+  }
+
+  // So it's a RealReg.
+  let rreg_ix = reg.get_index();
+
+  // Check that this RealReg is mentioned in the universe.
+  if rreg_ix >= reg_universe.regs.len() {
+    // This is a serious error which should be investigated.  It means the
+    // client gave us an instruction which mentions a RealReg which isn't
+    // listed in the RealRegUniverse it gave us.  That's not allowed.
+    return Err(reg.as_real_reg().unwrap());
+  }
+
+  // Discard all real regs that aren't available to the allocator.
+  if rreg_ix >= reg_universe.allocable {
+    return Ok(false);
+  }
+
+  // It isn't allowed for the client to give us an instruction which reads or
+  // modifies one of the scratch registers.  It is however allowed to write a
+  // scratch register.
+  for reg_info in &reg_universe.allocable_by_class {
+    if let Some(reg_info) = reg_info {
+      if let Some(scratch_idx) = &reg_info.suggested_scratch {
+        let scratch_reg = reg_universe.regs[*scratch_idx].0;
+        if reg.to_real_reg() == scratch_reg {
+          if !reg_is_defd {
+            // This is an error (on the part of the client).
+            return Err(reg.as_real_reg().unwrap());
+          }
         }
       }
     }
   }
 
-  for inst in func.insns() {
-    let iru = func.get_regs(inst); // AUDITED
-    let mut sru =
-      SanitizedInstRegUses::create_by_sanitizing(&iru, reg_universe)?;
-    sru.san_defined.remove(&scratch_set);
-    san_reg_uses.push(sru);
+  // |reg| is mentioned in the universe, is available to the allocator, and if
+  // it is one of the scratch regs, it is only written, not read or modified.
+  Ok(true)
+}
+// END helper fn
+
+// ==== LOCAL FN ====
+// Given a register group in |regs[start, +len)|, sanitize the group.  To do
+// this exactly right we also need to know whether the registers in the group
+// are mentioned in def roles (as opposed to use or mod roles).  Sanitisation
+// can fail, in which case we must propagate the error.  If it is successful,
+// the new group size is written to |*len|.
+#[inline(never)]
+fn sanitize_group(
+  reg_universe: &RealRegUniverse, regs: &mut Vec<Reg>, start: u32,
+  len: &mut u8, is_def_group: bool,
+) -> Result<(), RealReg> {
+  // Make a single compacting pass over the group.  'rd' = read point in the
+  // group, 'wr' = write point in the group.
+  let mut wr = start as usize;
+  for rd in start as usize..start as usize + *len as usize {
+    let reg = regs[rd];
+    // This call can fail:
+    if sanitize_should_retain_reg(reg_universe, reg, is_def_group)? {
+      if wr != rd {
+        regs[wr] = reg;
+      }
+      wr += 1;
+    }
   }
-  Ok(san_reg_uses)
+
+  let new_len_usize = wr - start as usize;
+  assert!(new_len_usize <= *len as usize);
+  // This narrowing is safe because the old |len| fitted in 8 bits.
+  *len = new_len_usize as u8;
+  Ok(())
+}
+
+// ==== LOCAL FN ====
+// For instruction |inst|, add the fully cleaned-up register uses to the ends
+// of |reg_vecs|, and write bounds information into |bounds|.  Cleanups (1)
+// (2) and (3) mentioned above have been done.  Note, this can fail, and the
+// error must be propagated.
+#[inline(never)]
+fn add_san_reg_vecs_for_insn<F: Function>(
+  inst: &F::Inst, reg_universe: &RealRegUniverse, reg_vecs: &mut RegVecs,
+  bounds: &mut RegVecBounds,
+) -> Result<(), RealReg> {
+  // Get the raw reg usages.  These will be dup-free and mod-cleaned-up
+  // (meaning cleanups (1) and (3) have been done).
+  add_raw_reg_vecs_for_insn::<F>(inst, reg_vecs, bounds);
+
+  // Finally and sanitize them.  Any errors from sanitization are propagated.
+  if bounds.uses_len > 0 {
+    sanitize_group(
+      &reg_universe,
+      &mut reg_vecs.uses,
+      bounds.uses_start,
+      &mut bounds.uses_len,
+      /*is_def_group=*/ false,
+    )?;
+  }
+  if bounds.defs_len > 0 {
+    sanitize_group(
+      &reg_universe,
+      &mut reg_vecs.defs,
+      bounds.defs_start,
+      &mut bounds.defs_len,
+      /*is_def_group=*/ true,
+    )?;
+  }
+  if bounds.mods_len > 0 {
+    sanitize_group(
+      &reg_universe,
+      &mut reg_vecs.mods,
+      bounds.mods_start,
+      &mut bounds.mods_len,
+      /*is_def_group=*/ false,
+    )?;
+  }
+
+  Ok(())
+}
+
+// ==== MAIN FN ====
+#[inline(never)]
+fn get_sanitized_reg_uses_for_func<F: Function>(
+  func: &F, reg_universe: &RealRegUniverse,
+) -> Result<RegVecsAndBounds, RealReg> {
+  let num_insns = func.insns().len();
+
+  // These are modified by the per-insn loop.
+  let mut reg_vecs = RegVecs::new(false);
+  let mut bounds_vec = TypedIxVec::<InstIx, RegVecBounds>::new();
+  bounds_vec.reserve(num_insns);
+
+  // For each insn, add their register uses to the ends of the 3 vectors in
+  // |reg_vecs|, and create an admin entry to describe the 3 new groups.  Any
+  // errors from sanitization are propagated.
+  for insn in func.insns() {
+    let mut bounds = RegVecBounds::new();
+    add_san_reg_vecs_for_insn::<F>(
+      insn,
+      &reg_universe,
+      &mut reg_vecs,
+      &mut bounds,
+    )?;
+
+    bounds_vec.push(bounds);
+  }
+
+  assert!(!reg_vecs.is_sanitized());
+  reg_vecs.set_sanitized(true);
+
+  if log_enabled!(Level::Debug) {
+    let show_reg = |r: Reg| {
+      if r.is_real() {
+        reg_universe.regs[r.get_index()].1.clone()
+      } else {
+        format!("{:?}", r).to_string()
+      }
+    };
+    let show_regs = |r_vec: &[Reg]| {
+      let mut s = "".to_string();
+      for r in r_vec {
+        s = s + &show_reg(*r) + &" ".to_string();
+      }
+      s
+    };
+
+    for i in 0..bounds_vec.len() {
+      let iix = InstIx::new(i);
+      let s_use = show_regs(
+        &reg_vecs.uses[bounds_vec[iix].uses_start as usize
+          ..bounds_vec[iix].uses_start as usize
+            + bounds_vec[iix].uses_len as usize],
+      );
+      let s_mod = show_regs(
+        &reg_vecs.mods[bounds_vec[iix].mods_start as usize
+          ..bounds_vec[iix].mods_start as usize
+            + bounds_vec[iix].mods_len as usize],
+      );
+      let s_def = show_regs(
+        &reg_vecs.defs[bounds_vec[iix].defs_start as usize
+          ..bounds_vec[iix].defs_start as usize
+            + bounds_vec[iix].defs_len as usize],
+      );
+      debug!(
+        "{:?}  SAN_RU: use {{ {}}} mod {{ {}}} def {{ {}}}",
+        iix, s_use, s_mod, s_def
+      );
+    }
+  }
+
+  Ok(RegVecsAndBounds::new(reg_vecs, bounds_vec))
+}
+// END main function
+
+//=============================================================================
+// Data flow analysis: extraction and sanitization of reg-use information:
+// convenience interface
+
+// ==== EXPORTED ====
+#[inline(never)]
+pub fn does_inst_use_def_or_mod_reg(
+  rvb: &RegVecsAndBounds, iix: InstIx, reg: Reg,
+) -> (/*uses*/ bool, /*defs*/ bool, /*mods*/ bool) {
+  let bounds = &rvb.bounds[iix];
+  let vecs = &rvb.vecs;
+  let mut uses = false;
+  let mut defs = false;
+  let mut mods = false;
+  // Since each group of registers is in order and duplicate-free (as a result
+  // of |remove_dups_from_group|), we could in theory binary-search here.  But
+  // it'd almost certainly be a net loss; the group sizes are very small,
+  // often zero.
+  for i in bounds.uses_start as usize
+    ..bounds.uses_start as usize + bounds.uses_len as usize
+  {
+    if vecs.uses[i] == reg {
+      uses = true;
+      break;
+    }
+  }
+  for i in bounds.defs_start as usize
+    ..bounds.defs_start as usize + bounds.defs_len as usize
+  {
+    if vecs.defs[i] == reg {
+      defs = true;
+      break;
+    }
+  }
+  for i in bounds.mods_start as usize
+    ..bounds.mods_start as usize + bounds.mods_len as usize
+  {
+    if vecs.mods[i] == reg {
+      mods = true;
+      break;
+    }
+  }
+  (uses, defs, mods)
+}
+
+// ==== EXPORTED ====
+// This is slow, really slow.  Don't use it on critical paths.  This applies
+// |get_regs| to |inst|, performs cleanups (1) and (2), but does not sanitize
+// the results.  The results are wrapped up as Sets for convenience.
+#[inline(never)]
+pub fn get_raw_reg_sets_for_insn<F: Function>(inst: &F::Inst) -> RegSets {
+  let mut reg_vecs = RegVecs::new(false);
+  let mut bounds = RegVecBounds::new();
+
+  add_raw_reg_vecs_for_insn::<F>(inst, &mut reg_vecs, &mut bounds);
+
+  // Make up a fake RegVecsAndBounds for just this insn, so we can hand it to
+  // RegVecsAndBounds::get_reg_sets_for_iix.
+  let mut single_insn_bounds = TypedIxVec::<InstIx, RegVecBounds>::new();
+  single_insn_bounds.push(bounds);
+
+  assert!(!reg_vecs.is_sanitized());
+  let single_insn_rvb = RegVecsAndBounds::new(reg_vecs, single_insn_bounds);
+  single_insn_rvb.get_reg_sets_for_iix(InstIx::new(0))
+}
+
+// ==== EXPORTED ====
+// This is even slower.  This applies |get_regs| to |inst|, performs cleanups
+// (1) (2) and (3).  The results are wrapped up as Sets for convenience.  Note
+// this function can fail.
+#[inline(never)]
+pub fn get_san_reg_sets_for_insn<F: Function>(
+  inst: &F::Inst, reg_universe: &RealRegUniverse,
+) -> Result<RegSets, RealReg> {
+  let mut reg_vecs = RegVecs::new(false);
+  let mut bounds = RegVecBounds::new();
+
+  add_san_reg_vecs_for_insn::<F>(
+    inst,
+    &reg_universe,
+    &mut reg_vecs,
+    &mut bounds,
+  )?;
+
+  // Make up a fake RegVecsAndBounds for just this insn, so we can hand it to
+  // RegVecsAndBounds::get_reg_sets_for_iix.
+  let mut single_insn_bounds = TypedIxVec::<InstIx, RegVecBounds>::new();
+  single_insn_bounds.push(bounds);
+
+  assert!(!reg_vecs.is_sanitized());
+  reg_vecs.set_sanitized(true);
+  let single_insn_rvb = RegVecsAndBounds::new(reg_vecs, single_insn_bounds);
+  Ok(single_insn_rvb.get_reg_sets_for_iix(InstIx::new(0)))
 }
 
 //=============================================================================
@@ -728,36 +1195,50 @@ fn get_sanitized_reg_uses<F: Function>(
 // Returned TypedIxVecs contain one element per block
 #[inline(never)]
 fn calc_def_and_use<F: Function>(
-  func: &F, san_reg_uses: &TypedIxVec<InstIx, SanitizedInstRegUses>,
+  func: &F, rvb: &RegVecsAndBounds,
 ) -> (TypedIxVec<BlockIx, Set<Reg>>, TypedIxVec<BlockIx, Set<Reg>>) {
   info!("    calc_def_and_use: begin");
+  assert!(rvb.is_sanitized());
   let mut def_sets = TypedIxVec::new();
   let mut use_sets = TypedIxVec::new();
   for b in func.blocks() {
     let mut def = Set::empty();
     let mut uce = Set::empty();
     for iix in func.block_insns(b) {
-      let sru = &san_reg_uses[iix];
-      // Add to |uce|, any registers for which the first event
-      // in this block is a read.  Dealing with the "first event"
-      // constraint is a bit tricky.
-      for u in sru.san_used.iter().chain(sru.san_modified.iter()) {
-        // |u| is used (either read or modified) by the
-        // instruction.  Whether or not we should consider it
-        // live-in for the block depends on whether it was been
-        // written earlier in the block.  We can determine that by
-        // checking whether it is already in the def set for the
-        // block.
-        if !def.contains(*u) {
-          uce.insert(*u);
+      let bounds_for_iix = &rvb.bounds[iix];
+      // Add to |uce|, any registers for which the first event in this block
+      // is a read.  Dealing with the "first event" constraint is a bit
+      // tricky.  In the next two loops, |u| and |m| is used (either read or
+      // modified) by the instruction.  Whether or not we should consider it
+      // live-in for the block depends on whether it was been written earlier
+      // in the block.  We can determine that by checking whether it is
+      // already in the def set for the block.
+      for i in bounds_for_iix.uses_start as usize
+        ..bounds_for_iix.uses_start as usize + bounds_for_iix.uses_len as usize
+      {
+        let u = rvb.vecs.uses[i];
+        if !def.contains(u) {
+          uce.insert(u);
         }
       }
+      for i in bounds_for_iix.mods_start as usize
+        ..bounds_for_iix.mods_start as usize + bounds_for_iix.mods_len as usize
+      {
+        let m = rvb.vecs.mods[i];
+        if !def.contains(m) {
+          uce.insert(m);
+        }
+      }
+
       // Now add to |def|, all registers written by the instruction.
       // This is simpler.
       // FIXME: isn't this just: defs union= (regs_d union regs_m) ?
       // (Similar comment applies for the |uce| update too)
-      for d in sru.san_defined.iter().chain(sru.san_modified.iter()) {
-        def.insert(*d);
+      for i in bounds_for_iix.defs_start as usize
+        ..bounds_for_iix.defs_start as usize + bounds_for_iix.defs_len as usize
+      {
+        let d = rvb.vecs.defs[i];
+        def.insert(d);
       }
     }
     def_sets.push(def);
@@ -900,13 +1381,12 @@ fn calc_livein_and_liveout<F: Function>(
 
 // Calculate all the RangeFrags for |bix|.  Add them to |outFEnv| and add to
 // |outMap|, the associated RangeFragIxs, segregated by Reg.  |bix|, |livein|,
-// |liveout| and |san_reg_uses| are expected to be valid in the context of the
-// Func |f| (duh!)
+// |liveout| and |rvb| are expected to be valid in the context of the Func |f|
+// (duh!)
 #[inline(never)]
 fn get_RangeFrags_for_block<F: Function>(
   func: &F, bix: BlockIx, livein: &Set<Reg>, liveout: &Set<Reg>,
-  san_reg_uses: &TypedIxVec<InstIx, SanitizedInstRegUses>,
-  outMap: &mut Map<Reg, Vec<RangeFragIx>>,
+  rvb: &RegVecsAndBounds, outMap: &mut Map<Reg, Vec<RangeFragIx>>,
   outFEnv: &mut TypedIxVec<RangeFragIx, RangeFrag>,
 ) {
   //println!("QQQQ --- block {}", bix.show());
@@ -991,11 +1471,14 @@ fn get_RangeFrags_for_block<F: Function>(
   // Now visit each instruction in turn, examining first the registers
   // it reads, then those it modifies, and finally those it writes.
   for iix in func.block_insns(bix) {
-    let sru = &san_reg_uses[iix];
+    let bounds_for_iix = &rvb.bounds[iix];
 
     // Examine reads.  This is pretty simple.  They simply extend an
     // existing ProtoRangeFrag to the U point of the reading insn.
-    for r in sru.san_used.iter() {
+    for i in bounds_for_iix.uses_start as usize
+      ..bounds_for_iix.uses_start as usize + bounds_for_iix.uses_len as usize
+    {
+      let r = &rvb.vecs.uses[i];
       let new_pf: ProtoRangeFrag;
       match state.get(r) {
         // First event for |r| is a read, but it's not listed in
@@ -1024,7 +1507,10 @@ fn get_RangeFrags_for_block<F: Function>(
     // Examine modifies.  These are handled almost identically to
     // reads, except that they extend an existing ProtoRangeFrag down to
     // the D point of the modifying insn.
-    for r in sru.san_modified.iter() {
+    for i in bounds_for_iix.mods_start as usize
+      ..bounds_for_iix.mods_start as usize + bounds_for_iix.mods_len as usize
+    {
+      let r = &rvb.vecs.mods[i];
       let new_pf: ProtoRangeFrag;
       match state.get(r) {
         // First event for |r| is a read (really, since this insn
@@ -1051,7 +1537,10 @@ fn get_RangeFrags_for_block<F: Function>(
     // general idea is that a write causes us to terminate the
     // existing ProtoRangeFrag, if any, add it to |tmpResultVec|,
     // and start a new frag.
-    for r in sru.san_defined.iter() {
+    for i in bounds_for_iix.defs_start as usize
+      ..bounds_for_iix.defs_start as usize + bounds_for_iix.defs_len as usize
+    {
+      let r = &rvb.vecs.defs[i];
       let new_pf: ProtoRangeFrag;
       match state.get(r) {
         // First mention of a Reg we've never heard of before.
@@ -1162,11 +1651,12 @@ fn get_RangeFrags_for_block<F: Function>(
 fn get_RangeFrags<F: Function>(
   func: &F, livein_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>,
   liveout_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>,
-  san_reg_uses: &TypedIxVec<InstIx, SanitizedInstRegUses>,
+  rvb: &RegVecsAndBounds,
 ) -> (Map<Reg, Vec<RangeFragIx>>, TypedIxVec<RangeFragIx, RangeFrag>) {
   info!("    get_RangeFrags: begin");
-  debug_assert!(livein_sets_per_block.len() == func.blocks().len() as u32);
-  debug_assert!(liveout_sets_per_block.len() == func.blocks().len() as u32);
+  assert!(livein_sets_per_block.len() == func.blocks().len() as u32);
+  assert!(liveout_sets_per_block.len() == func.blocks().len() as u32);
+  assert!(rvb.is_sanitized());
   let mut resMap = Map::<Reg, Vec<RangeFragIx>>::default();
   let mut resFEnv = TypedIxVec::<RangeFragIx, RangeFrag>::new();
   for bix in func.blocks() {
@@ -1175,7 +1665,7 @@ fn get_RangeFrags<F: Function>(
       bix,
       &livein_sets_per_block[bix],
       &liveout_sets_per_block[bix],
-      &san_reg_uses,
+      &rvb,
       &mut resMap,
       &mut resFEnv,
     );
@@ -1760,11 +2250,11 @@ fn set_VirtualRange_metrics(
 
 #[inline(never)]
 pub fn run_analysis<F: Function>(
-  func: &F, reg_universe: &RealRegUniverse, sanitize_scratch: bool,
+  func: &F, reg_universe: &RealRegUniverse,
 ) -> Result<
   (
     // The sanitized per-insn reg-use info
-    TypedIxVec<InstIx, SanitizedInstRegUses>,
+    RegVecsAndBounds,
     // The real-reg live ranges
     TypedIxVec<RealRangeIx, RealRange>,
     // The virtual-reg live ranges
@@ -1810,14 +2300,14 @@ pub fn run_analysis<F: Function>(
   // Now perform dataflow analysis.  This is somewhat more complex.
   info!("  run_analysis: begin data flow analysis");
 
-  // See |get_sanitized_reg_uses| for the meaning of "sanitized".
-  let san_reg_uses =
-    get_sanitized_reg_uses(func, reg_universe, sanitize_scratch)
-      .map_err(|reg| AnalysisError::NonExistingRealReg(reg))?;
+  // See |get_sanitized_reg_uses_for_func| for the meaning of "sanitized".
+  let reg_vecs_and_bounds = get_sanitized_reg_uses_for_func(func, reg_universe)
+    .map_err(|reg| AnalysisError::IllegalRealReg(reg))?;
+  assert!(reg_vecs_and_bounds.is_sanitized());
 
   // Calculate block-local def/use sets.
   let (def_sets_per_block, use_sets_per_block) =
-    calc_def_and_use(func, &san_reg_uses);
+    calc_def_and_use(func, &reg_vecs_and_bounds);
   debug_assert!(def_sets_per_block.len() == func.blocks().len() as u32);
   debug_assert!(use_sets_per_block.len() == func.blocks().len() as u32);
 
@@ -1877,7 +2367,7 @@ pub fn run_analysis<F: Function>(
     func,
     &livein_sets_per_block,
     &liveout_sets_per_block,
-    &san_reg_uses,
+    &reg_vecs_and_bounds,
   );
 
   let (rlr_env, mut vlr_env) =
@@ -1905,7 +2395,7 @@ pub fn run_analysis<F: Function>(
   info!("run_analysis: end");
 
   Ok((
-    san_reg_uses,
+    reg_vecs_and_bounds,
     rlr_env,
     vlr_env,
     frag_env,

@@ -82,9 +82,9 @@ impl fmt::Debug for RI {
   }
 }
 impl RI {
-  fn add_reg_reads_to(&self, uce: &mut Set<Reg>) {
+  fn add_reg_reads_to(&self, collector: &mut RegUsageCollector) {
     match self {
-      RI::Reg { reg } => uce.insert(*reg),
+      RI::Reg { reg } => collector.add_use(*reg),
       RI::Imm { .. } => {}
     }
   }
@@ -139,12 +139,12 @@ impl fmt::Debug for AM {
 }
 
 impl AM {
-  fn add_reg_reads_to(&self, uce: &mut Set<Reg>) {
+  fn add_reg_reads_to(&self, collector: &mut RegUsageCollector) {
     match self {
-      AM::RI { base, .. } => uce.insert(*base),
+      AM::RI { base, .. } => collector.add_use(*base),
       AM::RR { base, offset } => {
-        uce.insert(*base);
-        uce.insert(*offset);
+        collector.add_use(*base);
+        collector.add_use(*offset);
       }
     }
   }
@@ -656,86 +656,78 @@ impl Inst {
   //
   // Also the following must hold: the union of |def| and |use| must be
   // disjoint from |mod|.
-  pub fn get_reg_usage(
-    &self,
-  ) -> (Set<Writable<Reg>>, Set<Writable<Reg>>, Set<Reg>) {
-    let mut defined = Set::<Writable<Reg>>::empty();
-    let mut modified = Set::<Writable<Reg>>::empty();
-    let mut used = Set::<Reg>::empty();
-
+  pub fn get_reg_usage(&self, collector: &mut RegUsageCollector) {
     match self {
       Inst::NopZ {} => {}
       Inst::Imm { dst, imm: _ } => {
-        defined.insert(Writable::from_reg(*dst));
+        collector.add_def(Writable::from_reg(*dst));
       }
       Inst::ImmF { dst, imm: _ } => {
-        defined.insert(Writable::from_reg(*dst));
+        collector.add_def(Writable::from_reg(*dst));
       }
       Inst::Copy { dst, src } => {
-        defined.insert(Writable::from_reg(*dst));
-        used.insert(*src);
+        collector.add_def(Writable::from_reg(*dst));
+        collector.add_use(*src);
       }
       Inst::CopyF { dst, src } => {
-        defined.insert(Writable::from_reg(*dst));
-        used.insert(*src);
+        collector.add_def(Writable::from_reg(*dst));
+        collector.add_use(*src);
       }
       Inst::BinOp { op: _, dst, src_left, src_right } => {
-        defined.insert(Writable::from_reg(*dst));
-        used.insert(*src_left);
-        src_right.add_reg_reads_to(&mut used);
+        collector.add_def(Writable::from_reg(*dst));
+        collector.add_use(*src_left);
+        src_right.add_reg_reads_to(collector);
       }
       Inst::BinOpM { op: _, dst, src_right } => {
-        modified.insert(Writable::from_reg(*dst));
-        src_right.add_reg_reads_to(&mut used);
+        collector.add_mod(Writable::from_reg(*dst));
+        src_right.add_reg_reads_to(collector);
       }
       Inst::BinOpF { op: _, dst, src_left, src_right } => {
-        defined.insert(Writable::from_reg(*dst));
-        used.insert(*src_left);
-        used.insert(*src_right);
+        collector.add_def(Writable::from_reg(*dst));
+        collector.add_use(*src_left);
+        collector.add_use(*src_right);
       }
       Inst::Store { addr, src } => {
-        addr.add_reg_reads_to(&mut used);
-        used.insert(*src);
+        addr.add_reg_reads_to(collector);
+        collector.add_use(*src);
       }
       Inst::StoreF { addr, src } => {
-        addr.add_reg_reads_to(&mut used);
-        used.insert(*src);
+        addr.add_reg_reads_to(collector);
+        collector.add_use(*src);
       }
       Inst::Load { dst, addr } => {
-        defined.insert(Writable::from_reg(*dst));
-        addr.add_reg_reads_to(&mut used);
+        collector.add_def(Writable::from_reg(*dst));
+        addr.add_reg_reads_to(collector);
       }
       Inst::LoadF { dst, addr } => {
-        defined.insert(Writable::from_reg(*dst));
-        addr.add_reg_reads_to(&mut used);
+        collector.add_def(Writable::from_reg(*dst));
+        addr.add_reg_reads_to(collector);
       }
       Inst::Goto { .. } => {}
       Inst::GotoCTF { cond, target_true: _, target_false: _ } => {
-        used.insert(*cond);
+        collector.add_use(*cond);
       }
       Inst::PrintS { .. } => {}
       Inst::PrintI { reg } => {
-        used.insert(*reg);
+        collector.add_use(*reg);
       }
       Inst::PrintF { reg } => {
-        used.insert(*reg);
+        collector.add_use(*reg);
       }
       Inst::Finish { reg } => {
         if let Some(reg) = reg {
-          used.insert(*reg);
+          collector.add_use(*reg);
         }
       }
       // Spill and Reload are seen here during the final pass over insts that
       // computes clobbered regs.
       Inst::Spill { src, .. } | Inst::SpillF { src, .. } => {
-        used.insert(src.to_reg());
+        collector.add_use(src.to_reg());
       }
       Inst::Reload { dst, .. } | Inst::ReloadF { dst, .. } => {
-        defined.insert(Writable::from_reg(dst.to_reg()));
+        collector.add_def(Writable::from_reg(dst.to_reg()));
       }
     }
-
-    (defined, modified, used)
   }
 
   /// Apply the specified VirtualReg->RealReg mappings to the instruction,
@@ -1449,10 +1441,25 @@ impl Func {
 
     for b in self.blocks.iter() {
       for i in b.start.get()..b.start.get() + b.len {
-        let ix = InstIx::new(i);
-        let (defined, modified, used) = self.insns[ix].get_reg_usage();
-        for reg in defined.iter().chain(modified.iter()) {
-          let reg = reg.to_reg();
+        let iix = InstIx::new(i);
+
+        // Get the use, def and mod sets for |self.insns[iix]|.  This is a bit
+        // awkward since we don't have the library's internal convenience
+        // functions available here.
+        let mut ru_vecs =
+          RegUsageCollector::get_empty_RegVecs_TEST_FRAMEWORK_ONLY(false);
+        let mut ru_collector = RegUsageCollector::new(&mut ru_vecs);
+
+        self.insns[iix].get_reg_usage(&mut ru_collector);
+        assert!(!ru_collector.reg_vecs.is_sanitized());
+
+        let (used_vec, defined_vec, modified_vec) =
+          ru_collector.get_use_def_mod_vecs_TEST_FRAMEWORK_ONLY();
+        let used = Set::from_vec(used_vec);
+        let defined = Set::from_vec(defined_vec);
+        let modified = Set::from_vec(modified_vec);
+
+        for &reg in defined.iter().chain(modified.iter()) {
           if reg.is_virtual() {
             used_vregs.insert(reg);
           } else {
@@ -1889,9 +1896,8 @@ impl regalloc::Function for Func {
   }
 
   /// Provide the defined, used, and modified registers for an instruction.
-  fn get_regs(&self, insn: &Self::Inst) -> regalloc::InstRegUses {
-    let (d, m, u) = insn.get_reg_usage();
-    regalloc::InstRegUses { used: u, defined: d, modified: m }
+  fn get_regs(insn: &Self::Inst, collector: &mut RegUsageCollector) {
+    insn.get_reg_usage(collector);
   }
 
   /// Map each register slot through a virt -> phys mapping indexed

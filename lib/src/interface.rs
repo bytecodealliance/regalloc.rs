@@ -51,8 +51,9 @@ pub use crate::data_structures::SpillSlot;
 // The "register universe".  This describes the registers available to the
 // allocator.  There are very strict requirements on the structure of the
 // universe.  If you fail to observe these requirements, either the allocator
-// itself, or the resulting code, will fail in mysterious ways.  There are
-// lower level details on the definition of RealRegUniverse, which you also
+// itself, or the resulting code, will fail in mysterious ways, and your life
+// will be miserable while you try to figure out what happened.  There are
+// lower level details on the definition of RealRegUniverse which you also
 // need to take note of.  The overall contract is as follows.
 //
 // === (1) === Basic structure ===
@@ -66,7 +67,7 @@ pub use crate::data_structures::SpillSlot;
 // virtual-registerised code may use, but which are not available for use by
 // the allocator.  Indeed, the universe *must* list *all* registers that will
 // ever be mentioned in the incoming code.  Failure to do so will cause the
-// allocator's analysis phase to assert.
+// allocator's analysis phase to return an error.
 //
 // === (2) === Ordering of registers within each class
 //
@@ -81,20 +82,20 @@ pub use crate::data_structures::SpillSlot;
 // if possible.
 //
 // There is a twist here, however.  The abovementioned heuristic works well
-// for non-leaf functions (functions that contain at least one call).
-// However, for leaf functions, we would prefer to use the caller-saved
-// registers first, since doing so has potential to minimise the number of
-// registers that must be saved/restored in the prologue and epilogue.
-// Presently there is no way to tell this interface that the function is a
-// leaf function, and so the only way to get optimal code in this case is to
-// present a universe with the registers listed in the opposite order.
+// for non-leaf functions (functions that contain at least one call).  But for
+// leaf functions, we would prefer to use the caller-saved registers first,
+// since doing so has potential to minimise the number of registers that must
+// be saved/restored in the prologue and epilogue.  Presently there is no way
+// to tell this interface that the function is a leaf function, and so the
+// only way to get optimal code in this case is to present a universe with the
+// registers listed in the opposite order.
 //
 // This is of course inconvenient for the caller, since it requires
 // maintenance of two separate universes.  In the future we will add a boolean
 // parameter to the top level function |allocate_registers| that indicates
 // that whether or not the function is a leaf function.
 //
-// === (3) === The "reserved register" ===
+// === (3) === The "suggested scratch register" ===
 //
 // Some allocation algorithms, particularly linear-scan, may need to have a
 // scratch register available for their own use.  The register universe must
@@ -110,19 +111,18 @@ pub use crate::data_structures::SpillSlot;
 //     there is no easy way for this library to check that.
 //
 // (3) The reserved register must not have any reads or modifies by any
-//     instruction in the vcode.  In other words, it must not appear in either
-//     the Use or Modify sets returned by Function::get_regs, for any
-//     instruction.  If it does appear, this is an error on the client's part,
-//     and the allocator is allowed to assert/fail.
+//     instruction in the vcode.  In other words, it must not be handed to
+//     either the |add_use| or |add_mod| function of the |RegUsageCollector|
+//     that is presented to the client's |get_regs| function.  If any such
+//     mention is detected, the library will return an error.
 //
 // (4) The reserved reg may be mentioned as written by instructions in the
-//     vcode, though -- in other words it may appear in the Defined sets
-//     created by Function::get_regs.  This library will tolerate and
-//     correctly handle that.  However, because no vcode instruction may read
-//     or modify the reserved register, all such writes are "dead".  This in
-//     turn guarantees that the allocator can, if it wants, change the value
-//     in it at any time, without changing the behaviour of the final
-//     generated code.
+//     vcode, though -- in other words it may be handed to |add_def|.  The
+//     library will tolerate and correctly handle that.  However, because no
+//     vcode instruction may read or modify the reserved register, all such
+//     writes are "dead".  This in turn guarantees that the allocator can, if
+//     it wants, change the value in it at any time, without changing the
+//     behaviour of the final generated code.
 //
 // Currently, the LinearScan algorithm may use the reserved registers.  The
 // Backtracking algorithm will ignore the hints and treat them as "normal"
@@ -131,9 +131,10 @@ pub use crate::data_structures::SpillSlot;
 pub use crate::data_structures::RealRegUniverse;
 pub use crate::data_structures::RegClassInfo;
 
-// Register uses for one instruction.
+// A structure for collecting information about which registers each
+// instruction uses.
 
-pub use crate::data_structures::InstRegUses;
+pub use crate::data_structures::RegUsageCollector;
 
 // TypedIxVector, so that the interface can speak about vectors of blocks and
 // instructions.
@@ -189,11 +190,9 @@ pub trait Function {
   // Instruction register slots
   // --------------------------
 
-  /// Provide the defined, used, and modified registers for an instruction.
-  /// Note that it is required that if a register is present in the modified
-  /// set, then it is not present in either the used or defined sets.
-  /// Implementations of this function must take care to ensure that.
-  fn get_regs(&self, insn: &Self::Inst) -> InstRegUses;
+  /// Add to |collector| the used, defined, and modified registers for an
+  /// instruction.
+  fn get_regs(insn: &Self::Inst, collector: &mut RegUsageCollector);
 
   /// Map each register slot through a virtual-to-real mapping indexed
   /// by virtual register. The two separate maps provide the
@@ -331,6 +330,7 @@ pub use crate::checker::{CheckerError, CheckerErrors};
 #[derive(Clone, Debug)]
 pub enum RegAllocError {
   OutOfRegisters(RegClass),
+  MissingSuggestedScratchReg(RegClass),
   Analysis(AnalysisError),
   RegChecker(CheckerErrors),
   Other(String),

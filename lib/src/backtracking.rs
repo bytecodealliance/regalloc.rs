@@ -12,13 +12,13 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
 
-use crate::analysis::run_analysis;
+use crate::analysis::{does_inst_use_def_or_mod_reg, run_analysis};
 use crate::avl_tree::{AVLTag, AVLTree, AVL_NULL};
 use crate::data_structures::{
   cmp_range_frags, BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx,
-  RangeFragKind, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, Set,
-  SortedRangeFragIxs, SpillCost, SpillSlot, TypedIxVec, VirtualRange,
-  VirtualRangeIx, VirtualReg, Writable,
+  RangeFragKind, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg,
+  RegVecsAndBounds, Set, SortedRangeFragIxs, SpillCost, SpillSlot, TypedIxVec,
+  VirtualRange, VirtualRangeIx, VirtualReg, Writable,
 };
 use crate::inst_stream::{
   edit_inst_stream, InstAndPoint, InstToInsert, InstsAndPoints,
@@ -410,7 +410,8 @@ impl ToFromU32 for VirtualRangeIx {
 
 #[inline(never)]
 fn do_coalescing_analysis<F: Function>(
-  func: &F, rlr_env: &TypedIxVec<RealRangeIx, RealRange>,
+  func: &F, reg_vecs_and_bounds: &RegVecsAndBounds,
+  rlr_env: &TypedIxVec<RealRangeIx, RealRange>,
   vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
   est_freqs: &TypedIxVec<BlockIx, u32>,
@@ -557,7 +558,27 @@ fn do_coalescing_analysis<F: Function>(
       match im {
         None => {}
         Some((wreg, reg)) => {
-          connectedByMoves.push((wreg.to_reg(), reg, iix, block_eef));
+          let iix_bounds = &reg_vecs_and_bounds.bounds[iix];
+          // It might seem strange to assert that defs_len is <= 1 rather than
+          // == 1.  But -- as fuzzing shows -- it might be that the
+          // destination of a copy is a real reg that is one of the
+          // RealRegUniverse |suggested_scratch| registers.  It is allowable
+          // for such a register to be defined, but not used or modified.
+          // However, sanitisation will ensure it is not present in any of the
+          // three register sets.  Hence the assertions and the following
+          // conditional block.  If any of the following five assertions fail,
+          // the client's |is_move| is probably lying to us.
+          assert!(iix_bounds.uses_len == 1);
+          assert!(iix_bounds.defs_len <= 1);
+          assert!(iix_bounds.mods_len == 0);
+          if iix_bounds.uses_len == 1 && iix_bounds.defs_len == 1 {
+            let reg_vecs = &reg_vecs_and_bounds.vecs;
+            assert!(reg_vecs.uses[iix_bounds.uses_start as usize] == reg);
+            assert!(
+              reg_vecs.defs[iix_bounds.defs_start as usize] == wreg.to_reg()
+            );
+            connectedByMoves.push((wreg.to_reg(), reg, iix, block_eef));
+          }
         }
       }
     }
@@ -1814,13 +1835,26 @@ pub fn alloc_main<F: Function>(
 ) -> Result<RegAllocResult<F>, RegAllocError> {
   // -------- Perform initial liveness analysis --------
   // Note that the analysis phase can fail; hence we propagate any error.
-  let (san_reg_uses, rlr_env, mut vlr_env, mut frag_env, _liveouts, est_freqs) =
-    run_analysis(func, reg_universe, /* sanitize scratch */ false)
-      .map_err(|err| RegAllocError::Analysis(err))?;
+  let (
+    reg_vecs_and_bounds,
+    rlr_env,
+    mut vlr_env,
+    mut frag_env,
+    _liveouts,
+    est_freqs,
+  ) = run_analysis(func, reg_universe)
+    .map_err(|err| RegAllocError::Analysis(err))?;
+  assert!(reg_vecs_and_bounds.is_sanitized());
 
   // Also perform analysis that finds all coalesing opportunities.
-  let coalescing_info =
-    do_coalescing_analysis(func, &rlr_env, &vlr_env, &frag_env, &est_freqs);
+  let coalescing_info = do_coalescing_analysis(
+    func,
+    &reg_vecs_and_bounds,
+    &rlr_env,
+    &vlr_env,
+    &frag_env,
+    &est_freqs,
+  );
   let hints: TypedIxVec<VirtualRangeIx, Vec<Hint>> = coalescing_info.0;
   let vlrEquivClasses: UnionFindEquivClasses<VirtualRangeIx> =
     coalescing_info.1;
@@ -2300,21 +2334,24 @@ pub fn alloc_main<F: Function>(
     for fix in &curr_vlr.sorted_frags.frag_ixs {
       let frag: &RangeFrag = &frag_env[*fix];
       for iix in frag.first.iix.dotdot(frag.last.iix.plus(1)) {
-        let sru = &san_reg_uses[iix];
+        let (
+          iix_uses_curr_vlr_reg,
+          iix_defs_curr_vlr_reg,
+          iix_mods_curr_vlr_reg,
+        ) =
+          does_inst_use_def_or_mod_reg(&reg_vecs_and_bounds, iix, curr_vlr_reg);
         // If this insn doesn't mention the vreg we're spilling for,
         // move on.
-        if !sru.san_defined.contains(curr_vlr_reg)
-          && !sru.san_modified.contains(curr_vlr_reg)
-          && !sru.san_used.contains(curr_vlr_reg)
+        if !iix_defs_curr_vlr_reg
+          && !iix_mods_curr_vlr_reg
+          && !iix_uses_curr_vlr_reg
         {
           continue;
         }
         // USES: Do we need to create a reload-to-use bridge
         // (VirtualRange) ?
-        if sru.san_used.contains(curr_vlr_reg)
-          && frag.contains(&InstPoint::new_use(iix))
-        {
-          debug_assert!(!sru.san_modified.contains(curr_vlr_reg));
+        if iix_uses_curr_vlr_reg && frag.contains(&InstPoint::new_use(iix)) {
+          debug_assert!(!iix_mods_curr_vlr_reg);
           // Stash enough info that we can create a new VirtualRange
           // and a new edit list entry for the reload.
           let sri =
@@ -2327,21 +2364,19 @@ pub fn alloc_main<F: Function>(
         // two (one for the reload, one for the spill) they could
         // later end up being assigned to different RealRegs, which is
         // obviously nonsensical.
-        if sru.san_modified.contains(curr_vlr_reg)
+        if iix_mods_curr_vlr_reg
           && frag.contains(&InstPoint::new_use(iix))
           && frag.contains(&InstPoint::new_def(iix))
         {
-          debug_assert!(!sru.san_used.contains(curr_vlr_reg));
-          debug_assert!(!sru.san_defined.contains(curr_vlr_reg));
+          debug_assert!(!iix_uses_curr_vlr_reg);
+          debug_assert!(!iix_defs_curr_vlr_reg);
           let sri =
             SpillAndOrReloadInfo { bix: frag.bix, iix, kind: BridgeKind::RtoS };
           sri_vec.push(sri);
         }
         // DEFS: Do we need to create a def-to-spill bridge?
-        if sru.san_defined.contains(curr_vlr_reg)
-          && frag.contains(&InstPoint::new_def(iix))
-        {
-          debug_assert!(!sru.san_modified.contains(curr_vlr_reg));
+        if iix_defs_curr_vlr_reg && frag.contains(&InstPoint::new_def(iix)) {
+          debug_assert!(!iix_mods_curr_vlr_reg);
           let sri =
             SpillAndOrReloadInfo { bix: frag.bix, iix, kind: BridgeKind::DtoS };
           sri_vec.push(sri);

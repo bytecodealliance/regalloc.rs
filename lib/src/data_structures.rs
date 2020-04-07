@@ -2,6 +2,8 @@
  * vim: set ts=8 sts=2 et sw=2 tw=80:
 */
 
+#![allow(non_snake_case)]
+
 //! Data structures for the whole crate.
 
 use rustc_hash::FxHashMap;
@@ -164,7 +166,7 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
   }
 
   #[inline(never)]
-  fn filter_map<F, U>(&self, f: F) -> Set<U>
+  pub fn filter_map<F, U>(&self, f: F) -> Set<U>
   where
     F: Fn(&T) -> Option<U>,
     U: Eq + Ord + Hash + Copy + fmt::Debug,
@@ -346,6 +348,9 @@ where
   }
   pub fn resize(&mut self, new_len: u32, value: Ty) {
     self.vek.resize(new_len as usize, value);
+  }
+  pub fn reserve(&mut self, additional: usize) {
+    self.vek.reserve(additional);
   }
   pub fn elems(&self) -> &[Ty] {
     &self.vek[..]
@@ -833,115 +838,190 @@ impl fmt::Debug for SpillSlot {
 }
 
 //=============================================================================
-// Register uses for one instruction.
-//
-// InstRegUses is "unsanitized", which means that the sets inside it might
-// contain references to RealRegs which are not available to the allocator.
-// This is what the client gives us when we call its |get_regs| method.
-//
-// Within the allocator, we have to treat RealRegs that aren't allocatable as
-// "invisible".  Rather than have ad-hoc logic scattered around to deal with
-// them, we define a second type here, SanitizedInstRegUses, and work instead
-// with that.  To "sanitize" a register set requires having the
-// RealRegUniverse available.  We provide a handy method to convert
-// an InstRegUses to a SanitizedInstRegUses.
-//
-// SanitizedInstRegUses is for internal use only.  It isn't visible to the
-// client.
+// Register uses: low level interface
 
-#[derive(Clone, Debug)]
-pub struct InstRegUses {
-  // Note that |modified| is distinct from just |used|+|defined| because the
-  // vreg must live in the same real reg both before and after the
-  // instruction.
-  pub used: Set<Reg>,               // registers that are read.
-  pub defined: Set<Writable<Reg>>,  // registers that are written.
-  pub modified: Set<Writable<Reg>>, // registers that are modified.
+// This minimal struct is visible from outside the regalloc.rs interface.  It
+// is intended to be a safe wrapper around |RegVecs|, which isn't externally
+// visible.  It is used to collect unsanitized reg use info from client
+// instructions.
+pub struct RegUsageCollector<'a> {
+  pub reg_vecs: &'a mut RegVecs,
 }
-impl InstRegUses {
-  pub fn new() -> InstRegUses {
-    InstRegUses {
-      used: Set::<Reg>::empty(),
-      defined: Set::<Writable<Reg>>::empty(),
-      modified: Set::<Writable<Reg>>::empty(),
+impl<'a> RegUsageCollector<'a> {
+  pub fn new(reg_vecs: &'a mut RegVecs) -> Self {
+    Self { reg_vecs }
+  }
+  pub fn add_use(&mut self, r: Reg) {
+    self.reg_vecs.uses.push(r);
+  }
+  pub fn add_uses(&mut self, regs: &Set<Reg>) {
+    for reg in regs.iter() {
+      self.add_use(*reg);
+    }
+  }
+  pub fn add_def(&mut self, r: Writable<Reg>) {
+    self.reg_vecs.defs.push(r.to_reg());
+  }
+  pub fn add_defs(&mut self, regs: &Set<Writable<Reg>>) {
+    for reg in regs.iter() {
+      self.add_def(*reg);
+    }
+  }
+  pub fn add_mod(&mut self, r: Writable<Reg>) {
+    self.reg_vecs.mods.push(r.to_reg());
+  }
+  pub fn add_mods(&mut self, regs: &Set<Writable<Reg>>) {
+    for reg in regs.iter() {
+      self.add_mod(*reg);
+    }
+  }
+  // The presence of the following two is a hack, needed to support fuzzing
+  // in the test framework.  Real clients should not call them.
+  pub fn get_use_def_mod_vecs_TEST_FRAMEWORK_ONLY(
+    &self,
+  ) -> (Vec<Reg>, Vec<Reg>, Vec<Reg>) {
+    (
+      self.reg_vecs.uses.clone(),
+      self.reg_vecs.defs.clone(),
+      self.reg_vecs.mods.clone(),
+    )
+  }
+  pub fn get_empty_RegVecs_TEST_FRAMEWORK_ONLY(sanitized: bool) -> RegVecs {
+    RegVecs::new(sanitized)
+  }
+}
+
+// Everything else is not visible outside the regalloc.rs interface.
+
+// There is one of these per function.  Note that |defs| and |mods| lose the
+// |Writable| constraint at this point.  This is for convenience of having all
+// three vectors be the same type, but comes at the cost of the loss of being
+// able to differentiate readonly vs read/write registers in the Rust type
+// system.
+#[derive(Debug)]
+pub struct RegVecs {
+  pub uses: Vec<Reg>,
+  pub defs: Vec<Reg>,
+  pub mods: Vec<Reg>,
+  sanitized: bool,
+}
+impl RegVecs {
+  pub fn new(sanitized: bool) -> Self {
+    Self { uses: vec![], defs: vec![], mods: vec![], sanitized }
+  }
+  pub fn is_sanitized(&self) -> bool {
+    self.sanitized
+  }
+  pub fn set_sanitized(&mut self, sanitized: bool) {
+    self.sanitized = sanitized;
+  }
+  pub fn clear(&mut self) {
+    self.uses.clear();
+    self.defs.clear();
+    self.mods.clear();
+  }
+}
+
+// There is one of these per insn, so try and keep it as compact as possible.
+// I think this should fit in 16 bytes.
+#[derive(Clone, Debug)]
+pub struct RegVecBounds {
+  // These are the group start indices in RegVecs.{uses, defs, mods}.
+  pub uses_start: u32,
+  pub defs_start: u32,
+  pub mods_start: u32,
+  // And these are the group lengths.  This does limit each instruction to
+  // mentioning only 256 registers in any group, but that does not seem like a
+  // problem.
+  pub uses_len: u8,
+  pub defs_len: u8,
+  pub mods_len: u8,
+}
+impl RegVecBounds {
+  pub fn new() -> Self {
+    Self {
+      uses_start: 0,
+      defs_start: 0,
+      mods_start: 0,
+      uses_len: 0,
+      defs_len: 0,
+      mods_len: 0,
     }
   }
 }
 
-#[derive(Clone, Debug)]
-pub struct SanitizedInstRegUses {
-  // These names are different from their unsanitized counterparts so as to
-  // make it more difficult to get the two types mixed up.
-  pub san_used: Set<Reg>,     // registers that are read.
-  pub san_defined: Set<Reg>,  // registers that are written.
-  pub san_modified: Set<Reg>, // registers that are modified.
+// This is the primary structure.  We compute just one of these for an entire
+// function.
+pub struct RegVecsAndBounds {
+  // The three vectors of registers.  These can be arbitrarily long.
+  pub vecs: RegVecs,
+  // Admin info which tells us the location, for each insn, of its register
+  // groups in |vecs|.
+  pub bounds: TypedIxVec<InstIx, RegVecBounds>,
+}
+impl RegVecsAndBounds {
+  pub fn new(vecs: RegVecs, bounds: TypedIxVec<InstIx, RegVecBounds>) -> Self {
+    Self { vecs, bounds }
+  }
+  pub fn is_sanitized(&self) -> bool {
+    self.vecs.sanitized
+  }
+  pub fn num_insns(&self) -> u32 {
+    self.bounds.len()
+  }
 }
 
-impl SanitizedInstRegUses {
-  pub fn create_by_sanitizing(
-    iru: &InstRegUses, reg_universe: &RealRegUniverse,
-  ) -> Result<SanitizedInstRegUses, RealReg> {
-    // Note, this is pretty inefficient.  But it doesn't matter; it will need
-    // to be redone anyway when it comes time to replace Set<Reg> with the
-    // pairing of a (specialised) bitset of RealReg and a (vanilla) bitset of
-    // VirtualReg, and once that happens it will be fast.
-    //
-    // The goal is:
-    // (1) to remove from |set|, any RealRegs which are not available to the
-    //     allocator, and
-    // (2) assert if any RealRegs in the set are not mentioned in the universe.
-    fn sanitize_reg_set(
-      set: &mut Set<Reg>, reg_universe: &RealRegUniverse,
-    ) -> Result<(), RealReg> {
-      let mut err = Ok(());
-      set.retain(|&reg| {
-        if reg.is_virtual() {
-          // Retain all virtual registers.
-          true
-        } else {
-          let rreg_ix = reg.get_index();
-          if rreg_ix >= reg_universe.regs.len() {
-            // This is a serious error which should be investigated.  It means
-            // the client gave us an instruction which mentions a RealReg which
-            // isn't listed in the RealRegUniverse it gave us.  That's not
-            // allowed.
-            err = Err(reg.as_real_reg().unwrap());
-            false
-          } else {
-            // Retain only real registers that are available to the allocator.
-            rreg_ix < reg_universe.allocable
-          }
-        }
-      });
-      err
+//=============================================================================
+// Register uses: convenience interface
+
+// Some call sites want to get reg use information as three Sets.  This is a
+// "convenience facility" which is easier to use but much slower than working
+// with a whole-function |RegVecsAndBounds|.  It shouldn't be used on critical
+// paths.
+#[derive(Debug)]
+pub struct RegSets {
+  pub uses: Set<Reg>, // registers that are read.
+  pub defs: Set<Reg>, // registers that are written.
+  pub mods: Set<Reg>, // registers that are modified.
+  sanitized: bool,
+}
+impl RegSets {
+  pub fn new(sanitized: bool) -> Self {
+    Self {
+      uses: Set::<Reg>::empty(),
+      defs: Set::<Reg>::empty(),
+      mods: Set::<Reg>::empty(),
+      sanitized,
     }
+  }
+  pub fn is_sanitized(&self) -> bool {
+    self.sanitized
+  }
+}
 
-    // Remove modified registers from the set of used and defined registers, so
-    // we don't have to require the users to do so.
-
-    let mut sru = SanitizedInstRegUses {
-      san_used: iru.used.filter_map(|&r| {
-        if iru.modified.contains(Writable::from_reg(r)) {
-          None
-        } else {
-          Some(r)
-        }
-      }),
-      san_defined: iru.defined.filter_map(|&r| {
-        if iru.modified.contains(r) {
-          None
-        } else {
-          Some(r.to_reg())
-        }
-      }),
-      san_modified: iru.modified.map(|r| r.to_reg()),
-    };
-
-    sanitize_reg_set(&mut sru.san_used, reg_universe)?;
-    sanitize_reg_set(&mut sru.san_defined, reg_universe)?;
-    sanitize_reg_set(&mut sru.san_modified, reg_universe)?;
-
-    Ok(sru)
+impl RegVecsAndBounds {
+  /* !!not RegSets!! */
+  #[inline(never)]
+  // Convenience function.  Try to avoid using this.
+  pub fn get_reg_sets_for_iix(&self, iix: InstIx) -> RegSets {
+    let bounds = &self.bounds[iix];
+    let mut regsets = RegSets::new(self.vecs.sanitized);
+    for i in bounds.uses_start as usize
+      ..bounds.uses_start as usize + bounds.uses_len as usize
+    {
+      regsets.uses.insert(self.vecs.uses[i]);
+    }
+    for i in bounds.defs_start as usize
+      ..bounds.defs_start as usize + bounds.defs_len as usize
+    {
+      regsets.defs.insert(self.vecs.defs[i]);
+    }
+    for i in bounds.mods_start as usize
+      ..bounds.mods_start as usize + bounds.mods_len as usize
+    {
+      regsets.mods.insert(self.vecs.mods[i]);
+    }
+    regsets
   }
 }
 
@@ -963,6 +1043,7 @@ impl SanitizedInstRegUses {
 // * gives meaning to Set<RealReg>, which otherwise would merely be a bunch of
 //   bits.
 
+#[derive(Debug)]
 pub struct RealRegUniverse {
   // The registers themselves.  All must be real registers, and all must
   // have their index number (.get_index()) equal to the array index here,

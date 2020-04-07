@@ -35,7 +35,7 @@ use crate::interface::{Function, RegAllocError, RegAllocResult};
 type Fragments = TypedIxVec<RangeFragIx, RangeFrag>;
 type VirtualRanges = TypedIxVec<VirtualRangeIx, VirtualRange>;
 type RealRanges = TypedIxVec<RealRangeIx, RealRange>;
-type RegUses = TypedIxVec<InstIx, SanitizedInstRegUses>;
+type RegUses = RegVecsAndBounds;
 
 /// A unique identifier for an interval.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -543,10 +543,12 @@ fn build_mention_map(reg_uses: &RegUses) -> HashMap<Reg, MentionMap> {
   let mut reg_mentions: HashMap<Reg, MentionMap> = HashMap::default();
 
   // Collect all the mentions.
-  for (i, uses) in reg_uses.iter().enumerate() {
+  for i in 0..reg_uses.num_insns() {
     let iix = InstIx::new(i as u32);
+    let regsets = reg_uses.get_reg_sets_for_iix(iix);
+    debug_assert!(regsets.is_sanitized());
 
-    for reg in uses.san_used.iter() {
+    for reg in regsets.uses.iter() {
       let mentions = reg_mentions.entry(*reg).or_default();
       if mentions.is_empty() || mentions.last().unwrap().0 != iix {
         mentions.push((iix, Mention::new()));
@@ -554,7 +556,7 @@ fn build_mention_map(reg_uses: &RegUses) -> HashMap<Reg, MentionMap> {
       mentions.last_mut().unwrap().1.add_use();
     }
 
-    for reg in uses.san_modified.iter() {
+    for reg in regsets.mods.iter() {
       let mentions = reg_mentions.entry(*reg).or_default();
       if mentions.is_empty() || mentions.last().unwrap().0 != iix {
         mentions.push((iix, Mention::new()));
@@ -562,7 +564,7 @@ fn build_mention_map(reg_uses: &RegUses) -> HashMap<Reg, MentionMap> {
       mentions.last_mut().unwrap().1.add_mod();
     }
 
-    for reg in uses.san_defined.iter() {
+    for reg in regsets.defs.iter() {
       let mentions = reg_mentions.entry(*reg).or_default();
       if mentions.is_empty() || mentions.last().unwrap().0 != iix {
         mentions.push((iix, Mention::new()));
@@ -1241,11 +1243,12 @@ fn ref_next_use(
         continue;
       }
 
-      let uses = &reg_uses[inst_id];
+      let regsets = &reg_uses.get_reg_sets_for_iix(inst_id);
+      debug_assert!(regsets.is_sanitized());
 
       let at_use = InstPoint::new_use(inst_id);
       if pos <= at_use && frag.contains(&at_use) {
-        if uses.san_used.contains(reg) || uses.san_modified.contains(reg) {
+        if regsets.uses.contains(reg) || regsets.mods.contains(reg) {
           #[cfg(debug_assertions)]
           debug_assert!(intervals.covers(id, at_use, fragments));
           trace!(
@@ -1260,7 +1263,7 @@ fn ref_next_use(
 
       let at_def = InstPoint::new_def(inst_id);
       if pos <= at_def && frag.contains(&at_def) {
-        if uses.san_defined.contains(reg) || uses.san_modified.contains(reg) {
+        if regsets.defs.contains(reg) || regsets.mods.contains(reg) {
           #[cfg(debug_assertions)]
           debug_assert!(intervals.covers(id, at_def, fragments));
           trace!(
@@ -1591,11 +1594,12 @@ fn ref_last_use(
 
     let mut inst = frag.last.iix;
     while inst >= frag.first.iix {
-      let uses = &reg_uses[inst];
+      let regsets = &reg_uses.get_reg_sets_for_iix(inst);
+      debug_assert!(regsets.is_sanitized());
 
       let at_def = InstPoint::new_def(inst);
       if at_def <= pos && at_def <= frag.last {
-        if uses.san_defined.contains(reg) || uses.san_modified.contains(reg) {
+        if regsets.defs.contains(reg) || regsets.mods.contains(reg) {
           #[cfg(debug_assertions)]
           debug_assert!(
             intervals.covers(id, at_def, fragments),
@@ -1608,7 +1612,7 @@ fn ref_last_use(
 
       let at_use = InstPoint::new_use(inst);
       if at_use <= pos && at_use <= frag.last {
-        if uses.san_used.contains(reg) || uses.san_modified.contains(reg) {
+        if regsets.uses.contains(reg) || regsets.mods.contains(reg) {
           #[cfg(debug_assertions)]
           debug_assert!(
             intervals.covers(id, at_use, fragments),
@@ -2189,7 +2193,7 @@ pub fn run<F: Function>(
   func: &mut F, reg_universe: &RealRegUniverse, use_checker: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
   let (reg_uses, mut rlrs, mut vlrs, mut fragments, liveouts, _est_freqs) =
-    run_analysis(func, reg_universe, /* sanitize scratch */ true)
+    run_analysis(func, reg_universe)
       .map_err(|err| RegAllocError::Analysis(err))?;
 
   let scratches_by_rc = {
@@ -2201,7 +2205,13 @@ pub fn run<F: Function>(
             "at least 2 registers required for linear scan".into(),
           ));
         }
-        let scratch = reg_universe.regs[info.suggested_scratch.unwrap()].0;
+        let scratch = if let Some(suggested_reg) = info.suggested_scratch {
+          reg_universe.regs[suggested_reg].0
+        } else {
+          return Err(RegAllocError::MissingSuggestedScratchReg(
+            RegClass::rc_from_u32(i as u32),
+          ));
+        };
         scratches_by_rc[i] = Some(scratch);
       }
     }

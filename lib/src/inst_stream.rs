@@ -5,11 +5,12 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
+use crate::analysis::add_raw_reg_vecs_for_insn;
 use crate::checker::Inst as CheckerInst;
 use crate::checker::{CheckerContext, CheckerErrors};
 use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Map, RangeFrag, RangeFragIx, RealReg,
-  RealRegUniverse, SanitizedInstRegUses, Set, SpillSlot, TypedIxVec,
+  RealRegUniverse, RegVecBounds, RegVecs, Set, SpillSlot, TypedIxVec,
   VirtualReg, Writable,
 };
 use crate::interface::{Function, RegAllocError, RegAllocResult};
@@ -408,8 +409,8 @@ fn apply_reg_uses<F: Function>(
         &map_defs,
       )?;
 
-      // We only build the insn->block index when the checker is enabled, so we can only perform
-      // this debug-assert here.
+      // We only build the insn->block index when the checker is enabled, so
+      // we can only perform this debug-assert here.
       if func.block_insns(blockIx).last() == insnIx {
         //debug!("Block end");
         debug_assert!(has_multiple_blocks_per_frag || map.is_empty());
@@ -424,9 +425,10 @@ fn apply_reg_uses<F: Function>(
       F::map_regs(&mut insn, &map_uses, &map_defs);
       trace!("mapped instruction: {:?}", insn);
     } else {
-      // N.B. We nop out instructions as requested only *here*, after the checker call, because
-      // the checker must observe even elided moves (they may carry useful information about a
-      // move between two virtual locations mapped to the same physical location).
+      // N.B. We nop out instructions as requested only *here*, after the
+      // checker call, because the checker must observe even elided moves
+      // (they may carry useful information about a move between two virtual
+      // locations mapped to the same physical location).
       trace!("nop'ing out {:?}", insnIx);
       let nop = func.gen_zero_len_nop();
       let insn = func.get_insn_mut(insnIx);
@@ -510,25 +512,37 @@ fn fill_memory_moves<F: Function>(
   // FIXME: derive this information directly from the allocation data
   // structures used above.
   //
-  // NB at this point, the |san_reg_uses| vector that was computed in the
-  // analysis phase is no longer valid, because we've added and removed
-  // instructions to the function relative to the one that san_reg_uses was
-  // computed from, so we have to re-visit all insns with |get_regs|.  That's
-  // inefficient, but we don't care .. this should only be a temporary fix.
+  // NB at this point, the |san_reg_uses| that was computed in the analysis
+  // phase is no longer valid, because we've added and removed instructions to
+  // the function relative to the one that |san_reg_uses| was computed from,
+  // so we have to re-visit all insns with |add_raw_reg_vecs_for_insn|.
+  // That's inefficient, but we don't care .. this should only be a temporary
+  // fix.
 
   let mut clobbered_registers: Set<RealReg> = Set::empty();
 
-  for insn in insns.iter() {
-    let iru = func.get_regs(insn); // AUDITED
-    let sru = SanitizedInstRegUses::create_by_sanitizing(&iru, &reg_universe)
-      .expect("only existing real registers at this point");
-    for reg in sru.san_modified.iter().chain(sru.san_defined.iter()) {
-      assert!(reg.is_real());
-      clobbered_registers.insert(reg.to_real_reg());
-    }
+  // We'll dump all the reg uses in here.  We don't care the bounds, so just
+  // pass a dummy one in the loop.
+  let mut reg_vecs = RegVecs::new(/*sanitized=*/ false);
+  let mut dummy_bounds = RegVecBounds::new();
+  for insn in &insns {
+    add_raw_reg_vecs_for_insn::<F>(insn, &mut reg_vecs, &mut dummy_bounds);
+  }
+  for reg in reg_vecs.defs.iter().chain(reg_vecs.mods.iter()) {
+    assert!(reg.is_real());
+    clobbered_registers.insert(reg.to_real_reg());
   }
 
-  // And we're done!
+  // And now remove from the set, all those not available to the allocator.
+  // But not removing the reserved regs, since we might have modified those.
+  clobbered_registers.filter_map(|&reg| {
+    if reg.get_index() >= reg_universe.allocable {
+      None
+    } else {
+      Some(reg)
+    }
+  });
 
+  // And we're done!
   Ok(RegAllocResult { insns, target_map, clobbered_registers, num_spill_slots })
 }
