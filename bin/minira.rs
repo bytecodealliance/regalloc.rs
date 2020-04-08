@@ -105,14 +105,18 @@ fn main() {
   // Just so we can run it later.  Not needed for actual allocation.
   let original_func = func.clone();
 
-  let result =
-    match allocate_registers(&mut func, reg_alloc_kind, &reg_universe) {
-      Err(e) => {
-        println!("allocation failed: {}", e);
-        return;
-      }
-      Ok(r) => r,
-    };
+  let result = match allocate_registers(
+    &mut func,
+    reg_alloc_kind,
+    &reg_universe,
+    /*request_block_annotations=*/ false,
+  ) {
+    Err(e) => {
+      println!("allocation failed: {}", e);
+      return;
+    }
+    Ok(r) => r,
+  };
 
   let num_spill_slots = result.num_spill_slots;
 
@@ -177,10 +181,15 @@ mod test_utils {
       &reg_universe,
       RunStage::BeforeRegalloc,
     );
-    let result = allocate_registers(&mut func, algo, &reg_universe)
-      .unwrap_or_else(|err| {
-        panic!("allocation failed: {}", err);
-      });
+    let result = allocate_registers(
+      &mut func,
+      algo,
+      &reg_universe,
+      /*request_block_annotations=*/ false,
+    )
+    .unwrap_or_else(|err| {
+      panic!("allocation failed: {}", err);
+    });
     func.update_from_alloc(result);
     let after_regalloc_result = run_func(
       &func,
@@ -198,7 +207,12 @@ mod test_utils {
     let _ = pretty_env_logger::try_init();
     let mut func = test_cases::find_func(func_name).unwrap();
     let reg_universe = make_universe(num_gpr, num_fpu);
-    allocate_registers(&mut func, RegAllocAlgorithm::LinearScan, &reg_universe)
+    allocate_registers(
+      &mut func,
+      RegAllocAlgorithm::LinearScan,
+      &reg_universe,
+      /*request_block_annotations=*/ false,
+    )
   }
 
   // Note: num_gpr/num_fpu: must include the scratch register.
@@ -217,6 +231,7 @@ mod test_utils {
       &mut func,
       RegAllocAlgorithm::LinearScanChecked,
       &reg_universe,
+      /*request_block_annotations=*/ false,
     )
     .unwrap_or_else(|err| {
       panic!("allocation failed: {}", err);
@@ -257,6 +272,7 @@ mod test_utils {
         &mut func,
         RegAllocAlgorithm::LinearScan,
         &reg_universe,
+        /*request_block_annotations=*/ false,
       )
       .expect("regalloc failure");
 

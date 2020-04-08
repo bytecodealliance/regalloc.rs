@@ -544,5 +544,11 @@ fn fill_memory_moves<F: Function>(
   });
 
   // And we're done!
-  Ok(RegAllocResult { insns, target_map, clobbered_registers, num_spill_slots })
+  Ok(RegAllocResult {
+    insns,
+    target_map,
+    clobbered_registers,
+    num_spill_slots,
+    block_annotations: None,
+  })
 }

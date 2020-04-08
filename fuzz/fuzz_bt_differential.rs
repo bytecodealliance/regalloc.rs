@@ -20,6 +20,7 @@ fuzz_target!(|func: ir::Func| {
     &mut func,
     regalloc::RegAllocAlgorithm::BacktrackingChecked,
     &reg_universe,
+    /*request_block_annotations=*/false
   ) {
     Ok(result) => result,
     Err(err) => {

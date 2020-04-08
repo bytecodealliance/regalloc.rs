@@ -312,6 +312,10 @@ pub struct RegAllocResult<F: Function> {
 
   /// How many spill slots were used?
   pub num_spill_slots: u32,
+
+  /// Block annotation strings, for debugging.  Requires requesting in the
+  /// call to |allocate_registers|.
+  pub block_annotations: Option<TypedIxVec<BlockIx, Vec<String>>>,
 }
 
 /// A choice of register allocation algorithm to run.
@@ -356,6 +360,7 @@ impl fmt::Display for RegAllocError {
 #[inline(never)]
 pub fn allocate_registers<F: Function>(
   func: &mut F, algorithm: RegAllocAlgorithm, rreg_universe: &RealRegUniverse,
+  _request_block_annotations: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
   info!("");
   info!("================ regalloc.rs: BEGIN function ================");
