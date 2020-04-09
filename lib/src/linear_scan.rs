@@ -22,7 +22,7 @@ use std::env;
 use std::fmt;
 use std::mem;
 
-use crate::analysis::run_analysis;
+use crate::analysis::{add_raw_reg_vecs_for_insn, run_analysis};
 use crate::avl_tree::{AVLTree, AVL_NULL};
 use crate::data_structures::*;
 use crate::inst_stream::{
@@ -3161,15 +3161,65 @@ fn apply_registers<F: Function>(
 
   trace!("frag_map: {:?}", frag_map);
 
-  edit_inst_stream(
+  let final_insns_and_targetmap_or_err = edit_inst_stream(
     func,
     memory_moves,
     &vec![],
     frag_map,
     fragments,
     reg_universe,
-    num_spill_slots,
     true, // multiple blocks per frag
     use_checker,
-  )
+  );
+
+  let (final_insns, target_map) = match final_insns_and_targetmap_or_err {
+    Err(e) => return Err(e),
+    Ok(pair) => pair,
+  };
+
+  // Compute clobbered registers with one final, quick pass.
+  //
+  // FIXME: derive this information directly from the allocation data
+  // structures used above.
+  //
+  // NB at this point, the |san_reg_uses| that was computed in the analysis
+  // phase is no longer valid, because we've added and removed instructions to
+  // the function relative to the one that |san_reg_uses| was computed from,
+  // so we have to re-visit all insns with |add_raw_reg_vecs_for_insn|.
+  // That's inefficient, but we don't care .. this should only be a temporary
+  // fix.
+
+  let mut clobbered_registers: Set<RealReg> = Set::empty();
+
+  // We'll dump all the reg uses in here.  We don't care the bounds, so just
+  // pass a dummy one in the loop.
+  let mut reg_vecs = RegVecs::new(/*sanitized=*/ false);
+  let mut dummy_bounds = RegVecBounds::new();
+  for insn in &final_insns {
+    add_raw_reg_vecs_for_insn::<F>(insn, &mut reg_vecs, &mut dummy_bounds);
+  }
+  for reg in reg_vecs.defs.iter().chain(reg_vecs.mods.iter()) {
+    assert!(reg.is_real());
+    clobbered_registers.insert(reg.to_real_reg());
+  }
+
+  // And now remove from the set, all those not available to the allocator.
+  // But not removing the reserved regs, since we might have modified those.
+  clobbered_registers.filter_map(|&reg| {
+    if reg.get_index() >= reg_universe.allocable {
+      None
+    } else {
+      Some(reg)
+    }
+  });
+
+  let ra_res = RegAllocResult {
+    insns: final_insns,
+    target_map,
+    clobbered_registers,
+    num_spill_slots,
+    block_annotations: None,
+  };
+
+  Ok(ra_res)
 }

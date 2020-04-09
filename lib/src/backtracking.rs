@@ -12,13 +12,15 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
 
-use crate::analysis::{does_inst_use_def_or_mod_reg, run_analysis};
+use crate::analysis::{
+  add_raw_reg_vecs_for_insn, does_inst_use_def_or_mod_reg, run_analysis,
+};
 use crate::avl_tree::{AVLTag, AVLTree, AVL_NULL};
 use crate::data_structures::{
   cmp_range_frags, BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx,
   RangeFragKind, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg,
-  RegVecsAndBounds, Set, SortedRangeFragIxs, SpillCost, SpillSlot, TypedIxVec,
-  VirtualRange, VirtualRangeIx, VirtualReg, Writable,
+  RegVecBounds, RegVecs, RegVecsAndBounds, Set, SortedRangeFragIxs, SpillCost,
+  SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx, VirtualReg, Writable,
 };
 use crate::inst_stream::{
   edit_inst_stream, InstToInsert, InstToInsertAndPoint,
@@ -2678,9 +2680,7 @@ pub fn alloc_main<F: Function>(
 
   // ======== END Create all other spills and reloads ========
 
-  //for pair in &spillsAndReloads {
-  //    debug!("spill/reload: {}", pair.show());
-  //}
+  // ======== BEGIN Create final instruction stream ========
 
   // Gather up a vector of (RangeFrag, VirtualReg, RealReg) resulting from
   // the previous phase.  This fundamentally is the result of the allocation
@@ -2709,20 +2709,23 @@ pub fn alloc_main<F: Function>(
 
   info!("alloc_main:   edit_inst_stream");
 
-  let res = edit_inst_stream(
+  let final_insns_and_targetmap__or_err = edit_inst_stream(
     func,
     spills_n_reloads,
     &iixs_to_nop_out,
     frag_map,
     &frag_env,
     &reg_universe,
-    spill_slot_allocator.slots.len() as u32,
     false, // multiple blocks per frag
     use_checker,
   );
 
-  match res {
-    Ok(ref rar) => {
+  // ======== END Create final instruction stream ========
+
+  // ======== BEGIN Create the RegAllocResult ========
+
+  match final_insns_and_targetmap__or_err {
+    Ok((ref final_insns, ref _targetmap)) => {
       info!(
         "alloc_main:   out: VLRs: {} initially, {} processed",
         num_vlrs_initial, num_vlrs_processed
@@ -2733,7 +2736,7 @@ pub fn alloc_main<F: Function>(
       );
       info!(
         "alloc_main:   out: insns: {} total, {} spills, {} reloads, {} nopzs",
-        rar.insns.len(),
+        final_insns.len(),
         num_spills,
         num_reloads,
         iixs_to_nop_out.len()
@@ -2748,7 +2751,64 @@ pub fn alloc_main<F: Function>(
     }
   }
 
+  let (final_insns, target_map) = match final_insns_and_targetmap__or_err {
+    Err(e) => {
+      info!("alloc_main: fail");
+      return Err(e);
+    }
+    Ok(pair) => {
+      info!("alloc_main: creating RegAllocResult");
+      pair
+    }
+  };
+
+  // Compute clobbered registers with one final, quick pass.
+  //
+  // FIXME: derive this information directly from the allocation data
+  // structures used above.
+  //
+  // NB at this point, the |san_reg_uses| that was computed in the analysis
+  // phase is no longer valid, because we've added and removed instructions to
+  // the function relative to the one that |san_reg_uses| was computed from,
+  // so we have to re-visit all insns with |add_raw_reg_vecs_for_insn|.
+  // That's inefficient, but we don't care .. this should only be a temporary
+  // fix.
+
+  let mut clobbered_registers: Set<RealReg> = Set::empty();
+
+  // We'll dump all the reg uses in here.  We don't care the bounds, so just
+  // pass a dummy one in the loop.
+  let mut reg_vecs = RegVecs::new(/*sanitized=*/ false);
+  let mut dummy_bounds = RegVecBounds::new();
+  for insn in &final_insns {
+    add_raw_reg_vecs_for_insn::<F>(insn, &mut reg_vecs, &mut dummy_bounds);
+  }
+  for reg in reg_vecs.defs.iter().chain(reg_vecs.mods.iter()) {
+    assert!(reg.is_real());
+    clobbered_registers.insert(reg.to_real_reg());
+  }
+
+  // And now remove from the set, all those not available to the allocator.
+  // But not removing the reserved regs, since we might have modified those.
+  clobbered_registers.filter_map(|&reg| {
+    if reg.get_index() >= reg_universe.allocable {
+      None
+    } else {
+      Some(reg)
+    }
+  });
+
+  let ra_res = RegAllocResult {
+    insns: final_insns,
+    target_map,
+    clobbered_registers,
+    num_spill_slots: spill_slot_allocator.slots.len() as u32,
+    block_annotations: None,
+  };
+
   info!("alloc_main: end");
 
-  res
+  // ======== END Create the RegAllocResult ========
+
+  Ok(ra_res)
 }

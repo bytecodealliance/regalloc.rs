@@ -5,15 +5,13 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
-use crate::analysis::add_raw_reg_vecs_for_insn;
 use crate::checker::Inst as CheckerInst;
 use crate::checker::{CheckerContext, CheckerErrors};
 use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Map, RangeFrag, RangeFragIx, RealReg,
-  RealRegUniverse, RegVecBounds, RegVecs, Set, SpillSlot, TypedIxVec,
-  VirtualReg, Writable,
+  RealRegUniverse, SpillSlot, TypedIxVec, VirtualReg, Writable,
 };
-use crate::interface::{Function, RegAllocError, RegAllocResult};
+use crate::interface::{Function, RegAllocError};
 use log::trace;
 
 use std::result::Result;
@@ -438,8 +436,7 @@ fn map_vregs_to_rregs<F: Function>(
 #[inline(never)]
 fn add_spills_reloads_and_moves<F: Function>(
   func: &mut F, mut insts_to_add: Vec<InstToInsertAndPoint>,
-  reg_universe: &RealRegUniverse, num_spill_slots: u32,
-) -> Result<RegAllocResult<F>, String> {
+) -> Result<(Vec<F::Inst>, TypedIxVec<BlockIx, InstIx>), String> {
   // Construct the final code by interleaving the mapped code with the the
   // spills, reloads and moves that we have been requested to insert.  To do
   // that requires having the latter sorted by InstPoint.
@@ -493,50 +490,7 @@ fn add_spills_reloads_and_moves<F: Function>(
   debug_assert!(curITA == insts_to_add.len());
   debug_assert!(curB.get() == func.blocks().len() as u32);
 
-  // Compute clobbered registers with one final, quick pass.
-  //
-  // FIXME: derive this information directly from the allocation data
-  // structures used above.
-  //
-  // NB at this point, the |san_reg_uses| that was computed in the analysis
-  // phase is no longer valid, because we've added and removed instructions to
-  // the function relative to the one that |san_reg_uses| was computed from,
-  // so we have to re-visit all insns with |add_raw_reg_vecs_for_insn|.
-  // That's inefficient, but we don't care .. this should only be a temporary
-  // fix.
-
-  let mut clobbered_registers: Set<RealReg> = Set::empty();
-
-  // We'll dump all the reg uses in here.  We don't care the bounds, so just
-  // pass a dummy one in the loop.
-  let mut reg_vecs = RegVecs::new(/*sanitized=*/ false);
-  let mut dummy_bounds = RegVecBounds::new();
-  for insn in &insns {
-    add_raw_reg_vecs_for_insn::<F>(insn, &mut reg_vecs, &mut dummy_bounds);
-  }
-  for reg in reg_vecs.defs.iter().chain(reg_vecs.mods.iter()) {
-    assert!(reg.is_real());
-    clobbered_registers.insert(reg.to_real_reg());
-  }
-
-  // And now remove from the set, all those not available to the allocator.
-  // But not removing the reserved regs, since we might have modified those.
-  clobbered_registers.filter_map(|&reg| {
-    if reg.get_index() >= reg_universe.allocable {
-      None
-    } else {
-      Some(reg)
-    }
-  });
-
-  // And we're done!
-  Ok(RegAllocResult {
-    insns,
-    target_map,
-    clobbered_registers,
-    num_spill_slots,
-    block_annotations: None,
-  })
+  Ok((insns, target_map))
 }
 
 //=============================================================================
@@ -547,9 +501,9 @@ pub(crate) fn edit_inst_stream<F: Function>(
   iixs_to_nop_out: &Vec<InstIx>,
   frag_map: Vec<(RangeFragIx, VirtualReg, RealReg)>,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-  reg_universe: &RealRegUniverse, num_spill_slots: u32,
-  has_multiple_blocks_per_frag: bool, use_checker: bool,
-) -> Result<RegAllocResult<F>, RegAllocError> {
+  reg_universe: &RealRegUniverse, has_multiple_blocks_per_frag: bool,
+  use_checker: bool,
+) -> Result<(Vec<F::Inst>, TypedIxVec<BlockIx, InstIx>), RegAllocError> {
   map_vregs_to_rregs(
     func,
     frag_map,
@@ -561,11 +515,6 @@ pub(crate) fn edit_inst_stream<F: Function>(
     use_checker,
   )
   .map_err(|e| RegAllocError::RegChecker(e))?;
-  add_spills_reloads_and_moves(
-    func,
-    insts_to_add,
-    reg_universe,
-    num_spill_slots,
-  )
-  .map_err(|e| RegAllocError::Other(e))
+  add_spills_reloads_and_moves(func, insts_to_add)
+    .map_err(|e| RegAllocError::Other(e))
 }
