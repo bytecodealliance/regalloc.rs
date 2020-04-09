@@ -1143,6 +1143,8 @@ pub fn does_inst_use_def_or_mod_reg(
 // This is slow, really slow.  Don't use it on critical paths.  This applies
 // |get_regs| to |inst|, performs cleanups (1) and (2), but does not sanitize
 // the results.  The results are wrapped up as Sets for convenience.
+// JRS 2020Apr09: remove this if no further use for it appears soon.
+#[allow(dead_code)]
 #[inline(never)]
 pub fn get_raw_reg_sets_for_insn<F: Function>(inst: &F::Inst) -> RegSets {
   let mut reg_vecs = RegVecs::new(false);
