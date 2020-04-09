@@ -25,7 +25,9 @@ use std::mem;
 use crate::analysis::run_analysis;
 use crate::avl_tree::{AVLTree, AVL_NULL};
 use crate::data_structures::*;
-use crate::inst_stream::{edit_inst_stream, InstAndPoint, InstToInsert};
+use crate::inst_stream::{
+  edit_inst_stream, InstToInsert, InstToInsertAndPoint,
+};
 use crate::interface::{Function, RegAllocError, RegAllocResult};
 
 // Local shorthands.
@@ -2435,7 +2437,7 @@ fn resolve_moves<F: Function>(
   intervals: &Intervals, virtual_intervals: &Vec<IntId>, fragments: &Fragments,
   liveouts: &TypedIxVec<BlockIx, Set<Reg>>, spill_slot: &mut u32,
   scratches_by_rc: &[Option<RealReg>],
-) -> Vec<InstAndPoint> {
+) -> Vec<InstToInsertAndPoint> {
   let mut memory_moves = HashMap::default();
 
   let mut parallel_reloads = HashMap::default();
@@ -2785,10 +2787,10 @@ fn resolve_moves<F: Function>(
   }
   debug!("");
 
-  let mut insts_and_points = Vec::<InstAndPoint>::new();
+  let mut insts_and_points = Vec::<InstToInsertAndPoint>::new();
   for (at, insts) in memory_moves {
     for inst in insts {
-      insts_and_points.push(InstAndPoint::new(at, inst));
+      insts_and_points.push(InstToInsertAndPoint::new(inst, at));
     }
   }
 
@@ -3140,7 +3142,7 @@ fn emit_moves(
 #[inline(never)]
 fn apply_registers<F: Function>(
   func: &mut F, intervals: &Intervals, virtual_intervals: Vec<IntId>,
-  fragments: &Fragments, memory_moves: Vec<InstAndPoint>,
+  fragments: &Fragments, memory_moves: Vec<InstToInsertAndPoint>,
   reg_universe: &RealRegUniverse, num_spill_slots: u32, use_checker: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
   info!("apply_registers");

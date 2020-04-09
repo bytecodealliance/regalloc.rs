@@ -20,7 +20,9 @@ use crate::data_structures::{
   RegVecsAndBounds, Set, SortedRangeFragIxs, SpillCost, SpillSlot, TypedIxVec,
   VirtualRange, VirtualRangeIx, VirtualReg, Writable,
 };
-use crate::inst_stream::{edit_inst_stream, InstAndPoint, InstToInsert};
+use crate::inst_stream::{
+  edit_inst_stream, InstToInsert, InstToInsertAndPoint,
+};
 use crate::interface::{Function, RegAllocError, RegAllocResult};
 use crate::trees_maps_sets::{ToFromU32, UnionFind, UnionFindEquivClasses};
 
@@ -2612,7 +2614,7 @@ pub fn alloc_main<F: Function>(
   // Reload and spill instructions are missing.  To generate them, go through
   // the "edit list", which contains info on both how to generate the
   // instructions, and where to insert them.
-  let mut spills_n_reloads = Vec::<InstAndPoint>::new();
+  let mut spills_n_reloads = Vec::<InstToInsertAndPoint>::new();
   let mut num_spills = 0; // stats only
   let mut num_reloads = 0; // stats only
   for eli in &edit_list_other {
@@ -2634,7 +2636,7 @@ pub fn alloc_main<F: Function>(
           for_vreg: vreg,
         };
         let whereToR = vlr_frag.first;
-        spills_n_reloads.push(InstAndPoint::new(whereToR, insnR));
+        spills_n_reloads.push(InstToInsertAndPoint::new(insnR, whereToR));
         num_reloads += 1;
       }
       BridgeKind::RtoS => {
@@ -2653,8 +2655,8 @@ pub fn alloc_main<F: Function>(
           for_vreg: vreg,
         };
         let whereToS = vlr_frag.last;
-        spills_n_reloads.push(InstAndPoint::new(whereToR, insnR));
-        spills_n_reloads.push(InstAndPoint::new(whereToS, insnS));
+        spills_n_reloads.push(InstToInsertAndPoint::new(insnR, whereToR));
+        spills_n_reloads.push(InstToInsertAndPoint::new(insnS, whereToS));
         num_reloads += 1;
         num_spills += 1;
       }
@@ -2668,7 +2670,7 @@ pub fn alloc_main<F: Function>(
           for_vreg: vreg,
         };
         let whereToS = vlr_frag.last;
-        spills_n_reloads.push(InstAndPoint::new(whereToS, insnS));
+        spills_n_reloads.push(InstToInsertAndPoint::new(insnS, whereToS));
         num_spills += 1;
       }
     }

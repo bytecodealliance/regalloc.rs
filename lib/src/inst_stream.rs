@@ -19,7 +19,7 @@ use log::trace;
 use std::result::Result;
 
 //=============================================================================
-// InstToInsert
+// InstToInsert and InstToInsertAndPoint
 
 #[derive(Clone, Debug)]
 pub(crate) enum InstToInsert {
@@ -70,17 +70,14 @@ impl InstToInsert {
   }
 }
 
-//=============================================================================
-// InstAndPoint
-
-pub(crate) struct InstAndPoint {
-  pub(crate) at: InstPoint,
+pub(crate) struct InstToInsertAndPoint {
   pub(crate) inst: InstToInsert,
+  pub(crate) point: InstPoint,
 }
 
-impl InstAndPoint {
-  pub(crate) fn new(at: InstPoint, inst: InstToInsert) -> Self {
-    Self { at, inst }
+impl InstToInsertAndPoint {
+  pub(crate) fn new(inst: InstToInsert, point: InstPoint) -> Self {
+    Self { inst, point }
   }
 }
 
@@ -92,7 +89,7 @@ impl InstAndPoint {
 fn map_vregs_to_rregs<F: Function>(
   func: &mut F, frag_map: Vec<(RangeFragIx, VirtualReg, RealReg)>,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-  insts_to_add: &Vec<InstAndPoint>, iixs_to_nop_out: &Vec<InstIx>,
+  insts_to_add: &Vec<InstToInsertAndPoint>, iixs_to_nop_out: &Vec<InstIx>,
   reg_universe: &RealRegUniverse, has_multiple_blocks_per_frag: bool,
   use_checker: bool,
 ) -> Result<(), CheckerErrors> {
@@ -440,7 +437,7 @@ fn map_vregs_to_rregs<F: Function>(
 
 #[inline(never)]
 fn add_spills_reloads_and_moves<F: Function>(
-  func: &mut F, mut insts_to_add: Vec<InstAndPoint>,
+  func: &mut F, mut insts_to_add: Vec<InstToInsertAndPoint>,
   reg_universe: &RealRegUniverse, num_spill_slots: u32,
 ) -> Result<RegAllocResult<F>, String> {
   // Construct the final code by interleaving the mapped code with the the
@@ -450,7 +447,7 @@ fn add_spills_reloads_and_moves<F: Function>(
   // We also need to examine and update Func::blocks.  This is assumed to
   // be arranged in ascending order of the Block::start fields.
 
-  insts_to_add.sort_by_key(|mem_move| mem_move.at);
+  insts_to_add.sort_by_key(|mem_move| mem_move.point);
 
   let mut curITA = 0; // cursor in |insts_to_add|
   let mut curB = BlockIx::new(0); // cursor in Func::blocks
@@ -470,7 +467,7 @@ fn add_spills_reloads_and_moves<F: Function>(
     // Copy to the output vector, the extra insts that are to be placed at the
     // reload point of |iix|.
     while curITA < insts_to_add.len()
-      && insts_to_add[curITA].at == InstPoint::new_reload(iix)
+      && insts_to_add[curITA].point == InstPoint::new_reload(iix)
     {
       insns.push(insts_to_add[curITA].inst.construct(func));
       curITA += 1;
@@ -480,7 +477,7 @@ fn add_spills_reloads_and_moves<F: Function>(
     // And copy the extra insts that are to be placed at the spill point of
     // |iix|.
     while curITA < insts_to_add.len()
-      && insts_to_add[curITA].at == InstPoint::new_spill(iix)
+      && insts_to_add[curITA].point == InstPoint::new_spill(iix)
     {
       insns.push(insts_to_add[curITA].inst.construct(func));
       curITA += 1;
@@ -546,7 +543,8 @@ fn add_spills_reloads_and_moves<F: Function>(
 // Main function
 
 pub(crate) fn edit_inst_stream<F: Function>(
-  func: &mut F, insts_to_add: Vec<InstAndPoint>, iixs_to_nop_out: &Vec<InstIx>,
+  func: &mut F, insts_to_add: Vec<InstToInsertAndPoint>,
+  iixs_to_nop_out: &Vec<InstIx>,
   frag_map: Vec<(RangeFragIx, VirtualReg, RealReg)>,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
   reg_universe: &RealRegUniverse, num_spill_slots: u32,
