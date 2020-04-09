@@ -1833,6 +1833,7 @@ impl fmt::Debug for EditListItem {
 #[inline(never)]
 pub fn alloc_main<F: Function>(
   func: &mut F, reg_universe: &RealRegUniverse, use_checker: bool,
+  request_block_annotations: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
   // -------- Perform initial liveness analysis --------
   // Note that the analysis phase can fail; hence we propagate any error.
@@ -2798,12 +2799,24 @@ pub fn alloc_main<F: Function>(
     }
   });
 
+  assert!(est_freqs.len() as usize == func.blocks().len());
+  let mut block_annotations = None;
+  if request_block_annotations {
+    let mut anns = TypedIxVec::<BlockIx, Vec<String>>::new();
+    for (estFreq, i) in est_freqs.iter().zip(0..) {
+      let bix = BlockIx::new(i);
+      let ef_str = format!("RA: bix {:?}, estFreq {}", bix, estFreq);
+      anns.push(vec![ef_str]);
+    }
+    block_annotations = Some(anns);
+  }
+
   let ra_res = RegAllocResult {
     insns: final_insns,
     target_map,
     clobbered_registers,
     num_spill_slots: spill_slot_allocator.slots.len() as u32,
-    block_annotations: None,
+    block_annotations,
   };
 
   info!("alloc_main: end");

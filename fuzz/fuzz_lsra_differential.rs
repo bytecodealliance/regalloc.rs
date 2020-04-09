@@ -43,7 +43,7 @@ fuzz_target!(|func: ir::Func| {
   };
 
   func.update_from_alloc(result);
-  func.print("after allocation");
+  func.print("after allocation", &None);
 
   let observed = ir::run_func(
     &func,

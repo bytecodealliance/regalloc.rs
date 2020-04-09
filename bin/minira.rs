@@ -100,7 +100,7 @@ fn main() {
 
   let reg_universe = make_universe(num_regs_i32, num_regs_f32);
 
-  func.print("before allocation");
+  func.print("before allocation", &None);
 
   // Just so we can run it later.  Not needed for actual allocation.
   let original_func = func.clone();
@@ -109,7 +109,7 @@ fn main() {
     &mut func,
     reg_alloc_kind,
     &reg_universe,
-    /*request_block_annotations=*/ false,
+    /*request_block_annotations=*/ true,
   ) {
     Err(e) => {
       println!("allocation failed: {}", e);
@@ -122,9 +122,9 @@ fn main() {
 
   // Update the function itself. This bridges the gap from the generic
   // interface to our specific test ISA.
+  let mb_block_anns = result.block_annotations.clone();
   func.update_from_alloc(result);
-
-  func.print("after allocation");
+  func.print("after allocation", &mb_block_anns);
 
   let before_regalloc_result = run_func(
     &original_func,
@@ -226,7 +226,7 @@ mod test_utils {
       &reg_universe,
       RunStage::BeforeRegalloc,
     );
-    func.print("BEFORE");
+    func.print("BEFORE", &None);
     let result = allocate_registers(
       &mut func,
       RegAllocAlgorithm::LinearScanChecked,
@@ -237,7 +237,7 @@ mod test_utils {
       panic!("allocation failed: {}", err);
     });
     func.update_from_alloc(result);
-    func.print("AFTER");
+    func.print("AFTER", &None);
     let after_regalloc_result = run_func(
       &func,
       "After allocation",
@@ -260,7 +260,7 @@ mod test_utils {
       &reg_universe,
       RunStage::BeforeRegalloc,
     );
-    func.print("BEFORE");
+    func.print("BEFORE", &None);
 
     loop {
       println!("for num_gpr = {}", num_gpr);
@@ -277,7 +277,7 @@ mod test_utils {
       .expect("regalloc failure");
 
       func.update_from_alloc(result);
-      func.print("AFTER");
+      func.print("AFTER", &None);
 
       let after_regalloc_result = run_func(
         &func,

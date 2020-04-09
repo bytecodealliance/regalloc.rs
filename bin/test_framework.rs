@@ -1411,7 +1411,9 @@ impl Func {
     self.entry = Some(Label::Unresolved { name: entry.to_string() });
   }
 
-  pub fn print(&self, who: &str) {
+  pub fn print(
+    &self, who: &str, mb_block_anns: &Option<TypedIxVec<BlockIx, Vec<String>>>,
+  ) {
     println!("");
     println!("Func {}: name='{}' entry='{:?}' {{", who, self.name, self.entry);
     let mut ix = 0;
@@ -1420,6 +1422,13 @@ impl Func {
         println!("");
       }
       println!("  {:?}:{}", BlockIx::new(ix), b.name);
+
+      if let Some(anns_map) = mb_block_anns {
+        for ann in &anns_map[BlockIx::new(ix)] {
+          println!("      ;; {}", ann);
+        }
+      }
+
       for i in b.start.get()..b.start.get() + b.len {
         let ix = InstIx::new(i);
         println!("      {:<3?}   {:?}", ix, self.insns[ix]);

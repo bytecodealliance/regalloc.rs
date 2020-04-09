@@ -314,7 +314,8 @@ pub struct RegAllocResult<F: Function> {
   pub num_spill_slots: u32,
 
   /// Block annotation strings, for debugging.  Requires requesting in the
-  /// call to |allocate_registers|.
+  /// call to |allocate_registers|.  Creating of these annotations is
+  /// potentially expensive, so don't request them if you don't need them.
   pub block_annotations: Option<TypedIxVec<BlockIx, Vec<String>>>,
 }
 
@@ -360,7 +361,7 @@ impl fmt::Display for RegAllocError {
 #[inline(never)]
 pub fn allocate_registers<F: Function>(
   func: &mut F, algorithm: RegAllocAlgorithm, rreg_universe: &RealRegUniverse,
-  _request_block_annotations: bool,
+  request_block_annotations: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
   info!("");
   info!("================ regalloc.rs: BEGIN function ================");
@@ -368,7 +369,12 @@ pub fn allocate_registers<F: Function>(
     RegAllocAlgorithm::Backtracking
     | RegAllocAlgorithm::BacktrackingChecked => {
       let use_checker = algorithm == RegAllocAlgorithm::BacktrackingChecked;
-      backtracking::alloc_main(func, rreg_universe, use_checker)
+      backtracking::alloc_main(
+        func,
+        rreg_universe,
+        use_checker,
+        request_block_annotations,
+      )
     }
     RegAllocAlgorithm::LinearScan | RegAllocAlgorithm::LinearScanChecked => {
       let use_checker = algorithm == RegAllocAlgorithm::LinearScanChecked;
