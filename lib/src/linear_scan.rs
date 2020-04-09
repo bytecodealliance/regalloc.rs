@@ -25,10 +25,7 @@ use std::mem;
 use crate::analysis::run_analysis;
 use crate::avl_tree::{AVLTree, AVL_NULL};
 use crate::data_structures::*;
-use crate::inst_stream::{
-  edit_inst_stream, InstAndPoint, InstToInsert, InstsAndPoints,
-  RangeAllocations,
-};
+use crate::inst_stream::{edit_inst_stream, InstAndPoint, InstToInsert};
 use crate::interface::{Function, RegAllocError, RegAllocResult};
 
 // Local shorthands.
@@ -2438,7 +2435,7 @@ fn resolve_moves<F: Function>(
   intervals: &Intervals, virtual_intervals: &Vec<IntId>, fragments: &Fragments,
   liveouts: &TypedIxVec<BlockIx, Set<Reg>>, spill_slot: &mut u32,
   scratches_by_rc: &[Option<RealReg>],
-) -> InstsAndPoints {
+) -> Vec<InstAndPoint> {
   let mut memory_moves = HashMap::default();
 
   let mut parallel_reloads = HashMap::default();
@@ -2788,7 +2785,7 @@ fn resolve_moves<F: Function>(
   }
   debug!("");
 
-  let mut insts_and_points = InstsAndPoints::new();
+  let mut insts_and_points = Vec::<InstAndPoint>::new();
   for (at, insts) in memory_moves {
     for inst in insts {
       insts_and_points.push(InstAndPoint::new(at, inst));
@@ -3143,12 +3140,12 @@ fn emit_moves(
 #[inline(never)]
 fn apply_registers<F: Function>(
   func: &mut F, intervals: &Intervals, virtual_intervals: Vec<IntId>,
-  fragments: &Fragments, memory_moves: InstsAndPoints,
+  fragments: &Fragments, memory_moves: Vec<InstAndPoint>,
   reg_universe: &RealRegUniverse, num_spill_slots: u32, use_checker: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
   info!("apply_registers");
 
-  let mut frag_map = RangeAllocations::new();
+  let mut frag_map = Vec::<(RangeFragIx, VirtualReg, RealReg)>::new();
   for int_id in virtual_intervals {
     if let Some(rreg) = intervals.get(int_id).location.reg() {
       let vreg = intervals.vreg(int_id);

@@ -19,9 +19,7 @@ use log::trace;
 use std::result::Result;
 
 //=============================================================================
-// Edit list items
-
-pub(crate) type RangeAllocations = Vec<(RangeFragIx, VirtualReg, RealReg)>;
+// InstToInsert
 
 #[derive(Clone, Debug)]
 pub(crate) enum InstToInsert {
@@ -72,6 +70,9 @@ impl InstToInsert {
   }
 }
 
+//=============================================================================
+// InstAndPoint
+
 pub(crate) struct InstAndPoint {
   pub(crate) at: InstPoint,
   pub(crate) inst: InstToInsert,
@@ -83,34 +84,17 @@ impl InstAndPoint {
   }
 }
 
-pub(crate) type InstsAndPoints = Vec<InstAndPoint>;
+//=============================================================================
+// Apply all vreg->rreg mappings for the function's instructions, and run
+// the checker if required.  This also removes instructions that the core
+// algorithm wants removed, by nop-ing them out.
 
-pub(crate) fn edit_inst_stream<F: Function>(
-  func: &mut F, insts_to_add: InstsAndPoints, iixs_to_nop_out: &Vec<InstIx>,
-  frag_map: RangeAllocations, frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-  reg_universe: &RealRegUniverse, num_spill_slots: u32,
-  has_multiple_blocks_per_frag: bool, use_checker: bool,
-) -> Result<RegAllocResult<F>, RegAllocError> {
-  apply_reg_uses(
-    func,
-    frag_map,
-    frag_env,
-    &insts_to_add,
-    iixs_to_nop_out,
-    reg_universe,
-    has_multiple_blocks_per_frag,
-    use_checker,
-  )
-  .map_err(|e| RegAllocError::RegChecker(e))?;
-  fill_memory_moves(func, insts_to_add, reg_universe, num_spill_slots)
-    .map_err(|e| RegAllocError::Other(e))
-}
-
-fn apply_reg_uses<F: Function>(
-  func: &mut F, frag_map: RangeAllocations,
-  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>, insts_to_add: &InstsAndPoints,
-  iixs_to_nop_out: &Vec<InstIx>, reg_universe: &RealRegUniverse,
-  has_multiple_blocks_per_frag: bool, use_checker: bool,
+fn map_vregs_to_rregs<F: Function>(
+  func: &mut F, frag_map: Vec<(RangeFragIx, VirtualReg, RealReg)>,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+  insts_to_add: &Vec<InstAndPoint>, iixs_to_nop_out: &Vec<InstIx>,
+  reg_universe: &RealRegUniverse, has_multiple_blocks_per_frag: bool,
+  use_checker: bool,
 ) -> Result<(), CheckerErrors> {
   // Set up checker state, if indicated by our configuration.
   let mut checker: Option<CheckerContext> = None;
@@ -449,13 +433,18 @@ fn apply_reg_uses<F: Function>(
   }
 }
 
+//=============================================================================
+// Take the real-register-only code created by |map_vregs_to_rregs| and
+// interleave extra instructions (spills, reloads and moves) that the core
+// algorithm has asked us to add.
+
 #[inline(never)]
-fn fill_memory_moves<F: Function>(
-  func: &mut F, mut insts_to_add: InstsAndPoints,
+fn add_spills_reloads_and_moves<F: Function>(
+  func: &mut F, mut insts_to_add: Vec<InstAndPoint>,
   reg_universe: &RealRegUniverse, num_spill_slots: u32,
 ) -> Result<RegAllocResult<F>, String> {
   // Construct the final code by interleaving the mapped code with the the
-  // spills, reloads and copies that we have been requested to insert.  To do
+  // spills, reloads and moves that we have been requested to insert.  To do
   // that requires having the latter sorted by InstPoint.
   //
   // We also need to examine and update Func::blocks.  This is assumed to
@@ -551,4 +540,34 @@ fn fill_memory_moves<F: Function>(
     num_spill_slots,
     block_annotations: None,
   })
+}
+
+//=============================================================================
+// Main function
+
+pub(crate) fn edit_inst_stream<F: Function>(
+  func: &mut F, insts_to_add: Vec<InstAndPoint>, iixs_to_nop_out: &Vec<InstIx>,
+  frag_map: Vec<(RangeFragIx, VirtualReg, RealReg)>,
+  frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+  reg_universe: &RealRegUniverse, num_spill_slots: u32,
+  has_multiple_blocks_per_frag: bool, use_checker: bool,
+) -> Result<RegAllocResult<F>, RegAllocError> {
+  map_vregs_to_rregs(
+    func,
+    frag_map,
+    frag_env,
+    &insts_to_add,
+    iixs_to_nop_out,
+    reg_universe,
+    has_multiple_blocks_per_frag,
+    use_checker,
+  )
+  .map_err(|e| RegAllocError::RegChecker(e))?;
+  add_spills_reloads_and_moves(
+    func,
+    insts_to_add,
+    reg_universe,
+    num_spill_slots,
+  )
+  .map_err(|e| RegAllocError::Other(e))
 }

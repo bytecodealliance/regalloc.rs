@@ -64,7 +64,7 @@ use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Map, Point, RealReg, RealRegUniverse, Reg,
   RegSets, SpillSlot, VirtualReg, Writable,
 };
-use crate::inst_stream::{InstAndPoint, InstsAndPoints};
+use crate::inst_stream::InstAndPoint;
 use crate::interface::Function;
 
 use std::collections::VecDeque;
@@ -447,7 +447,7 @@ impl CheckerContext {
   /// Create a new checker context for the given function, which is about to be edited with the
   /// given instruction insertions.
   pub(crate) fn new<F: Function>(
-    f: &F, ru: &RealRegUniverse, insts_to_add: &InstsAndPoints,
+    f: &F, ru: &RealRegUniverse, insts_to_add: &Vec<InstAndPoint>,
   ) -> CheckerContext {
     let mut checker_inst_map: Map<InstPoint, Vec<Inst>> = Map::default();
     for &InstAndPoint { ref at, ref inst } in insts_to_add {

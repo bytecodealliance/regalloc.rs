@@ -20,10 +20,7 @@ use crate::data_structures::{
   RegVecsAndBounds, Set, SortedRangeFragIxs, SpillCost, SpillSlot, TypedIxVec,
   VirtualRange, VirtualRangeIx, VirtualReg, Writable,
 };
-use crate::inst_stream::{
-  edit_inst_stream, InstAndPoint, InstToInsert, InstsAndPoints,
-  RangeAllocations,
-};
+use crate::inst_stream::{edit_inst_stream, InstAndPoint, InstToInsert};
 use crate::interface::{Function, RegAllocError, RegAllocResult};
 use crate::trees_maps_sets::{ToFromU32, UnionFind, UnionFindEquivClasses};
 
@@ -2615,7 +2612,7 @@ pub fn alloc_main<F: Function>(
   // Reload and spill instructions are missing.  To generate them, go through
   // the "edit list", which contains info on both how to generate the
   // instructions, and where to insert them.
-  let mut spills_n_reloads = InstsAndPoints::new();
+  let mut spills_n_reloads = Vec::<InstAndPoint>::new();
   let mut num_spills = 0; // stats only
   let mut num_reloads = 0; // stats only
   for eli in &edit_list_other {
@@ -2691,7 +2688,7 @@ pub fn alloc_main<F: Function>(
 
   info!("alloc_main:   create frag_map");
 
-  let mut frag_map = RangeAllocations::new();
+  let mut frag_map = Vec::<(RangeFragIx, VirtualReg, RealReg)>::new();
   // For each real register under our control ..
   for i in 0..reg_universe.allocable {
     let rreg = reg_universe.regs[i].0;
