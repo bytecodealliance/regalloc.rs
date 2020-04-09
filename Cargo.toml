@@ -3,6 +3,8 @@ name = "minira-util"
 version = "0.1.0"
 authors = ["The Regalloc.rs Project Developers"]
 edition = "2018"
+repository = "https://github.com/bytecodealliance/regalloc.rs"
+publish = false
 
 [workspace]
 members = [
