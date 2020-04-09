@@ -2758,7 +2758,7 @@ pub fn alloc_main<F: Function>(
       return Err(e);
     }
     Ok(pair) => {
-      info!("alloc_main: creating RegAllocResult");
+      info!("alloc_main:   creating RegAllocResult");
       pair
     }
   };

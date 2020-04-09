@@ -412,28 +412,34 @@ macro_rules! generate_boilerplate {
     }
     impl $TypeIx {
       #[allow(dead_code)]
+      #[inline(always)]
       pub fn new(n: u32) -> Self {
         Self::$TypeIx(n)
       }
       #[allow(dead_code)]
+      #[inline(always)]
       pub fn max_value() -> Self {
         Self::$TypeIx(u32::max_value())
       }
       #[allow(dead_code)]
+      #[inline(always)]
       pub fn min_value() -> Self {
         Self::$TypeIx(u32::min_value())
       }
       #[allow(dead_code)]
+      #[inline(always)]
       pub fn get(self) -> u32 {
         match self {
           $TypeIx::$TypeIx(n) => n,
         }
       }
       #[allow(dead_code)]
+      #[inline(always)]
       pub fn plus(self, delta: u32) -> $TypeIx {
         $TypeIx::$TypeIx(self.get() + delta)
       }
       #[allow(dead_code)]
+      #[inline(always)]
       pub fn minus(self, delta: u32) -> $TypeIx {
         $TypeIx::$TypeIx(self.get() - delta)
       }
@@ -449,21 +455,25 @@ macro_rules! generate_boilerplate {
       }
     }
     impl PlusOne for $TypeIx {
+      #[inline(always)]
       fn plus_one(&self) -> Self {
         self.plus(1)
       }
     }
     impl PlusN for $TypeIx {
+      #[inline(always)]
       fn plus_n(&self, n: usize) -> Self {
         self.plus(n as u32)
       }
     }
     impl Into<u32> for $TypeIx {
+      #[inline(always)]
       fn into(self) -> u32 {
         self.get()
       }
     }
     impl Zero for $TypeIx {
+      #[inline(always)]
       fn zero() -> Self {
         $TypeIx::new(0)
       }
@@ -1280,18 +1290,23 @@ pub struct InstPoint {
   pub pt: Point,
 }
 impl InstPoint {
+  #[inline(always)]
   pub fn new(iix: InstIx, pt: Point) -> Self {
     InstPoint { iix, pt }
   }
+  #[inline(always)]
   pub fn new_reload(iix: InstIx) -> Self {
     InstPoint { iix, pt: Point::Reload }
   }
+  #[inline(always)]
   pub fn new_use(iix: InstIx) -> Self {
     InstPoint { iix, pt: Point::Use }
   }
+  #[inline(always)]
   pub fn new_def(iix: InstIx) -> Self {
     InstPoint { iix, pt: Point::Def }
   }
+  #[inline(always)]
   pub fn new_spill(iix: InstIx) -> Self {
     InstPoint { iix, pt: Point::Spill }
   }
