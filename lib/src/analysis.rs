@@ -91,8 +91,10 @@ impl ToString for AnalysisError {
 #[inline(never)]
 fn calc_preds_and_succs<F: Function>(
   func: &F, nBlocks: u32,
-) -> (TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
-      TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>) {
+) -> (
+  TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
+  TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
+) {
   info!("      calc_preds_and_succs: begin");
 
   assert!(func.blocks().len() == nBlocks as usize);
@@ -145,7 +147,8 @@ fn calc_preds_and_succs<F: Function>(
 // contains blocks not reachable from the entry point, and is invalid.
 #[inline(never)]
 fn calc_preord_and_postord<F: Function>(
-  func: &F, nBlocks: u32, succ_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
+  func: &F, nBlocks: u32,
+  succ_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
 ) -> Option<(Vec<BlockIx>, Vec<BlockIx>)> {
   info!("      calc_preord_and_postord: begin");
 
@@ -315,11 +318,11 @@ fn dt_merge_sets(
 }
 
 #[inline(never)]
-fn calc_dom_sets(
+fn calc_dom_tree(
   nBlocks: u32, pred_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
   post_ord: &Vec<BlockIx>, start: BlockIx,
-) -> TypedIxVec<BlockIx, Set<BlockIx>> {
-  info!("        calc_dom_sets: begin");
+) -> TypedIxVec<BlockIx, BlockIx> {
+  info!("        calc_dom_tree: begin");
 
   // We use 2^32-1 as a marker for an invalid BlockIx or postorder number.
   // Hence we need this:
@@ -412,51 +415,42 @@ fn calc_dom_sets(
   // no dead blocks in the graph, and hence that there is only one dominator
   // tree, that covers the whole graph.
   assert!(idom[start] == start);
-
   for i in 0..nBlocks {
     let bixI = BlockIx::new(i);
+    // All "parent pointers" are valid.
     assert!(idom[bixI] != DT_INVALID_BLOCKIX);
+    // The only node whose parent pointer points to itself is the start node.
     assert!((idom[bixI] == bixI) == (bixI == start));
   }
 
-  // Construct sets for each block, by walking up the tree.  At some point
-  // this (time wasting) exercise is likely to disappear, in favour of using
-  // the tree directly.
-  let mut tsets = TypedIxVec::<BlockIx, Set<BlockIx>>::new();
-  for i in 0..nBlocks {
-    let mut set = Set::<BlockIx>::empty();
-    let mut bixI = BlockIx::new(i);
-    loop {
-      set.insert(bixI);
-      let bixI2 = idom[bixI];
-      if bixI2 == bixI {
-        break;
-      }
-      bixI = bixI2;
-    }
-    tsets.push(set);
-  }
-
   if CROSSCHECK_DOMS {
-    info!("        calc_dom_sets crosscheck: begin");
+    // Crosscheck the dom tree, by computing dom sets using the simple
+    // iterative algorithm.  Then, for each block, construct the dominator set
+    // by walking up the tree to the root, and check that it's the same as
+    // what the simple algorithm produced.
+
+    info!("        calc_dom_tree crosscheck: begin");
     let slow_sets = calc_dom_sets_SLOW(nBlocks, pred_map, post_ord, start);
-    assert!(slow_sets.len() == tsets.len());
+    assert!(slow_sets.len() == idom.len());
 
-    let mut n = 0;
-    for dom_tset in tsets.iter() {
-      debug!("{:<3?}   dom_tset {:<16?}", BlockIx::new(n), dom_tset);
-      n += 1;
+    for i in 0..nBlocks {
+      let mut bixI = BlockIx::new(i);
+      let mut set = Set::<BlockIx>::empty();
+      loop {
+        set.insert(bixI);
+        let bixI2 = idom[bixI];
+        if bixI2 == bixI {
+          break;
+        }
+        bixI = bixI2;
+      }
+      assert!(set.to_vec() == slow_sets[BlockIx::new(i)].to_vec());
     }
-
-    for i in 0..tsets.len() {
-      let bixI = BlockIx::new(i);
-      assert!(tsets[bixI].to_vec() == slow_sets[bixI].to_vec());
-    }
-    info!("        calc_dom_sets crosscheck: end");
+    info!("        calc_dom_tree crosscheck: end");
   }
 
-  info!("        calc_dom_sets: end");
-  tsets
+  info!("        calc_dom_tree: end");
+  idom
 }
 
 //=============================================================================
@@ -465,11 +459,11 @@ fn calc_dom_sets(
 #[inline(never)]
 fn calc_loop_depths(
   nBlocks: u32, pred_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
-  succ_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>, post_ord: &Vec<BlockIx>,
-  start: BlockIx,
+  succ_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
+  post_ord: &Vec<BlockIx>, start: BlockIx,
 ) -> TypedIxVec<BlockIx, u32> {
   info!("      calc_loop_depths: begin");
-  let dom_map = calc_dom_sets(nBlocks, pred_map, post_ord, start);
+  let idom = calc_dom_tree(nBlocks, pred_map, post_ord, start);
 
   // Find the loops.  First, find the "loop header nodes", and from those,
   // derive the loops.
@@ -485,7 +479,22 @@ fn calc_loop_depths(
   let mut back_edges = Set::<(BlockIx, BlockIx)>::empty();
   for bixM in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
     for bixN in succ_map[bixM].iter() {
-      if dom_map[bixM].contains(*bixN) {
+      // Figure out if N dominates M.  Do this by walking the dom tree from M
+      // back up to the root, and seeing if we encounter N on the way.
+      let mut n_dominates_m = false;
+      let mut bixI = bixM;
+      loop {
+        if bixI == *bixN {
+          n_dominates_m = true;
+          break;
+        }
+        let bixI2 = idom[bixI];
+        if bixI2 == bixI {
+          break;
+        }
+        bixI = bixI2;
+      }
+      if n_dominates_m {
         //println!("QQQQ back edge {} -> {}",
         //         bixM.show(), bixN.show());
         back_edges.insert((bixM, *bixN));
@@ -571,13 +580,8 @@ fn calc_loop_depths(
 
   let mut n = 0;
   debug!("");
-  for (depth, dom_by) in depth_map.iter().zip(dom_map.iter()) {
-    debug!(
-      "{:<3?}   depth {}   dom_by {:<16?}",
-      BlockIx::new(n),
-      depth,
-      dom_by
-    );
+  for (depth, idom_by) in depth_map.iter().zip(idom.iter()) {
+    debug!("{:<3?}   depth {}   idom {:?}", BlockIx::new(n), depth, idom_by);
     n += 1;
   }
 
