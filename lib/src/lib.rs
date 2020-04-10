@@ -2,7 +2,7 @@
  * vim: set ts=8 sts=2 et sw=2 tw=80:
 */
 
-//! Main file / top-level module for minira library.
+//! Main file / top-level module for regalloc library.
 
 // Make the analysis module public for fuzzing.
 #[cfg(feature = "fuzzing")]
