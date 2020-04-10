@@ -1216,6 +1216,9 @@ fn calc_def_and_use<F: Function>(
       // live-in for the block depends on whether it was been written earlier
       // in the block.  We can determine that by checking whether it is
       // already in the def set for the block.
+      // FIXME: isn't thus just:
+      //   uce union= (regs_u minus def)   followed by
+      //   uce union= (regs_m minus def)
       for i in bounds_for_iix.uses_start as usize
         ..bounds_for_iix.uses_start as usize + bounds_for_iix.uses_len as usize
       {
@@ -1235,8 +1238,7 @@ fn calc_def_and_use<F: Function>(
 
       // Now add to |def|, all registers written by the instruction.
       // This is simpler.
-      // FIXME: isn't this just: defs union= (regs_d union regs_m) ?
-      // (Similar comment applies for the |uce| update too)
+      // FIXME: isn't this just: def union= (regs_d union regs_m) ?
       for i in bounds_for_iix.defs_start as usize
         ..bounds_for_iix.defs_start as usize + bounds_for_iix.defs_len as usize
       {
@@ -1322,9 +1324,6 @@ fn calc_livein_and_liveout<F: Function>(
       liveouts[bixI] = set;
       // Add |bixI|'s predecessors to the work queue, since their
       // liveout values might be affected.
-      //
-      // FIXME JRS 2020Feb06: only add preds to the work queue if they are not
-      // already in it (possible speedup).
       for bixJ in cfg_info.pred_map[bixI].iter() {
         let j = bixJ.get() as usize;
         if !inQ[j] {

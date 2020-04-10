@@ -899,7 +899,7 @@ where
     //} else {
     //  limit - 1
     //}
-    if true {
+    if false {
       // Set the transition point as roughly half of the inline size
       match limit {
         0 | 1 => panic!("SparseSetU: small_halfmax_card"),
@@ -919,6 +919,7 @@ where
         4 => 3,
         5 => 4,
         6 => 4,
+        // FIXME JRS 2020Apr10 avoid possible integer overflow here:
         _ => (2 * limit) / 3,
       }
     }
@@ -951,7 +952,7 @@ where
       }
     }
   }
-  #[inline(never)]
+  #[inline(always)]
   fn insert_no_dup_check(&mut self, item: A::Item) {
     match self {
       SparseSetU::Large { set } => {
@@ -969,7 +970,15 @@ where
         } else {
           // Transition up
           self.upgrade();
-          self.insert_no_dup_check(item);
+          match self {
+            SparseSetU::Large { set } => {
+              let _ = set.insert(item);
+            }
+            SparseSetU::Small { .. } => {
+              // Err, what?  Still Small after upgrade?
+              panic!("SparseSetU::insert_no_dup_check")
+            }
+          }
         }
       }
     }
