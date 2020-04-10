@@ -29,6 +29,7 @@ use crate::inst_stream::{
   edit_inst_stream, InstToInsert, InstToInsertAndPoint,
 };
 use crate::interface::{Function, RegAllocError, RegAllocResult};
+use crate::trees_maps_sets::SparseSet;
 
 // Local shorthands.
 type Fragments = TypedIxVec<RangeFragIx, RangeFrag>;
@@ -2435,7 +2436,7 @@ fn find_enclosing_interval(
 fn resolve_moves<F: Function>(
   func: &F, reg_uses: &RegUses, mention_map: &HashMap<Reg, MentionMap>,
   intervals: &Intervals, virtual_intervals: &Vec<IntId>, fragments: &Fragments,
-  liveouts: &TypedIxVec<BlockIx, Set<Reg>>, spill_slot: &mut u32,
+  liveouts: &TypedIxVec<BlockIx, SparseSet<Reg>>, spill_slot: &mut u32,
   scratches_by_rc: &[Option<RealReg>],
 ) -> Vec<InstToInsertAndPoint> {
   let mut memory_moves = HashMap::default();

@@ -15,7 +15,7 @@ use crate::data_structures::{
   SortedRangeFragIxs, SpillCost, TypedIxVec, VirtualRange, VirtualRangeIx,
 };
 use crate::interface::Function;
-use crate::trees_maps_sets::{ToFromU32, UnionFind};
+use crate::trees_maps_sets::{SparseSet, ToFromU32, UnionFind};
 
 // DEBUGGING: set to true to cross-check the merge_RangeFrags machinery.
 const CROSSCHECK_MERGE: bool = false;
@@ -1198,14 +1198,15 @@ pub fn get_san_reg_sets_for_insn<F: Function>(
 #[inline(never)]
 fn calc_def_and_use<F: Function>(
   func: &F, rvb: &RegVecsAndBounds,
-) -> (TypedIxVec<BlockIx, Set<Reg>>, TypedIxVec<BlockIx, Set<Reg>>) {
+) -> (TypedIxVec<BlockIx, SparseSet<Reg>>, TypedIxVec<BlockIx, SparseSet<Reg>>)
+{
   info!("    calc_def_and_use: begin");
   assert!(rvb.is_sanitized());
   let mut def_sets = TypedIxVec::new();
   let mut use_sets = TypedIxVec::new();
   for b in func.blocks() {
-    let mut def = Set::empty();
-    let mut uce = Set::empty();
+    let mut def = SparseSet::empty();
+    let mut uce = SparseSet::empty();
     for iix in func.block_insns(b) {
       let bounds_for_iix = &rvb.bounds[iix];
       // Add to |uce|, any registers for which the first event in this block
@@ -1267,15 +1268,16 @@ fn calc_def_and_use<F: Function>(
 // Returned vectors contain one element per block
 #[inline(never)]
 fn calc_livein_and_liveout<F: Function>(
-  func: &F, def_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>,
-  use_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>, cfg_info: &CFGInfo,
-) -> (TypedIxVec<BlockIx, Set<Reg>>, TypedIxVec<BlockIx, Set<Reg>>) {
+  func: &F, def_sets_per_block: &TypedIxVec<BlockIx, SparseSet<Reg>>,
+  use_sets_per_block: &TypedIxVec<BlockIx, SparseSet<Reg>>, cfg_info: &CFGInfo,
+) -> (TypedIxVec<BlockIx, SparseSet<Reg>>, TypedIxVec<BlockIx, SparseSet<Reg>>)
+{
   info!("    calc_livein_and_liveout: begin");
   let nBlocks = func.blocks().len() as u32;
-  let empty = Set::<Reg>::empty();
+  let empty = SparseSet::<Reg>::empty();
 
   let mut nEvals = 0;
-  let mut liveouts = TypedIxVec::<BlockIx, Set<Reg>>::new();
+  let mut liveouts = TypedIxVec::<BlockIx, SparseSet<Reg>>::new();
   liveouts.resize(nBlocks, empty.clone());
 
   // Initialise the work queue so as to do a reverse preorder traversal
@@ -1301,7 +1303,7 @@ fn calc_livein_and_liveout<F: Function>(
     inQ[i] = false;
 
     // Compute a new value for liveouts[bixI]
-    let mut set = Set::<Reg>::empty();
+    let mut set = SparseSet::<Reg>::empty();
     for bixJ in cfg_info.succ_map[bixI].iter() {
       let mut liveinJ = liveouts[*bixJ].clone();
       liveinJ.remove(&def_sets_per_block[*bixJ]);
@@ -1329,7 +1331,7 @@ fn calc_livein_and_liveout<F: Function>(
 
   // The liveout values are done, but we need to compute the liveins
   // too.
-  let mut liveins = TypedIxVec::<BlockIx, Set<Reg>>::new();
+  let mut liveins = TypedIxVec::<BlockIx, SparseSet<Reg>>::new();
   liveins.resize(nBlocks, empty.clone());
   for bixI in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
     let mut liveinI = liveouts[bixI].clone();
@@ -1387,7 +1389,7 @@ fn calc_livein_and_liveout<F: Function>(
 // (duh!)
 #[inline(never)]
 fn get_RangeFrags_for_block<F: Function>(
-  func: &F, bix: BlockIx, livein: &Set<Reg>, liveout: &Set<Reg>,
+  func: &F, bix: BlockIx, livein: &SparseSet<Reg>, liveout: &SparseSet<Reg>,
   rvb: &RegVecsAndBounds, outMap: &mut Map<Reg, Vec<RangeFragIx>>,
   outFEnv: &mut TypedIxVec<RangeFragIx, RangeFrag>,
 ) {
@@ -1651,8 +1653,8 @@ fn get_RangeFrags_for_block<F: Function>(
 
 #[inline(never)]
 fn get_RangeFrags<F: Function>(
-  func: &F, livein_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>,
-  liveout_sets_per_block: &TypedIxVec<BlockIx, Set<Reg>>,
+  func: &F, livein_sets_per_block: &TypedIxVec<BlockIx, SparseSet<Reg>>,
+  liveout_sets_per_block: &TypedIxVec<BlockIx, SparseSet<Reg>>,
   rvb: &RegVecsAndBounds,
 ) -> (Map<Reg, Vec<RangeFragIx>>, TypedIxVec<RangeFragIx, RangeFrag>) {
   info!("    get_RangeFrags: begin");
@@ -2264,7 +2266,7 @@ pub fn run_analysis<F: Function>(
     // The fragment table
     TypedIxVec<RangeFragIx, RangeFrag>,
     // Liveouts per block
-    TypedIxVec<BlockIx, Set<Reg>>,
+    TypedIxVec<BlockIx, SparseSet<Reg>>,
     // Estimated execution frequency per block
     TypedIxVec<BlockIx, u32>,
   ),
@@ -2329,7 +2331,7 @@ pub fn run_analysis<F: Function>(
 
   // Verify livein set of entry block against liveins specified by function
   // (e.g., ABI params).
-  let func_liveins = Set::from_vec(
+  let func_liveins = SparseSet::from_vec(
     func
       .func_liveins()
       .to_vec()
@@ -2342,7 +2344,7 @@ pub fn run_analysis<F: Function>(
   }
 
   // Add function liveouts to every block ending in a return.
-  let func_liveouts = Set::from_vec(
+  let func_liveouts = SparseSet::from_vec(
     func
       .func_liveouts()
       .to_vec()
