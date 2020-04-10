@@ -18,7 +18,7 @@ use std::ops::Index;
 use std::ops::IndexMut;
 use std::slice::{Iter, IterMut};
 
-use crate::interface::Function;
+use crate::Function;
 
 //=============================================================================
 // Queues

@@ -14,7 +14,7 @@ use crate::data_structures::{
   RegSets, RegUsageCollector, RegVecBounds, RegVecs, RegVecsAndBounds, Set,
   SortedRangeFragIxs, SpillCost, TypedIxVec, VirtualRange, VirtualRangeIx,
 };
-use crate::interface::Function;
+use crate::Function;
 use crate::trees_maps_sets::{SparseSet, SparseSetU, ToFromU32, UnionFind};
 
 // DEBUGGING: set to true to cross-check the merge_RangeFrags machinery.

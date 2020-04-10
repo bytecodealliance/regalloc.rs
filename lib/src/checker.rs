@@ -65,7 +65,7 @@ use crate::data_structures::{
   RegSets, SpillSlot, VirtualReg, Writable,
 };
 use crate::inst_stream::InstToInsertAndPoint;
-use crate::interface::Function;
+use crate::Function;
 
 use std::collections::VecDeque;
 use std::default::Default;
