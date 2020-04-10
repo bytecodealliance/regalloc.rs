@@ -11,7 +11,7 @@ use crate::data_structures::{
   BlockIx, InstIx, InstPoint, Map, RangeFrag, RangeFragIx, RealReg,
   RealRegUniverse, SpillSlot, TypedIxVec, VirtualReg, Writable,
 };
-use crate::interface::{Function, RegAllocError};
+use crate::{Function, RegAllocError};
 use log::trace;
 
 use std::result::Result;

@@ -26,7 +26,7 @@ use crate::data_structures::{
 use crate::inst_stream::{
   edit_inst_stream, InstToInsert, InstToInsertAndPoint,
 };
-use crate::interface::{Function, RegAllocError, RegAllocResult};
+use crate::{Function, RegAllocError, RegAllocResult};
 use crate::trees_maps_sets::{ToFromU32, UnionFind, UnionFindEquivClasses};
 
 // DEBUGGING: set to true to cross-check the CommitmentMap machinery.
