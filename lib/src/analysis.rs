@@ -1243,6 +1243,12 @@ fn calc_def_and_use<F: Function>(
         let d = rvb.vecs.defs[i];
         def.insert(d);
       }
+      for i in bounds_for_iix.mods_start as usize
+        ..bounds_for_iix.mods_start as usize + bounds_for_iix.mods_len as usize
+      {
+        let m = rvb.vecs.mods[i];
+        def.insert(m);
+      }
     }
     def_sets.push(def);
     use_sets.push(uce);
