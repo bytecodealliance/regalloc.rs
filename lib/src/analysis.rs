@@ -15,7 +15,7 @@ use crate::data_structures::{
   SortedRangeFragIxs, SpillCost, TypedIxVec, VirtualRange, VirtualRangeIx,
 };
 use crate::interface::Function;
-use crate::trees_maps_sets::{SparseSet, ToFromU32, UnionFind};
+use crate::trees_maps_sets::{SparseSet, SparseSetU, ToFromU32, UnionFind};
 
 // DEBUGGING: set to true to cross-check the merge_RangeFrags machinery.
 const CROSSCHECK_MERGE: bool = false;
@@ -91,7 +91,8 @@ impl ToString for AnalysisError {
 #[inline(never)]
 fn calc_preds_and_succs<F: Function>(
   func: &F, nBlocks: u32,
-) -> (TypedIxVec<BlockIx, Set<BlockIx>>, TypedIxVec<BlockIx, Set<BlockIx>>) {
+) -> (TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
+      TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>) {
   info!("      calc_preds_and_succs: begin");
 
   assert!(func.blocks().len() == nBlocks as usize);
@@ -102,10 +103,10 @@ fn calc_preds_and_succs<F: Function>(
   // Func::finish() ensures that all blocks are non-empty, and that only the
   // last instruction is a control flow transfer.  Hence the following won't
   // miss any edges.
-  let mut succ_map = TypedIxVec::<BlockIx, Set<BlockIx>>::new();
+  let mut succ_map = TypedIxVec::<BlockIx, SparseSetU<[BlockIx; 4]>>::new();
   for b in func.blocks() {
     let succs = func.block_succs(b);
-    let mut bixSet = Set::<BlockIx>::empty();
+    let mut bixSet = SparseSetU::<[BlockIx; 4]>::empty();
     for bix in succs.iter() {
       bixSet.insert(*bix);
     }
@@ -113,8 +114,8 @@ fn calc_preds_and_succs<F: Function>(
   }
 
   // Now invert the mapping
-  let mut pred_map = TypedIxVec::<BlockIx, Set<BlockIx>>::new();
-  pred_map.resize(nBlocks, Set::empty());
+  let mut pred_map = TypedIxVec::<BlockIx, SparseSetU<[BlockIx; 4]>>::new();
+  pred_map.resize(nBlocks, SparseSetU::<[BlockIx; 4]>::empty());
   for (src, dst_set) in (0..).zip(succ_map.iter()) {
     for dst in dst_set.iter() {
       pred_map[*dst].insert(BlockIx::new(src));
@@ -144,7 +145,7 @@ fn calc_preds_and_succs<F: Function>(
 // contains blocks not reachable from the entry point, and is invalid.
 #[inline(never)]
 fn calc_preord_and_postord<F: Function>(
-  func: &F, nBlocks: u32, succ_map: &TypedIxVec<BlockIx, Set<BlockIx>>,
+  func: &F, nBlocks: u32, succ_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
 ) -> Option<(Vec<BlockIx>, Vec<BlockIx>)> {
   info!("      calc_preord_and_postord: begin");
 
@@ -160,7 +161,7 @@ fn calc_preord_and_postord<F: Function>(
   fn dfs(
     pre_ord: &mut Vec<BlockIx>, post_ord: &mut Vec<BlockIx>,
     visited: &mut TypedIxVec<BlockIx, bool>,
-    succ_map: &TypedIxVec<BlockIx, Set<BlockIx>>, bix: BlockIx,
+    succ_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>, bix: BlockIx,
   ) {
     debug_assert!(!visited[bix]);
     visited[bix] = true;
@@ -216,7 +217,7 @@ fn calc_preord_and_postord<F: Function>(
 // algorithm is described as simple but not as performant as some others.
 #[inline(never)]
 fn calc_dom_sets_SLOW(
-  nBlocks: u32, pred_map: &TypedIxVec<BlockIx, Set<BlockIx>>,
+  nBlocks: u32, pred_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
   post_ord: &Vec<BlockIx>, start: BlockIx,
 ) -> TypedIxVec<BlockIx, Set<BlockIx>> {
   info!("          calc_dom_sets_SLOW: begin");
@@ -315,7 +316,7 @@ fn dt_merge_sets(
 
 #[inline(never)]
 fn calc_dom_sets(
-  nBlocks: u32, pred_map: &TypedIxVec<BlockIx, Set<BlockIx>>,
+  nBlocks: u32, pred_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
   post_ord: &Vec<BlockIx>, start: BlockIx,
 ) -> TypedIxVec<BlockIx, Set<BlockIx>> {
   info!("        calc_dom_sets: begin");
@@ -463,8 +464,8 @@ fn calc_dom_sets(
 
 #[inline(never)]
 fn calc_loop_depths(
-  nBlocks: u32, pred_map: &TypedIxVec<BlockIx, Set<BlockIx>>,
-  succ_map: &TypedIxVec<BlockIx, Set<BlockIx>>, post_ord: &Vec<BlockIx>,
+  nBlocks: u32, pred_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
+  succ_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>, post_ord: &Vec<BlockIx>,
   start: BlockIx,
 ) -> TypedIxVec<BlockIx, u32> {
   info!("      calc_loop_depths: begin");
@@ -594,8 +595,8 @@ struct CFGInfo {
   // Func.
 
   // Predecessor and successor maps.
-  pred_map: TypedIxVec<BlockIx, Set<BlockIx>>,
-  succ_map: TypedIxVec<BlockIx, Set<BlockIx>>,
+  pred_map: TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
+  succ_map: TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
 
   // Pre- and post-order sequences.  Iterating forwards through these
   // vectors enumerates the blocks in preorder and postorder respectively.
@@ -1759,11 +1760,17 @@ fn merge_RangeFrags_SLOW(
           live_in_blocks.insert(frag_bix);
         }
         RangeFragKind::LiveOut => {
-          succs_of_live_out_blocks.union(frag_succ_bixes);
+          for bix in frag_succ_bixes.iter() {
+            succs_of_live_out_blocks.insert(*bix);
+          }
+          //succs_of_live_out_blocks.union(frag_succ_bixes);
         }
         RangeFragKind::Thru => {
           live_in_blocks.insert(frag_bix);
-          succs_of_live_out_blocks.union(frag_succ_bixes);
+          for bix in frag_succ_bixes.iter() {
+            succs_of_live_out_blocks.insert(*bix);
+          }
+          //succs_of_live_out_blocks.union(frag_succ_bixes);
         }
       }
 

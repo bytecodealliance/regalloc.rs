@@ -1012,6 +1012,19 @@ where
   }
 
   #[inline(never)]
+  pub fn is_empty(&self) -> bool {
+    match self {
+      SparseSetU::Small { card, .. } => *card == 0,
+      SparseSetU::Large { set } => {
+        // This holds because |maybe_downgrade| will always convert a
+        // zero-sized large variant into a small variant.
+        assert!(set.len() > 0);
+        false
+      }
+    }
+  }
+
+  #[inline(never)]
   pub fn card(&self) -> usize {
     match self {
       SparseSetU::Large { set } => set.len(),
@@ -1490,7 +1503,7 @@ fn test_sparse_set() {
     assert!(spa.card() == 0);
   }
 
-  // card
+  // card, is_empty
   for _ in 0..iters * 3 {
     for n1 in 0..100 {
       let size1 = n1 % 25;
@@ -1499,6 +1512,7 @@ fn test_sparse_set() {
       let spa1 = SparseSetU::<[u32; 10]>::from_vec(vec1a);
       let std1 = Set::<u32>::from_vec(vec1b);
       assert!(spa1.card() == std1.card());
+      assert!(spa1.is_empty() == (size1 == 0));
     }
   }
 
