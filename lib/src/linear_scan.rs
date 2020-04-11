@@ -978,7 +978,7 @@ fn update_state<'a, F: Function>(
 fn lazy_compute_inactive(
   reusable_vec_u32: &mut Vec<u32>, intervals: &Intervals,
   interval_tree: &AVLTree<(IntId, usize)>, active: &[IntId],
-  prev_inactive: &[IntId], fragments: &Fragments, cur_id: IntId,
+  _prev_inactive: &[IntId], fragments: &Fragments, cur_id: IntId,
   inactive_intersecting: &mut Vec<(IntId, InstPoint)>,
 ) {
   debug_assert_eq!(intervals.fragments(cur_id).len(), 1);
@@ -1023,7 +1023,7 @@ fn lazy_compute_inactive(
   {
     let former_inactive = {
       let mut inactive = Vec::new();
-      for &id in prev_inactive {
+      for &id in _prev_inactive {
         if intervals.get(id).reg_class != reg_class {
           continue;
         }
@@ -1144,7 +1144,7 @@ fn try_allocate_reg<F: Function>(
 #[inline(never)]
 fn next_use(
   mentions: &HashMap<Reg, MentionMap>, intervals: &Intervals, id: IntId,
-  pos: InstPoint, reg_uses: &RegUses, fragments: &Fragments,
+  pos: InstPoint, _reg_uses: &RegUses, fragments: &Fragments,
 ) -> Option<InstPoint> {
   if log_enabled!(Level::Trace) {
     trace!(
@@ -1212,7 +1212,7 @@ fn next_use(
   };
 
   #[cfg(debug_assertions)]
-  debug_assert_eq!(ref_next_use(intervals, id, pos, reg_uses, fragments), ret);
+  debug_assert_eq!(ref_next_use(intervals, id, pos, _reg_uses, fragments), ret);
 
   ret
 }
@@ -1500,7 +1500,7 @@ fn allocate_blocked_reg<F: Function>(
 /// Extends to the right, that is, modified means "def".
 fn last_use(
   mention_map: &HashMap<Reg, MentionMap>, intervals: &Intervals, id: IntId,
-  pos: InstPoint, reg_uses: &RegUses, fragments: &Fragments,
+  pos: InstPoint, _reg_uses: &RegUses, fragments: &Fragments,
 ) -> Option<InstPoint> {
   if log_enabled!(Level::Trace) {
     trace!(
@@ -1571,11 +1571,12 @@ fn last_use(
   trace!("new algo: {:?}", ret);
 
   #[cfg(debug_assertions)]
-  debug_assert_eq!(ref_last_use(intervals, id, pos, reg_uses, fragments), ret);
+  debug_assert_eq!(ref_last_use(intervals, id, pos, _reg_uses, fragments), ret);
 
   ret
 }
 
+#[allow(dead_code)]
 #[inline(never)]
 fn ref_last_use(
   intervals: &Intervals, id: IntId, pos: InstPoint, reg_uses: &RegUses,
