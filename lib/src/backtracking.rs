@@ -8,6 +8,7 @@
 //! Core implementation of the backtracking allocator.
 
 use log::{debug, info, log_enabled, Level};
+use smallvec::{smallvec, SmallVec};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
@@ -439,7 +440,8 @@ fn do_coalescing_analysis<F: Function>(
   // time, but until then we'll discover it dynamically.
   // NB re the SmallVec.  That has set semantics (no dups)
   // FIXME use SmallVec for the VirtualRangeIxs.  Or even a sparse set.
-  let mut vreg_to_vlrs_map = Vec::</*vreg index,*/ Vec<VirtualRangeIx>>::new();
+  let mut vreg_to_vlrs_map =
+    Vec::</*vreg index,*/ SmallVec<[VirtualRangeIx; 3]>>::new();
 
   for (vlr, n) in vlr_env.iter().zip(0..) {
     let vlrix = VirtualRangeIx::new(n);
@@ -454,7 +456,7 @@ fn do_coalescing_analysis<F: Function>(
     let vreg_ix = vreg.get_index();
 
     while vreg_to_vlrs_map.len() <= vreg_ix {
-      vreg_to_vlrs_map.push(vec![]); // This is very un-clever
+      vreg_to_vlrs_map.push(smallvec![]); // This is very un-clever
     }
 
     vreg_to_vlrs_map[vreg_ix].push(vlrix);

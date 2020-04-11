@@ -16,6 +16,7 @@
 
 use log::{debug, info, log_enabled, trace, Level};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use smallvec::{Array, SmallVec};
 
 use std::cmp::Ordering;
 use std::env;
@@ -30,6 +31,30 @@ use crate::inst_stream::{
 };
 use crate::interface::{Function, RegAllocError, RegAllocResult};
 use crate::trees_maps_sets::SparseSet;
+
+// Helpers for SmallVec
+fn smallvec_append<A: Array>(dst: &mut SmallVec<A>, src: &mut SmallVec<A>)
+where
+  A::Item: Copy,
+{
+  for e in src.iter() {
+    dst.push(*e);
+  }
+  src.clear();
+}
+fn smallvec_split_off<A: Array>(arr: &mut SmallVec<A>, at: usize) -> SmallVec<A>
+where
+  A::Item: Copy,
+{
+  let orig_size = arr.len();
+  let mut res = SmallVec::<A>::new();
+  for i in at..arr.len() {
+    res.push(arr[i]);
+  }
+  arr.truncate(at);
+  assert!(arr.len() + res.len() == orig_size);
+  res
+}
 
 // Local shorthands.
 type Fragments = TypedIxVec<RangeFragIx, RangeFrag>;
@@ -267,7 +292,7 @@ impl Intervals {
     &mut self.data[int_id.0]
   }
 
-  fn fragments(&self, int_id: IntId) -> &Vec<RangeFragIx> {
+  fn fragments(&self, int_id: IntId) -> &SmallVec<[RangeFragIx; 4]> {
     match &self.data[int_id.0].kind {
       LiveIntervalKind::Fixed(r) => &self.real_ranges[*r].sorted_frags.frag_ixs,
       LiveIntervalKind::Virtual(r) => {
@@ -1748,7 +1773,8 @@ fn split<F: Function>(
     })
     .expect("split would create an empty child");
 
-  let mut child_frag_ixs = frags.frag_ixs.split_off(split_ranges_at);
+  let mut child_frag_ixs =
+    smallvec_split_off(&mut frags.frag_ixs, split_ranges_at);
 
   // The split position is either in the middle of a lifetime hole, in which
   // case we don't need to do anything. Otherwise, we might need to split a
@@ -2067,7 +2093,8 @@ fn try_compress_ranges<F: Function>(
   fragments: &mut Fragments,
 ) {
   fn compress<F: Function>(
-    func: &F, frag_ixs: &mut Vec<RangeFragIx>, fragments: &mut Fragments,
+    func: &F, frag_ixs: &mut SmallVec<[RangeFragIx; 4]>,
+    fragments: &mut Fragments,
   ) {
     if frag_ixs.len() == 1 {
       return;
@@ -2150,11 +2177,12 @@ fn try_compress_ranges<F: Function>(
     vlrs.push(vlr);
   }
 
-  let mut reg_map: HashMap<RealReg, Vec<RangeFragIx>> = HashMap::default();
+  let mut reg_map: HashMap<RealReg, SmallVec<[RangeFragIx; 4]>> =
+    HashMap::default();
   for rlr in rlrs.iter_mut() {
     let reg = rlr.rreg;
     if let Some(ref mut vec) = reg_map.get_mut(&reg) {
-      vec.append(&mut rlr.sorted_frags.frag_ixs);
+      smallvec_append(vec, &mut rlr.sorted_frags.frag_ixs);
     } else {
       // TODO clone can be avoided with an into_iter methods.
       reg_map.insert(reg, rlr.sorted_frags.frag_ixs.clone());

@@ -8,6 +8,7 @@
 
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
+use smallvec::SmallVec;
 
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -1503,9 +1504,12 @@ impl RangeFrag {
 // The "fragment environment" (sometimes called 'fenv' or 'frag_env') to which
 // the RangeFragIxs refer, is not stored here.
 
+// Helper for SmallVec
+//fn smallVec_from_TypedIxVec(src: &TypedIxVec<A, B>) -> SmallVec<C> // hmm
+
 #[derive(Clone)]
 pub struct SortedRangeFragIxs {
-  pub frag_ixs: Vec<RangeFragIx>,
+  pub frag_ixs: SmallVec<[RangeFragIx; 4]>,
 }
 impl fmt::Debug for SortedRangeFragIxs {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -1549,7 +1553,13 @@ impl SortedRangeFragIxs {
   pub fn new(
     source: &Vec<RangeFragIx>, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> Self {
-    let mut res = SortedRangeFragIxs { frag_ixs: source.clone() };
+    let mut frag_ixs = SmallVec::<[RangeFragIx; 4]>::new();
+    frag_ixs.reserve(source.len());
+    for fix in source {
+      frag_ixs.push(*fix);
+    }
+
+    let mut res = SortedRangeFragIxs { frag_ixs };
     // check the source is ordered, and clone (or sort it)
     res.sort(fenv);
     res.check(fenv);
@@ -1559,7 +1569,8 @@ impl SortedRangeFragIxs {
   pub fn unit(
     fix: RangeFragIx, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> Self {
-    let mut res = SortedRangeFragIxs { frag_ixs: Vec::<RangeFragIx>::new() };
+    let mut res =
+      SortedRangeFragIxs { frag_ixs: SmallVec::<[RangeFragIx; 4]>::new() };
     res.frag_ixs.push(fix);
     res.check(fenv);
     res

@@ -84,6 +84,7 @@ impl InstToInsertAndPoint {
 // the checker if required.  This also removes instructions that the core
 // algorithm wants removed, by nop-ing them out.
 
+#[inline(never)]
 fn map_vregs_to_rregs<F: Function>(
   func: &mut F, frag_map: Vec<(RangeFragIx, VirtualReg, RealReg)>,
   frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
@@ -496,6 +497,7 @@ fn add_spills_reloads_and_moves<F: Function>(
 //=============================================================================
 // Main function
 
+#[inline(never)]
 pub(crate) fn edit_inst_stream<F: Function>(
   func: &mut F, insts_to_add: Vec<InstToInsertAndPoint>,
   iixs_to_nop_out: &Vec<InstIx>,
