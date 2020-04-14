@@ -36,16 +36,16 @@ const CROSSCHECK_CM: bool = false;
 // members of a VirtualRange group to the same spill slot, so that moves
 // between two spilled members of the same group can be turned into no-ops.
 //
-// All of the |size| metrics in this bit are in terms of "logical spill slot
-// units", per the interface's description for |get_spillslot_size|.
+// All of the `size` metrics in this bit are in terms of "logical spill slot
+// units", per the interface's description for `get_spillslot_size`.
 
 // We keep one of these for every "logical spill slot" in use.
 enum LogicalSpillSlot {
-    // This slot is in use and can hold values of size |size| (only).  Note that
-    // |InUse| may only appear in |SpillSlotAllocator::slots| positions that
-    // have indices that are 0 % |size|.  Furthermore, after such an entry in
-    // |SpillSlotAllocator::slots|, the next |size| - 1 entries must be
-    // |Unavail|.  This is a hard invariant, violation of which will cause
+    // This slot is in use and can hold values of size `size` (only).  Note that
+    // `InUse` may only appear in `SpillSlotAllocator::slots` positions that
+    // have indices that are 0 % `size`.  Furthermore, after such an entry in
+    // `SpillSlotAllocator::slots`, the next `size` - 1 entries must be
+    // `Unavail`.  This is a hard invariant, violation of which will cause
     // overlapping spill slots and potential chaos.
     InUse {
         size: u32,
@@ -53,7 +53,7 @@ enum LogicalSpillSlot {
     },
     // This slot is unavailable, as described above.  It's unavailable because
     // it holds some part of the values associated with the nearest lower
-    // numbered entry which isn't |Unavail|, and that entry must be an |InUse|
+    // numbered entry which isn't `Unavail`, and that entry must be an `InUse`
     // entry.
     Unavail,
 }
@@ -98,13 +98,13 @@ fn cmp_tree_entries_for_SpillSlotAllocator(
 }
 
 // HELPER FUNCTION
-// Find out whether it is possible to add all of |frags| to |tree|.  Returns
+// Find out whether it is possible to add all of `frags` to `tree`.  Returns
 // true if possible, false if not.  This routine relies on the fact that
 // SortedFrags is non-overlapping.  However, this is a bit subtle.  We know
-// that both |tree| and |frags| individually are non-overlapping, but there's
-// no guarantee that elements of |frags| don't overlap |tree|.  Hence we have
-// to do a custom walk of |tree| to check for overlap; we can't just use
-// |AVLTree::contains|.
+// that both `tree` and `frags` individually are non-overlapping, but there's
+// no guarantee that elements of `frags` don't overlap `tree`.  Hence we have
+// to do a custom walk of `tree` to check for overlap; we can't just use
+// `AVLTree::contains`.
 fn ssal_is_add_possible(
     tree: &AVLTree<RangeFragIx>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
@@ -112,7 +112,7 @@ fn ssal_is_add_possible(
 ) -> bool {
     // Figure out whether all the frags will go in.
     for fix in &frags.frag_ixs {
-        // BEGIN check |fix| for any overlap against |tree|.
+        // BEGIN check `fix` for any overlap against `tree`.
         let frag = &frag_env[*fix];
         let mut root = tree.root;
         while root != AVL_NULL {
@@ -120,26 +120,26 @@ fn ssal_is_add_possible(
             let root_fix = root_node.item;
             let root_frag = &frag_env[root_fix];
             if frag.last < root_frag.first {
-                // |frag| is entirely to the left of the |root|.  So there's no
+                // `frag` is entirely to the left of the `root`.  So there's no
                 // overlap with root.  Continue by inspecting the left subtree.
                 root = root_node.left;
             } else if root_frag.last < frag.first {
                 // Ditto for the right subtree.
                 root = root_node.right;
             } else {
-                // |frag| overlaps the |root|.  Give up.
+                // `frag` overlaps the `root`.  Give up.
                 return false;
             }
         }
-        // END check |fix| for any overlap against |tree|.
-        // |fix| doesn't overlap.  Move on to the next one.
+        // END check `fix` for any overlap against `tree`.
+        // `fix` doesn't overlap.  Move on to the next one.
     }
     true
 }
 
 // HELPER FUNCTION
-// Try to add all of |frags| to |tree|.  Return |true| if possible, |false| if
-// not possible.  If |false| is returned, |tree| is unchanged (this is
+// Try to add all of `frags` to `tree`.  Return `true` if possible, `false` if
+// not possible.  If `false` is returned, `tree` is unchanged (this is
 // important).  This routine relies on the fact that SortedFrags is
 // non-overlapping.
 fn ssal_add_if_possible(
@@ -189,7 +189,7 @@ impl SpillSlotAllocator {
             size: req_size,
             tree,
         });
-        // And now "block out subsequent slots that |req_size| implies.
+        // And now "block out subsequent slots that `req_size` implies.
         // viz: req_size == 1  ->  block out 0 more
         // viz: req_size == 2  ->  block out 1 more
         // viz: req_size == 4  ->  block out 3 more
@@ -202,8 +202,8 @@ impl SpillSlotAllocator {
         res
     }
 
-    // Allocate spill slots for all the VirtualRanges in |vlrix|s eclass,
-    // including |vlrix| itself.  Since we are allocating spill slots for
+    // Allocate spill slots for all the VirtualRanges in `vlrix`s eclass,
+    // including `vlrix` itself.  Since we are allocating spill slots for
     // complete eclasses at once, none of the members of the class should
     // currently have any allocation.  This routine will try to allocate all
     // class members the same slot, but it can only guarantee to do so if the
@@ -266,7 +266,7 @@ impl SpillSlotAllocator {
             let tree = &cand_slot.get_tree();
             assert!(mb_chosen_slotno.is_none());
 
-            // BEGIN see if |cand_slot| can hold all eclass members individually
+            // BEGIN see if `cand_slot` can hold all eclass members individually
             let mut all_cands_fit_individually = true;
             for cand_vlrix in vlrEquivClasses.equiv_class_elems_iter(vlrix) {
                 let cand_vlr = &vlr_env[cand_vlrix];
@@ -276,12 +276,12 @@ impl SpillSlotAllocator {
                     break;
                 }
             }
-            // END see if |cand_slot| can hold all eclass members individually
+            // END see if `cand_slot` can hold all eclass members individually
             if !all_cands_fit_individually {
                 continue 'pass1_search_existing_slots;
             }
 
-            // Ok.  All eclass members will fit individually in |cand_slot_no|.
+            // Ok.  All eclass members will fit individually in `cand_slot_no`.
             mb_chosen_slotno = Some(cand_slot_no);
             break;
         } /* 'pass1_search_existing_slots */
@@ -308,7 +308,7 @@ impl SpillSlotAllocator {
                 vlr_slot_env[cand_vlrix] = Some(SpillSlot::new(chosen_slotno));
                 continue 'pass2_per_equiv_class;
             }
-            // It won't fit in |chosen_slotno|, so try somewhere (anywhere) else.
+            // It won't fit in `chosen_slotno`, so try somewhere (anywhere) else.
             for alt_slotno in 0..self.slots.len() as u32 {
                 let alt_slot = &self.slots[alt_slotno as usize];
                 if !alt_slot.is_InUse() {
@@ -439,7 +439,7 @@ fn do_coalescing_analysis<F: Function>(
     for (vlr, n) in vlr_env.iter().zip(0..) {
         let vlrix = VirtualRangeIx::new(n);
         let vreg: VirtualReg = vlr.vreg;
-        // Now we know that there's a VLR |vlr| that is for VReg |vreg|.  Update
+        // Now we know that there's a VLR `vlr` that is for VReg `vreg`.  Update
         // the inverse mapping accordingly.  That may involve resizing it, since
         // we have no idea of the order in which we will first encounter VRegs.
         // By contrast, we know we are stepping sequentially through the VLR
@@ -490,17 +490,17 @@ fn do_coalescing_analysis<F: Function>(
         for fix in &frags.frag_ixs {
           let frag = &frag_env[*fix];
           if xxIsLastUse {
-            // We're checking to see if |vreg| has a last use in this block
+            // We're checking to see if `vreg` has a last use in this block
             // (well, technically, a fragment end in the block; we don't care if
             // it is later redefined in the same block) .. anyway ..
-            // We're checking to see if |vreg| has a last use in this block
-            // at |iix|.u
+            // We're checking to see if `vreg` has a last use in this block
+            // at `iix`.u
             if frag.last == InstPoint::new_use(iix) {
               return Some(*vlrix);
             }
           } else {
-            // We're checking to see if |vreg| has a first def in this block
-            // at |iix|.d
+            // We're checking to see if `vreg` has a first def in this block
+            // at `iix`.d
             if frag.first == InstPoint::new_def(iix) {
               return Some(*vlrix);
             }
@@ -522,14 +522,14 @@ fn do_coalescing_analysis<F: Function>(
         for fix in &frags.frag_ixs {
           let frag = &frag_env[*fix];
           if xxIsLastUse {
-            // We're checking to see if |rreg| has a last use in this block
-            // at |iix|.u
+            // We're checking to see if `rreg` has a last use in this block
+            // at `iix`.u
             if frag.last == InstPoint::new_use(iix) {
               return Some(*rlrix);
             }
           } else {
-            // We're checking to see if |rreg| has a first def in this block
-            // at |iix|.d
+            // We're checking to see if `rreg` has a first def in this block
+            // at `iix`.d
             if frag.first == InstPoint::new_def(iix) {
               return Some(*rlrix);
             }
@@ -558,12 +558,12 @@ fn do_coalescing_analysis<F: Function>(
                     // It might seem strange to assert that defs_len is <= 1 rather than
                     // == 1.  But -- as fuzzing shows -- it might be that the
                     // destination of a copy is a real reg that is one of the
-                    // RealRegUniverse |suggested_scratch| registers.  It is allowable
+                    // RealRegUniverse `suggested_scratch` registers.  It is allowable
                     // for such a register to be defined, but not used or modified.
                     // However, sanitisation will ensure it is not present in any of the
                     // three register sets.  Hence the assertions and the following
                     // conditional block.  If any of the following five assertions fail,
-                    // the client's |is_move| is probably lying to us.
+                    // the client's `is_move` is probably lying to us.
                     assert!(iix_bounds.uses_len == 1);
                     assert!(iix_bounds.defs_len <= 1);
                     assert!(iix_bounds.mods_len == 0);
@@ -685,33 +685,33 @@ fn do_coalescing_analysis<F: Function>(
 }
 
 //=============================================================================
-// The as-yet-unallocated VirtualReg LR prio queue, |VirtualRangePrioQ|.
+// The as-yet-unallocated VirtualReg LR prio queue, `VirtualRangePrioQ`.
 //
 // Relevant methods are parameterised by a VirtualRange env.
 
-// What we seek to do with |VirtualRangePrioQ| is to implement a priority
+// What we seek to do with `VirtualRangePrioQ` is to implement a priority
 // queue of as-yet unallocated virtual live ranges.  For each iteration of the
 // main allocation loop, we pull out the highest-priority unallocated
 // VirtualRange, and either allocate it (somehow), or spill it.
 //
 // The Rust standard type BinaryHeap gives us an efficient way to implement
 // the priority queue.  However, it requires that the queue items supply the
-// necessary cost-comparisons by implementing |Ord| on that type.  Hence we
+// necessary cost-comparisons by implementing `Ord` on that type.  Hence we
 // have to wrap up the items we fundamentally want in the queue, viz,
-// |VirtualRangeIx|, into a new type |VirtualRangeIxAndSize| that also carries
-// the relevant cost field, |size|.  Then we implement |Ord| for
-// |VirtualRangeIxAndSize| so as to only look at the |size| fields.
+// `VirtualRangeIx`, into a new type `VirtualRangeIxAndSize` that also carries
+// the relevant cost field, `size`.  Then we implement `Ord` for
+// `VirtualRangeIxAndSize` so as to only look at the `size` fields.
 //
 // There is a small twist, however.  Most virtual ranges are small and so will
-// have a small |size| field (less than 20, let's say).  For such cases,
-// |BinaryHeap| will presumably choose between contenders with the same |size|
+// have a small `size` field (less than 20, let's say).  For such cases,
+// `BinaryHeap` will presumably choose between contenders with the same `size`
 // field in some arbitrary way.  This has two disadvantages:
 //
 // * it makes the exact allocation order, and hence allocation results,
-//   dependent on |BinaryHeap|'s arbitrary-choice scheme.  This seems
-//   undesirable, and given recent shenanigans resulting from |HashMap| being
+//   dependent on `BinaryHeap`'s arbitrary-choice scheme.  This seems
+//   undesirable, and given recent shenanigans resulting from `HashMap` being
 //   nondeterministic even in a single-threaded scenario, I don't entirely
-//   trust |BinaryHeap| even to be deterministic.
+//   trust `BinaryHeap` even to be deterministic.
 //
 // * experimentation with the "qsort" test case shows that breaking ties by
 //   selecting the entry that has been in the queue the longest, rather than
@@ -719,13 +719,13 @@ fn do_coalescing_analysis<F: Function>(
 //   spilling) in spill-heavy situations (where there are few registers).
 //   When there is not much spilling, it makes no difference.
 //
-// For these reasons, |VirtualRangeIxAndSize| also contains a |tiebreaker|
-// field.  The |VirtualRangePrioQ| logic gives a different value of this for
-// each |VirtualRangeIxAndSize| it creates.  These numbers start off at 2^32-1
+// For these reasons, `VirtualRangeIxAndSize` also contains a `tiebreaker`
+// field.  The `VirtualRangePrioQ` logic gives a different value of this for
+// each `VirtualRangeIxAndSize` it creates.  These numbers start off at 2^32-1
 // and decrease towards zero.  They are used as a secondary comparison key in
-// the case where the |size| fields are equal.  The effect is that (1)
+// the case where the `size` fields are equal.  The effect is that (1)
 // tiebreaking is made completely deterministic, and (2) it breaks ties in
-// favour of the oldest entry (since that will have the highest |tiebreaker|
+// favour of the oldest entry (since that will have the highest `tiebreaker`
 // field).
 //
 // The tiebreaker field will wrap around when it hits zero, but that can only
@@ -735,7 +735,7 @@ fn do_coalescing_analysis<F: Function>(
 // the correctness of the allocations.
 
 // Wrap up a VirtualRangeIx and its size, so that we can implement Ord for it
-// on the basis of the |size| and |tiebreaker| fields.
+// on the basis of the `size` and `tiebreaker` fields.
 //
 // NB! Do not derive {,Partial}{Eq,Ord} for this.  It has its own custom
 // implementations.
@@ -818,8 +818,8 @@ impl VirtualRangePrioQ {
         self.heap.push(to_add);
     }
 
-    // Look in |unallocated| to locate the entry referencing the VirtualRange
-    // with the largest |size| value.  Remove the ref from |unallocated| and
+    // Look in `unallocated` to locate the entry referencing the VirtualRange
+    // with the largest `size` value.  Remove the ref from `unallocated` and
     // return the VLRIx for said entry.
     #[inline(never)]
     fn get_longest_VirtualRange(&mut self) -> Option<VirtualRangeIx> {
@@ -856,7 +856,7 @@ impl VirtualRangePrioQ {
 
 // Something that pairs a fragment index with the index of the virtual range
 // to which this fragment conceptually "belongs", at least for the purposes of
-// this commitment map.  Alternatively, the |vlrix| field may be None, which
+// this commitment map.  Alternatively, the `vlrix` field may be None, which
 // indicates that the associated fragment belongs to a real-reg live range and
 // is therefore non-evictable.
 //
@@ -1159,7 +1159,7 @@ impl CommitmentMapFAST {
 // The per-real-register state
 //
 // Relevant methods are expected to be parameterised by the same VirtualRange
-// env as used in calls to |VirtualRangePrioQ|.
+// env as used in calls to `VirtualRangePrioQ`.
 
 struct PerRealReg {
     // The current committed fragments for this RealReg.
@@ -1167,9 +1167,9 @@ struct PerRealReg {
     committedFAST: CommitmentMapFAST,
 
     // The set of VirtualRanges which have been assigned to this RealReg.  The
-    // union of their frags will be equal to |committed| only if this RealReg
+    // union of their frags will be equal to `committed` only if this RealReg
     // has no RealRanges.  If this RealReg does have RealRanges the
-    // aforementioned union will be exactly the subset of |committed| not used
+    // aforementioned union will be exactly the subset of `committed` not used
     // by the RealRanges.
     vlrixs_assigned: Set<VirtualRangeIx>,
 }
@@ -1189,8 +1189,8 @@ impl PerRealReg {
         fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     ) {
-        // Commit this register to |to_add|, irrevocably.  Don't add it to
-        // |vlrixs_assigned| since we will never want to later evict the
+        // Commit this register to `to_add`, irrevocably.  Don't add it to
+        // `vlrixs_assigned` since we will never want to later evict the
         // assignment.
         self.committedFAST
             .add(&to_add.sorted_frags, None, fenv, vlr_env);
@@ -1225,13 +1225,13 @@ impl PerRealReg {
         fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     ) {
-        // Remove it from |vlrixs_assigned|
+        // Remove it from `vlrixs_assigned`
         if self.vlrixs_assigned.contains(to_del_vlrix) {
             self.vlrixs_assigned.delete(to_del_vlrix);
         } else {
             panic!("PerRealReg: del_VirtualRange on VR not in vlrixs_assigned");
         }
-        // Remove it from |committed|
+        // Remove it from `committed`
         let to_del_vlr = &vlr_env[to_del_vlrix];
         self.committedFAST
             .del(&to_del_vlr.sorted_frags, fenv, vlr_env);
@@ -1242,11 +1242,11 @@ impl PerRealReg {
 }
 
 // HELPER FUNCTION
-// In order to allocate |would_like_to_add| for this real reg, we will
-// need to evict |pairs[pairs_ix]|.  That may or may not be possible,
-// given the rules of the game.  If it is possible, update |evict_set| and
-// |evict_cost| accordingly, and return |true|.  If it isn't possible,
-// return |false|; |evict_set| and |evict_cost| must not be changed.
+// In order to allocate `would_like_to_add` for this real reg, we will
+// need to evict `pairs[pairs_ix]`.  That may or may not be possible,
+// given the rules of the game.  If it is possible, update `evict_set` and
+// `evict_cost` accordingly, and return `true`.  If it isn't possible,
+// return `false`; `evict_set` and `evict_cost` must not be changed.
 fn handle_CM_entry(
     evict_set: &mut Set<VirtualRangeIx>,
     evict_cost: &mut SpillCost,
@@ -1270,7 +1270,7 @@ fn handle_CM_entry(
         // RealRange, and hence not evictable.
         return false;
     }
-    // The |unwrap| is guarded by the previous |if|.
+    // The `unwrap` is guarded by the previous `if`.
     let vlrix_to_evict = mb_vlrix_to_evict.unwrap();
     if do_not_evict.contains(vlrix_to_evict) {
         // Our caller asks that we do not evict this one.
@@ -1283,9 +1283,9 @@ fn handle_CM_entry(
     }
     // It's at least plausible.  Check the costs.  Note that because a
     // VirtualRange may contain arbitrarily many RangeFrags, and we're
-    // visiting RangeFrags here, the |evict_set| may well already contain
-    // |vlrix_to_evict|, in the case where we've already visited a different
-    // fragment that "belongs" to |vlrix_to_evict|.  Hence we must be sure
+    // visiting RangeFrags here, the `evict_set` may well already contain
+    // `vlrix_to_evict`, in the case where we've already visited a different
+    // fragment that "belongs" to `vlrix_to_evict`.  Hence we must be sure
     // not to add it again -- if only as as not to mess up the evict cost
     // calculations.
 
@@ -1305,9 +1305,9 @@ fn handle_CM_entry(
 }
 
 // HELPER FUNCTION
-// For a given RangeFrag, traverse the commitment sub-tree rooted at |root|,
-// adding to |running_set| the set of VLRIxs that the frag intersects, and
-// adding their spill costs to |running_cost|.  Return false if, for one of
+// For a given RangeFrag, traverse the commitment sub-tree rooted at `root`,
+// adding to `running_set` the set of VLRIxs that the frag intersects, and
+// adding their spill costs to `running_cost`.  Return false if, for one of
 // the 4 reasons documented below, the traversal has been abandoned, and true
 // if the search completed successfully.
 fn rec_helper(
@@ -1333,7 +1333,7 @@ fn rec_helper(
     // Now figure out:
     // - whether we need to search the left subtree
     // - whether we need to search the right subtree
-    // - whether |pair_frag| overlaps the root of the subtree
+    // - whether `pair_frag` overlaps the root of the subtree
     let go_left = pair_frag.first < root_frag.first;
     let go_right = pair_frag.last > root_frag.last;
     let overlaps_root = pair_frag.last >= root_frag.first && pair_frag.first <= root_frag.last;
@@ -1414,8 +1414,8 @@ fn rec_helper(
         }
     }
 
-    // If we get here, it means that |pair_frag| can be accommodated if we evict
-    // all the frags it overlaps in the entire subtree rooted at |root|.
+    // If we get here, it means that `pair_frag` can be accommodated if we evict
+    // all the frags it overlaps in the entire subtree rooted at `root`.
     // Propagate that (good) news upwards.
     //
     // Stay sane ..
@@ -1426,30 +1426,30 @@ fn rec_helper(
 
 impl PerRealReg {
     // Find the set of VirtualRangeIxs that would need to be evicted in order to
-    // allocate |would_like_to_add| to this register.  Virtual ranges mentioned
-    // in |do_not_evict| must not be considered as candidates for eviction.
+    // allocate `would_like_to_add` to this register.  Virtual ranges mentioned
+    // in `do_not_evict` must not be considered as candidates for eviction.
     // Also returns the total associated spill cost.  That spill cost cannot be
     // infinite.
     //
     // This can fail (return None) for four different reasons:
     //
-    // - |would_like_to_add| interferes with a real-register-live-range
+    // - `would_like_to_add` interferes with a real-register-live-range
     //   commitment, so the register would be unavailable even if we evicted
     //   *all* virtual ranges assigned to it.
     //
-    // - |would_like_to_add| interferes with a virtual range which is a spill
+    // - `would_like_to_add` interferes with a virtual range which is a spill
     //   range (has infinite cost).  We cannot evict those without risking
     //   non-termination of the overall allocation algorithm.
     //
-    // - |would_like_to_add| interferes with a virtual range listed in
-    //   |do_not_evict|.  Our caller uses this mechanism when trying to do
+    // - `would_like_to_add` interferes with a virtual range listed in
+    //   `do_not_evict`.  Our caller uses this mechanism when trying to do
     //   coalesing, to avoid the nonsensicality of evicting some part of a
     //   virtual live range group in order to allocate a member of the same
     //   group.
     //
     // - The total spill cost of the candidate set exceeds the spill cost of
-    //   |would_like_to_add|.  This means that spilling them would be a net loss
-    //   per our cost model.  Note that |would_like_to_add| may have an infinite
+    //   `would_like_to_add`.  This means that spilling them would be a net loss
+    //   per our cost model.  Note that `would_like_to_add` may have an infinite
     //   spill cost, in which case it will "win" over all other
     //   non-infinite-cost eviction candidates.  This is by design (so as to
     //   guarantee that we can always allocate spill/reload bridges).
@@ -1470,17 +1470,17 @@ impl PerRealReg {
         }
 
         // The tree isn't empty, so we will have to do this the hard way: iterate
-        // over all fragments in |would_like_to_add| and check them against the
+        // over all fragments in `would_like_to_add` and check them against the
         // tree.
 
         // Useful constants for the main loop
         let would_like_to_add_vlr = &vlr_env[would_like_to_add];
         let evict_cost_budget = would_like_to_add_vlr.spill_cost;
-        // Note that |evict_cost_budget| can be infinite because
-        // |would_like_to_add| might be a spill/reload range.
+        // Note that `evict_cost_budget` can be infinite because
+        // `would_like_to_add` might be a spill/reload range.
 
         // The overall evict set and cost so far.  These are updated as we iterate
-        // over the fragments that make up |would_like_to_add|.
+        // over the fragments that make up `would_like_to_add`.
         let mut running_set = Set::<VirtualRangeIx>::empty();
         let mut running_cost = SpillCost::zero();
 
@@ -1505,7 +1505,7 @@ impl PerRealReg {
             // And move on to the next fragment.
         }
 
-        // If we got here, it means that |would_like_to_add| can be accommodated \o/
+        // If we got here, it means that `would_like_to_add` can be accommodated \o/
         assert!(running_cost.is_finite());
         assert!(running_cost.is_less_than(&evict_cost_budget));
         Some((running_set, running_cost))
@@ -1525,8 +1525,8 @@ impl PerRealReg {
         // Useful constants for the loop
         let would_like_to_add_vlr = &vlr_env[would_like_to_add];
         let evict_cost_budget = would_like_to_add_vlr.spill_cost;
-        // Note that |evict_cost_budget| can be infinite because
-        // |would_like_to_add| might be a spill/reload range.
+        // Note that `evict_cost_budget` can be infinite because
+        // `would_like_to_add` might be a spill/reload range.
 
         let vr_ip_first = frag_env[would_like_to_add_vlr.sorted_frags.frag_ixs[0]].first;
         let vr_ip_last = frag_env[would_like_to_add_vlr.sorted_frags.frag_ixs
@@ -1553,7 +1553,7 @@ impl PerRealReg {
                     break;
                 }
 
-                // Find out any vr entry contains |vr_ip|, if any.  If not, move on.
+                // Find out any vr entry contains `vr_ip`, if any.  If not, move on.
                 let mut found_in_vr = false;
                 for fix in &would_like_to_add_vlr.sorted_frags.frag_ixs {
                     let frag = &frag_env[*fix];
@@ -1564,10 +1564,10 @@ impl PerRealReg {
                 }
                 if !found_in_vr {
                     vr_ip = vr_ip.step();
-                    continue; // there can't be any intersection at |vr_ip|
+                    continue; // there can't be any intersection at `vr_ip`
                 }
 
-                // Find the cm entry containing |vr_ip|
+                // Find the cm entry containing `vr_ip`
                 let mut pair_ix = 0;
                 let mut found = false;
                 for pair in &self.committed.pairs {
@@ -1704,8 +1704,8 @@ fn print_RA_state(
 //=============================================================================
 // Frag compression
 
-// Does |frag1| describe some range of instructions that is followed
-// immediately by |frag2| ?  Note that this assumes (and checks) that there
+// Does `frag1` describe some range of instructions that is followed
+// immediately by `frag2` ?  Note that this assumes (and checks) that there
 // are no spill or reload ranges in play at this point; there should not be.
 fn frags_are_mergeable(frag1: &RangeFrag, frag2: &RangeFrag) -> bool {
     assert!(frag1.first.pt.is_use_or_def());
@@ -1738,9 +1738,9 @@ fn frags_are_mergeable(frag1: &RangeFrag, frag2: &RangeFrag) -> bool {
 const Z_INVALID_BLOCKIX: BlockIx = BlockIx::BlockIx(0xFFFF_FFFF);
 const Z_INVALID_COUNT: u16 = 0xFFFF;
 
-// Try and compress the fragments for each virtual range in |vlr_env|, adding
-// new ones to |frag_env| as we go.  Note this is a big kludge, in the sense
-// that the new |RangeFrags| have bogus |bix|, |kind| and |count| fields, and
+// Try and compress the fragments for each virtual range in `vlr_env`, adding
+// new ones to `frag_env` as we go.  Note this is a big kludge, in the sense
+// that the new `RangeFrags` have bogus `bix`, `kind` and `count` fields, and
 // we rely on the fact that the backtracking core algorithm won't look at them
 // after this point.  This should be fixed cleanly.
 #[inline(never)]
@@ -2001,10 +2001,10 @@ pub fn alloc_main<F: Function>(
         );
     }
 
-    // This is also part of the running state.  |vlr_slot_env| tells us the
+    // This is also part of the running state.  `vlr_slot_env` tells us the
     // assigned spill slot for each VirtualRange, if any.
-    // |spill_slot_allocator| decides on the assignments and writes them into
-    // |vlr_slot_env|.
+    // `spill_slot_allocator` decides on the assignments and writes them into
+    // `vlr_slot_env`.
     let mut vlr_slot_env = TypedIxVec::<VirtualRangeIx, Option<SpillSlot>>::new();
     vlr_slot_env.resize(num_vlrs_initial, None);
     let mut spill_slot_allocator = SpillSlotAllocator::new();
@@ -2071,20 +2071,20 @@ pub fn alloc_main<F: Function>(
 
         // ====== BEGIN Try to do coalescing ======
         //
-        // First, look through the hints for |curr_vlr|, collecting up candidate
-        // real regs, in decreasing order of preference, in |hinted_regs|.  Note
+        // First, look through the hints for `curr_vlr`, collecting up candidate
+        // real regs, in decreasing order of preference, in `hinted_regs`.  Note
         // that we don't have to consider the weights here, because the coalescing
         // analysis phase has already sorted the hints for the VLR so as to
         // present the most favoured (weighty) first, so we merely need to retain
-        // that ordering when copying into |hinted_regs|.
+        // that ordering when copying into `hinted_regs`.
         // FIXME (very) SmallVec
         let mut hinted_regs = Vec::<RealReg>::new();
         let mut mb_curr_vlr_eclass: Option<Set<VirtualRangeIx>> = None;
 
-        // === BEGIN collect all hints for |curr_vlr| ===
-        // |hints| has one entry per VLR, but only for VLRs which existed
+        // === BEGIN collect all hints for `curr_vlr` ===
+        // `hints` has one entry per VLR, but only for VLRs which existed
         // initially (viz, not for any created by spilling/splitting/whatever).
-        // Similarly, |vlrEquivClasses| can only map VLRs that existed initially,
+        // Similarly, `vlrEquivClasses` can only map VLRs that existed initially,
         // and will panic otherwise.  Hence the following check:
         if curr_vlrix.get() < hints.len() {
             for hint in &hints[curr_vlrix] {
@@ -2093,12 +2093,12 @@ pub fn alloc_main<F: Function>(
                     Hint::SameAs(other_vlrix, _weight) => {
                         // It wants the same reg as some other VLR, but we can only honour
                         // that if the other VLR actually *has* a reg at this point.  Its
-                        // |rreg| field will tell us exactly that.
+                        // `rreg` field will tell us exactly that.
                         vlr_env[*other_vlrix].rreg
                     }
                     Hint::Exactly(rreg, _weight) => Some(*rreg),
                 };
-                // So now |mb_cand| might have a preferred real reg.  If so, add it to
+                // So now `mb_cand` might have a preferred real reg.  If so, add it to
                 // the list of cands.  De-dup as we go, since that is way cheaper than
                 // effectively doing the same via repeated lookups in the
                 // CommitmentMaps.
@@ -2110,18 +2110,18 @@ pub fn alloc_main<F: Function>(
                 // END for each hint
             }
 
-            // At this point, we have in |hinted_regs|, the hint candidates that
-            // arise from copies between |curr_vlr| and its immediate neighbouring
+            // At this point, we have in `hinted_regs`, the hint candidates that
+            // arise from copies between `curr_vlr` and its immediate neighbouring
             // VLRs or RLRs, in order of declining preference.  And that is a good
             // start.  However, it may be the case that there is some other VLR
-            // which is in the same equivalence class as |curr_vlr|, but is not a
+            // which is in the same equivalence class as `curr_vlr`, but is not a
             // direct neighbour, and which has already been assigned a register.  We
             // really ought to take those into account too, as the least-preferred
             // candidates.  Hence we need to iterate over the equivalence class and
             // "round up the secondary candidates."
             let n_primary_cands = hinted_regs.len();
 
-            // Find the equivalence class set for |curr_vlrix|.  We'll need it
+            // Find the equivalence class set for `curr_vlrix`.  We'll need it
             // later.
             let mut curr_vlr_eclass = Set::<VirtualRangeIx>::empty();
             for vlrix in vlrEquivClasses.equiv_class_elems_iter(curr_vlrix) {
@@ -2134,7 +2134,7 @@ pub fn alloc_main<F: Function>(
             for vlrix in vlrEquivClasses.equiv_class_elems_iter(curr_vlrix) {
                 if vlrix != curr_vlrix {
                     if let Some(rreg) = vlr_env[vlrix].rreg {
-                        // Add |rreg| as a cand, if we don't already have it.
+                        // Add `rreg` as a cand, if we don't already have it.
                         if !hinted_regs.iter().any(|r| *r == rreg) {
                             hinted_regs.push(rreg);
                         }
@@ -2163,9 +2163,9 @@ pub fn alloc_main<F: Function>(
                 }
             }
         }
-        // === END collect all hints for |curr_vlr| ===
+        // === END collect all hints for `curr_vlr` ===
 
-        // === BEGIN try to use the hints for |curr_vlr| ===
+        // === BEGIN try to use the hints for `curr_vlr` ===
         // Now work through the list of preferences, to see if we can honour any
         // of them.
         for rreg in &hinted_regs {
@@ -2179,8 +2179,8 @@ pub fn alloc_main<F: Function>(
             // live range, which we can't do.
             //
             // We take care not to evict any range which is in the same equivalence
-            // class as |curr_vlr| since those are (by definition) connected to
-            // |curr_vlr| via V-V copies, and so evicting any of them would be
+            // class as `curr_vlr` since those are (by definition) connected to
+            // `curr_vlr` via V-V copies, and so evicting any of them would be
             // counterproductive from the point of view of removing copies.
 
             let do_not_evict = if let Some(ref curr_vlr_eclass) = mb_curr_vlr_eclass {
@@ -2206,7 +2206,7 @@ pub fn alloc_main<F: Function>(
                 assert!(total_evict_cost.is_less_than(&curr_vlr.spill_cost));
                 // Evict all evictees in the set
                 for vlrix_to_evict in vlrixs_to_evict.iter() {
-                    // Ensure we're not evicting anything in |curr_vlrix|'s eclass.
+                    // Ensure we're not evicting anything in `curr_vlrix`'s eclass.
                     // This should be guaranteed us by find_Evict_Set.
                     assert!(!do_not_evict.contains(*vlrix_to_evict));
                     // Evict ..
@@ -2231,7 +2231,7 @@ pub fn alloc_main<F: Function>(
                 continue 'main_allocation_loop;
             }
         } /* for rreg in hinted_regs */
-        // === END try to use the hints for |curr_vlr| ===
+        // === END try to use the hints for `curr_vlr` ===
 
         // ====== END Try to do coalescing ======
 
@@ -2381,7 +2381,7 @@ pub fn alloc_main<F: Function>(
               }
         */
 
-        // We will be spilling vreg |curr_vlr.reg| with VirtualRange |curr_vlr| to
+        // We will be spilling vreg `curr_vlr.reg` with VirtualRange `curr_vlr` to
         // a spill slot that the spill slot allocator will choose for us, just a
         // bit further down this function.
 
@@ -2389,7 +2389,7 @@ pub fn alloc_main<F: Function>(
         // instructions around an instruction that references a VirtualReg
         // that has been spilled.
         struct SpillAndOrReloadInfo {
-            bix: BlockIx,     // that |iix| is in
+            bix: BlockIx,     // that `iix` is in
             iix: InstIx,      // this is the Inst we are spilling/reloading for
             kind: BridgeKind, // says whether to create a spill or reload or both
         }
@@ -2452,7 +2452,7 @@ pub fn alloc_main<F: Function>(
             }
         }
 
-        // Now that we no longer need to access |frag_env| or |vlr_env| for
+        // Now that we no longer need to access `frag_env` or `vlr_env` for
         // the remainder of this iteration of the main allocation loop, we can
         // actually generate the required spill/reload artefacts.
 
@@ -2465,7 +2465,7 @@ pub fn alloc_main<F: Function>(
         assert!(curr_vlrix < VirtualRangeIx::new(num_vlrs_initial));
         if vlr_slot_env[curr_vlrix].is_none() {
             // It hasn't been decided yet.  Cause it to be so by asking for an
-            // allocation for the entire eclass that |curr_vlrix| belongs to.
+            // allocation for the entire eclass that `curr_vlrix` belongs to.
             spill_slot_allocator.alloc_spill_slots(
                 &mut vlr_slot_env,
                 func,
@@ -2559,11 +2559,11 @@ pub fn alloc_main<F: Function>(
     debug!("");
     info!("alloc_main:   create spills_n_reloads for MOVE insns");
 
-    // Sort |edit_list_move| by the insn with which each item is associated.
+    // Sort `edit_list_move` by the insn with which each item is associated.
     edit_list_move.sort_unstable_by(|eli1, eli2| eli1.iix.cmp(&eli2.iix));
 
-    // Now go through |edit_list_move| and find pairs which constitute a
-    // spillslot-to-the-same-spillslot move.  What we have in |edit_list_move| is
+    // Now go through `edit_list_move` and find pairs which constitute a
+    // spillslot-to-the-same-spillslot move.  What we have in `edit_list_move` is
     // heavily constrained, as follows:
     //
     // * each entry should reference an InstIx which the coalescing analysis
@@ -2581,7 +2581,7 @@ pub fn alloc_main<F: Function>(
     // * For a referenced instruction, there may be at most two entries in this
     //   list: one that references the R->U frag and one that references the
     //   D->S frag.  Furthermore, the two entries must carry values of the same
-    //   RegClass; if that isn't true, the client's |is_move| function is
+    //   RegClass; if that isn't true, the client's `is_move` function is
     //   defective.
     //
     // For any such pair identified, if both frags mention the same spill slot,
@@ -2589,9 +2589,9 @@ pub fn alloc_main<F: Function>(
     // note that the instruction itself is to be deleted (converted to a
     // zero-len nop).  In a sense we have "cancelled out" a reload/spill pair.
     // Entries that can't be cancelled out are handled the same way as for
-    // entries in |edit_list_other|, by simply copying them there.
+    // entries in `edit_list_other`, by simply copying them there.
     //
-    // Since |edit_list_move| is sorted by insn ix, we can scan linearly over
+    // Since `edit_list_move` is sorted by insn ix, we can scan linearly over
     // it, looking for adjacent pairs.  We'll have to accept them in either
     // order though (first R->U then D->S, or the other way round).  There's no
     // fixed ordering since there is no particular ordering in the way
@@ -2600,9 +2600,9 @@ pub fn alloc_main<F: Function>(
     // As a result of spill slot coalescing, we'll need to delete the move
     // instructions leading to a mergable spill slot move.  The insn stream
     // editor can't delete instructions, so instead it'll replace them with zero
-    // len nops obtained from the client.  |iixs_to_nop_out| records the insns
+    // len nops obtained from the client.  `iixs_to_nop_out` records the insns
     // that this has to happen to.  It is in increasing order of InstIx (because
-    // |edit_list_sorted| is), and the indices in it refer to the original
+    // `edit_list_sorted` is), and the indices in it refer to the original
     // virtual-registerised code.
     let mut iixs_to_nop_out = Vec::<InstIx>::new();
 
@@ -2665,7 +2665,7 @@ pub fn alloc_main<F: Function>(
             }
         }
         // If we get here for whatever reason, this group is uninteresting.  Copy
-        // in to |edit_list_other| so that it gets processed in the normal way.
+        // in to `edit_list_other` so that it gets processed in the normal way.
         for i in i_min..=i_max {
             edit_list_other.push(edit_list_move[i]);
             n_edit_list_move_processed += 1;
@@ -2768,8 +2768,8 @@ pub fn alloc_main<F: Function>(
             let VirtualRange {
                 vreg, sorted_frags, ..
             } = &vlr_env[*vlrix_assigned];
-            // All the RangeFrags in |vlr_assigned| require |vlr_assigned.reg|
-            // to be mapped to the real reg |i|
+            // All the RangeFrags in `vlr_assigned` require `vlr_assigned.reg`
+            // to be mapped to the real reg `i`
             // .. collect up all its constituent RangeFrags.
             for fix in &sorted_frags.frag_ixs {
                 frag_map.push((*fix, *vreg, rreg));
@@ -2837,10 +2837,10 @@ pub fn alloc_main<F: Function>(
     // FIXME: derive this information directly from the allocation data
     // structures used above.
     //
-    // NB at this point, the |san_reg_uses| that was computed in the analysis
+    // NB at this point, the `san_reg_uses` that was computed in the analysis
     // phase is no longer valid, because we've added and removed instructions to
-    // the function relative to the one that |san_reg_uses| was computed from,
-    // so we have to re-visit all insns with |add_raw_reg_vecs_for_insn|.
+    // the function relative to the one that `san_reg_uses` was computed from,
+    // so we have to re-visit all insns with `add_raw_reg_vecs_for_insn`.
     // That's inefficient, but we don't care .. this should only be a temporary
     // fix.
 

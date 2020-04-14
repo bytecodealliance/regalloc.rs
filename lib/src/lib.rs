@@ -100,7 +100,7 @@ pub use crate::data_structures::SpillSlot;
 //
 // This is of course inconvenient for the caller, since it requires
 // maintenance of two separate universes.  In the future we will add a boolean
-// parameter to the top level function |allocate_registers| that indicates
+// parameter to the top level function `allocate_registers` that indicates
 // that whether or not the function is a leaf function.
 //
 // === (3) === The "suggested scratch register" ===
@@ -120,12 +120,12 @@ pub use crate::data_structures::SpillSlot;
 //
 // (3) The reserved register must not have any reads or modifies by any
 //     instruction in the vcode.  In other words, it must not be handed to
-//     either the |add_use| or |add_mod| function of the |RegUsageCollector|
-//     that is presented to the client's |get_regs| function.  If any such
+//     either the `add_use` or `add_mod` function of the `RegUsageCollector`
+//     that is presented to the client's `get_regs` function.  If any such
 //     mention is detected, the library will return an error.
 //
 // (4) The reserved reg may be mentioned as written by instructions in the
-//     vcode, though -- in other words it may be handed to |add_def|.  The
+//     vcode, though -- in other words it may be handed to `add_def`.  The
 //     library will tolerate and correctly handle that.  However, because no
 //     vcode instruction may read or modify the reserved register, all such
 //     writes are "dead".  This in turn guarantees that the allocator can, if
@@ -198,7 +198,7 @@ pub trait Function {
     // Instruction register slots
     // --------------------------
 
-    /// Add to |collector| the used, defined, and modified registers for an
+    /// Add to `collector` the used, defined, and modified registers for an
     /// instruction.
     fn get_regs(insn: &Self::Inst, collector: &mut RegUsageCollector);
 
@@ -328,7 +328,7 @@ pub struct RegAllocResult<F: Function> {
     pub num_spill_slots: u32,
 
     /// Block annotation strings, for debugging.  Requires requesting in the
-    /// call to |allocate_registers|.  Creating of these annotations is
+    /// call to `allocate_registers`.  Creating of these annotations is
     /// potentially expensive, so don't request them if you don't need them.
     pub block_annotations: Option<TypedIxVec<BlockIx, Vec<String>>>,
 }

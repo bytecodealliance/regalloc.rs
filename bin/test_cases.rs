@@ -2,7 +2,7 @@
  * vim: set ts=8 sts=2 et sw=2 tw=80:
 */
 
-/// Test cases.  The list of them is right at the bottom, function |find_Func|.
+/// Test cases.  The list of them is right at the bottom, function `find_Func`.
 /// Add new ones there.
 use regalloc::{Reg, RegClass};
 

@@ -50,12 +50,12 @@ impl ToFromU32 for u32 {
 // This is a fast union-find implementation for "T: ToFromU32" items in some
 // dense range [0, N-1].  The allowed operations are:
 //
-// (1) create a new |UnionFind|er
+// (1) create a new `UnionFind`er
 //
 // (2) mark two elements as being in the same equivalence class
 //
 // (3) get the equivalence classes wrapped up in an opaque structure
-//     |UnionFindEquivClasses|, which makes it possible to cheaply find and
+//     `UnionFindEquivClasses`, which makes it possible to cheaply find and
 //     iterate through the equivalence class of any item.
 //
 // (4) get an iterator over the "equivalence class leaders".  Iterating this
@@ -63,9 +63,9 @@ impl ToFromU32 for u32 {
 //     these to (3), it is possible to enumerate all the equivalence classes
 //     exactly once.
 //
-// |UnionFind| and the operations |union| and |find| are loosely based on the
+// `UnionFind` and the operations `union` and `find` are loosely based on the
 // discussion in Chapter 8 of "Data Structures and Algorithm Analysis in C"
-// (Mark Allen Weiss, 1993).  |UnionFindEquivClasses| and the algorithm to
+// (Mark Allen Weiss, 1993).  `UnionFindEquivClasses` and the algorithm to
 // construct it is home-grown; although I'm sure the same idea has been
 // implemented many times before.
 
@@ -129,14 +129,14 @@ impl<T: ToFromU32> UnionFind<T> {
         let elem1 = ToFromU32::to_u32(elem1t);
         let elem2 = ToFromU32::to_u32(elem2t);
         if elem1 == elem2 {
-            // Ideally, we'd alert the callers they're mistakenly do |union| on
+            // Ideally, we'd alert the callers they're mistakenly do `union` on
             // identical values repeatedly, but fuzzing hits this repeatedly.
             return;
         }
         let root1: u32 = self.find(elem1);
         let root2: u32 = self.find(elem2);
         if root1 == root2 {
-            // |elem1| and |elem2| are already in the same tree.  Do nothing.
+            // `elem1` and `elem2` are already in the same tree.  Do nothing.
             return;
         }
         let size1: i32 = self.parent_or_size[root1 as usize];
@@ -145,7 +145,7 @@ impl<T: ToFromU32> UnionFind<T> {
         assert!(size1 < 0 && size2 < 0);
         // Make the root of the smaller tree point at the root of the bigger tree.
         // Update the root of the bigger tree to reflect its increased size.  That
-        // only requires adding the two |size| values, since they are both
+        // only requires adding the two `size` values, since they are both
         // negative, so adding them will (correctly) drive it more negative.
         if size1 < size2 {
             self.parent_or_size[root1 as usize] = root2 as i32;
@@ -158,7 +158,7 @@ impl<T: ToFromU32> UnionFind<T> {
 }
 
 // This is a compact representation for all the equivalence classes in a
-// |UnionFind|, that can be constructed in more-or-less linear time (meaning,
+// `UnionFind`, that can be constructed in more-or-less linear time (meaning,
 // O(universe size), and allows iteration over the elements of each
 // equivalence class in time linear in the size of the equivalence class (you
 // can't ask for better).  It doesn't support queries of the form "are these
@@ -178,7 +178,7 @@ const UFEC_NULL: u32 = 0xFFFF_FFFF;
 struct LLElem {
     // This list element
     elem: u32,
-    // Pointer to the rest of the list (index in |llelems|), or UFEC_NULL.
+    // Pointer to the rest of the list (index in `llelems`), or UFEC_NULL.
     tail: u32,
 }
 
@@ -196,22 +196,22 @@ pub struct UnionFindEquivClasses<T: ToFromU32> {
     // Keep the typechecker happy
     /*priv*/
     anchor: PhantomData<T>,
-    // This struct doesn't have a |new| method since construction is done by a
-    // carefully designed algorithm, |UnionFind::get_equiv_classes|.
+    // This struct doesn't have a `new` method since construction is done by a
+    // carefully designed algorithm, `UnionFind::get_equiv_classes`.
 }
 
 impl<T: ToFromU32> UnionFind<T> {
-    // This requires mutable |self| because it needs to do a bunch of |find|
-    // operations, and those modify |self| in order to perform path compression.
-    // We could avoid this by using a non-path-compressing |find| operation, but
+    // This requires mutable `self` because it needs to do a bunch of `find`
+    // operations, and those modify `self` in order to perform path compression.
+    // We could avoid this by using a non-path-compressing `find` operation, but
     // that could have the serious side effect of making the big-O complexity of
-    // |get_equiv_classes| worse.  Hence we play safe and accept the mutability
+    // `get_equiv_classes` worse.  Hence we play safe and accept the mutability
     // requirement.
     pub fn get_equiv_classes(&mut self) -> UnionFindEquivClasses<T> {
         let nElemsUSize = self.parent_or_size.len();
         // The construction algorithm requires that all elements have a value
         // strictly less than 2^31.  The union-find machinery, that builds
-        // |parent_or_size| that we read here, however relies on a slightly
+        // `parent_or_size` that we read here, however relies on a slightly
         // tighter bound, which which we reiterate here due to general paranoia:
         assert!(nElemsUSize < UF_MAX_SIZE as usize);
         let nElems = nElemsUSize as u32;
@@ -229,28 +229,28 @@ impl<T: ToFromU32> UnionFind<T> {
             },
         );
 
-        // As explanation, let there be N elements (|nElems|) which have been
-        // partitioned into M <= N equivalence classes by calls to |union|.
+        // As explanation, let there be N elements (`nElems`) which have been
+        // partitioned into M <= N equivalence classes by calls to `union`.
         //
-        // When we are finished, |lists| will contain M independent linked lists,
+        // When we are finished, `lists` will contain M independent linked lists,
         // each of which represents one equivalence class, and which is terminated
-        // by UFEC_NULL.  And |heads| is used to point to the starting point of
+        // by UFEC_NULL.  And `heads` is used to point to the starting point of
         // each elem's equivalence class, as follows:
         //
         // * if heads[elem][bit 31] == 1, then heads[i][bits 30:0] contain the
-        //   index in lists[] of the first element in |elem|s equivalence class.
+        //   index in lists[] of the first element in `elem`s equivalence class.
         //
         // * if heads[elem][bit 31] == 0, then heads[i][bits 30:0] contain tell us
-        //   what |elem|s equivalence class leader is.  That is, heads[i][bits
-        //   30:0] tells us the index in |heads| of the entry that contains the
-        //   first element in |elem|s equivalence class.
+        //   what `elem`s equivalence class leader is.  That is, heads[i][bits
+        //   30:0] tells us the index in `heads` of the entry that contains the
+        //   first element in `elem`s equivalence class.
         //
         // With this arrangement, we can:
         //
-        // * detect whether |elem| is an equivalence class leader, by inspecting
+        // * detect whether `elem` is an equivalence class leader, by inspecting
         //   heads[elem][bit 31]
         //
-        // * find the start of |elem|s equivalence class list, either by using
+        // * find the start of `elem`s equivalence class list, either by using
         //   heads[elem][bits 30:0] directly if heads[elem][bit 31] == 1, or
         //   using a single indirection if heads[elem][bit 31] == 0.
         //
@@ -269,25 +269,25 @@ impl<T: ToFromU32> UnionFind<T> {
         //   cost of visiting all elements of each equivalence class exactly once.
         //
         // The construction algorithm requires two forward passes over
-        // |parent_or_size|.
+        // `parent_or_size`.
         //
         // In the first pass, we visit each element.  If a element is a tree root,
-        // its |heads| entry is left at UFEC_NULL.  If a element isn't a tree
-        // root, we use |find| to find the root element, and set
-        // |heads[elem][30:0]| to be the tree root, and heads[elem][31] to 0.
-        // Hence, after the first pass, |heads| maps each non-root element to its
+        // its `heads` entry is left at UFEC_NULL.  If a element isn't a tree
+        // root, we use `find` to find the root element, and set
+        // `heads[elem][30:0]` to be the tree root, and heads[elem][31] to 0.
+        // Hence, after the first pass, `heads` maps each non-root element to its
         // equivalence class leader.
         //
         // The second pass builds the lists.  We again visit each element.  If a
-        // element is a tree root, it is added as a list element, and its |heads|
+        // element is a tree root, it is added as a list element, and its `heads`
         // entry is updated to point at the list element.  If a element isn't a
-        // tree root, we find its root in constant time by inspecting its |head|
+        // tree root, we find its root in constant time by inspecting its `head`
         // entry.  The element is added to the the root element's list, and the
-        // root element's |head| entry is accordingly updated.  Hence, after the
-        // second pass, the |head| entry for root elements points to a linked list
-        // that contains all elements in that tree.  And the |head| entry for
+        // root element's `head` entry is accordingly updated.  Hence, after the
+        // second pass, the `head` entry for root elements points to a linked list
+        // that contains all elements in that tree.  And the `head` entry for
         // non-root elements is unchanged from the first pass, that is, it points
-        // to the |head| entry for that element's root element.
+        // to the `head` entry for that element's root element.
         //
         // Note that the heads[] entry for any class leader (tree root) can never
         // be UFEC_NULL, since all elements must at least be in an equivalence
@@ -362,7 +362,7 @@ pub struct UnionFindEquivClassElemsIter<'a, T: ToFromU32> {
     // The equivalence classes
     /*priv*/
     ufec: &'a UnionFindEquivClasses<T>,
-    // Index into |ufec.lists|, or UFEC_NULL.
+    // Index into `ufec.lists`, or UFEC_NULL.
     /*priv*/
     next: u32,
 }
@@ -376,10 +376,10 @@ impl<T: ToFromU32> UnionFindEquivClasses<T> {
             // indirect.
             itemU32 = self.heads[itemU32 as usize];
         }
-        // Now |itemU32| must point at a class leader.
+        // Now `itemU32` must point at a class leader.
         assert!((self.heads[itemU32 as usize] & 0x8000_0000) == 0x8000_0000);
         let next = self.heads[itemU32 as usize] & 0x7FFF_FFFF;
-        // Now |next| points at the first element in the list.
+        // Now `next` points at the first element in the list.
         UnionFindEquivClassElemsIter { ufec: &self, next }
     }
 }
@@ -405,7 +405,7 @@ pub struct UnionFindEquivClassLeadersIter<'a, T: ToFromU32> {
     // The equivalence classes
     /*priv*/
     ufec: &'a UnionFindEquivClasses<T>,
-    // Index into |ufec.heads| of the next unvisited item.
+    // Index into `ufec.heads` of the next unvisited item.
     /*priv*/
     next: u32,
 }
@@ -422,7 +422,7 @@ impl<T: ToFromU32> UnionFindEquivClasses<T> {
 impl<'a, T: ToFromU32> Iterator for UnionFindEquivClassLeadersIter<'a, T> {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
-        // Scan forwards through |ufec.heads| to find the next unvisited one which
+        // Scan forwards through `ufec.heads` to find the next unvisited one which
         // is a leader (a tree root).
         loop {
             if self.next as usize >= self.ufec.heads.len() {
@@ -446,7 +446,7 @@ impl<'a, T: ToFromU32> Iterator for UnionFindEquivClassLeadersIter<'a, T> {
 #[cfg(test)]
 mod union_find_test_utils {
     use super::UnionFindEquivClasses;
-    // Test that the eclass for |elem| is |expected| (modulo ordering).
+    // Test that the eclass for `elem` is `expected` (modulo ordering).
     pub fn test_eclass(eclasses: &UnionFindEquivClasses<u32>, elem: u32, expected: &Vec<u32>) {
         let mut expected_sorted = expected.clone();
         let mut actual = vec![];
@@ -457,7 +457,7 @@ mod union_find_test_utils {
         actual.sort();
         assert!(actual == expected_sorted);
     }
-    // Test that the eclass leaders are exactly |expected|.
+    // Test that the eclass leaders are exactly `expected`.
     pub fn test_leaders(
         univ_size: u32,
         eclasses: &UnionFindEquivClasses<u32>,
@@ -748,7 +748,7 @@ macro_rules! impl_array(
 impl_array!(2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 24, 28, 32);
 
 // The U here stands for "unordered".  It refers to the fact that the elements
-// in |Small::arr| are in no particular order, although they are
+// in `Small::arr` are in no particular order, although they are
 // duplicate-free.
 pub enum SparseSetU<A: Array> {
     Large { set: FxHashSet<A::Item> },
@@ -918,7 +918,7 @@ where
         match self {
             SparseSetU::Small { card, .. } => *card == 0,
             SparseSetU::Large { set } => {
-                // This holds because |maybe_downgrade| will always convert a
+                // This holds because `maybe_downgrade` will always convert a
                 // zero-sized large variant into a small variant.
                 assert!(set.len() > 0);
                 false
@@ -1023,7 +1023,7 @@ where
                         let extras_p = extras.as_mut_ptr() as *mut A::Item;
                         let arr2_p = arr2.as_ptr() as *const A::Item;
                         // Iterate through the second set.  Add every item not in the
-                        // first set to |extras|.
+                        // first set to `extras`.
                         for i in 0..*card2 {
                             let item2 = unsafe { read(arr2_p.add(i)) };
                             let mut in1 = false;
@@ -1131,13 +1131,13 @@ where
         }
     }
 
-    // return true if |self| is a subset of |other|
+    // return true if `self` is a subset of `other`
     #[inline(never)]
     pub fn is_subset_of(&self, other: &Self) -> bool {
         if self.card() > other.card() {
             return false;
         }
-        // Visit all items in |self|, and see if they are in |other|.  If so
+        // Visit all items in `self`, and see if they are in `other`.  If so
         // return true.
         match self {
             SparseSetU::Large { set: set1 } => match other {
@@ -1389,7 +1389,7 @@ mod sparse_set_test_utils {
     pub struct RNGwithDups {
         seed: u32,
         circ: [u32; 8],
-        circC: usize, // the cursor for |circ|
+        circC: usize, // the cursor for `circ`
     }
     impl RNGwithDups {
         pub fn new() -> Self {
