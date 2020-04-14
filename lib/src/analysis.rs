@@ -1776,6 +1776,9 @@ fn merge_RangeFrags_SLOW(
           }
           //succs_of_live_out_blocks.union(frag_succ_bixes);
         }
+        RangeFragKind::Multi => {
+          panic!("merge_RangeFrags_SLOW: unexpected Multi")
+        }
       }
 
       let valid = true;

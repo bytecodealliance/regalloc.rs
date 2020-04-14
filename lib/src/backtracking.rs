@@ -1533,15 +1533,6 @@ impl PerRealReg {
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
   ) -> Option<(Set<VirtualRangeIx>, SpillCost)> {
-    fn step_ip(ip: InstPoint) -> InstPoint {
-      match ip.pt {
-        Point::Reload => InstPoint::new(ip.iix, Point::Use),
-        Point::Use => InstPoint::new(ip.iix, Point::Def),
-        Point::Def => InstPoint::new(ip.iix, Point::Spill),
-        Point::Spill => InstPoint::new(ip.iix.plus(1), Point::Reload),
-      }
-    }
-
     // Useful constants for the loop
     let would_like_to_add_vlr = &vlr_env[would_like_to_add];
     let evict_cost_budget = would_like_to_add_vlr.spill_cost;
@@ -1584,7 +1575,7 @@ impl PerRealReg {
           }
         }
         if !found_in_vr {
-          vr_ip = step_ip(vr_ip);
+          vr_ip = vr_ip.step();
           continue; // there can't be any intersection at |vr_ip|
         }
 
@@ -1617,7 +1608,7 @@ impl PerRealReg {
           }
         }
 
-        vr_ip = step_ip(vr_ip);
+        vr_ip = vr_ip.step();
       }
     } // if self.committed.pairs.len() > 0 {
 
@@ -1731,6 +1722,129 @@ fn print_RA_state(
     debug!("ELI other: {:?}", eli);
   }
   debug!(">>>>");
+}
+
+//=============================================================================
+// Frag compression
+
+// Does |frag1| describe some range of instructions that is followed
+// immediately by |frag2| ?  Note that this assumes (and checks) that there
+// are no spill or reload ranges in play at this point; there should not be.
+fn frags_are_mergeable(frag1: &RangeFrag, frag2: &RangeFrag) -> bool {
+  assert!(frag1.first.pt.is_use_or_def());
+  assert!(frag1.last.pt.is_use_or_def());
+  assert!(frag2.first.pt.is_use_or_def());
+  assert!(frag2.last.pt.is_use_or_def());
+
+  if frag1.bix != frag2.bix
+    && frag1.last.iix.plus(1) == frag2.first.iix
+    && frag1.last.pt == Point::Def
+    && frag2.first.pt == Point::Use
+  {
+    assert!(
+      frag1.kind == RangeFragKind::LiveOut || frag1.kind == RangeFragKind::Thru
+    );
+    assert!(
+      frag2.kind == RangeFragKind::LiveIn || frag2.kind == RangeFragKind::Thru
+    );
+    return true;
+  }
+
+  if frag1.last.iix == frag2.first.iix
+    && frag1.last.pt == Point::Use
+    && frag2.first.pt == Point::Def
+  {
+    assert!(
+      frag1.kind == RangeFragKind::LiveIn || frag1.kind == RangeFragKind::Local
+    );
+    assert!(
+      frag2.kind == RangeFragKind::Local
+        || frag2.kind == RangeFragKind::LiveOut
+    );
+    return true;
+  }
+
+  false
+}
+
+const Z_INVALID_BLOCKIX: BlockIx = BlockIx::BlockIx(0xFFFF_FFFF);
+const Z_INVALID_COUNT: u16 = 0xFFFF;
+
+// Try and compress the fragments for each virtual range in |vlr_env|, adding
+// new ones to |frag_env| as we go.  Note this is a big kludge, in the sense
+// that the new |RangeFrags| have bogus |bix|, |kind| and |count| fields, and
+// we rely on the fact that the backtracking core algorithm won't look at them
+// after this point.  This should be fixed cleanly.
+#[inline(never)]
+fn do_vlr_frag_compression(
+  vlr_env: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
+  frag_env: &mut TypedIxVec<RangeFragIx, RangeFrag>,
+) {
+  let mut fragsIN = 0;
+  let mut fragsOUT = 0;
+  for vlr in vlr_env.iter_mut() {
+    let frag_ixs = &mut vlr.sorted_frags.frag_ixs;
+    let num_frags = frag_ixs.len();
+    fragsIN += num_frags;
+
+    if num_frags == 1 {
+      // Nothing we can do.
+      fragsOUT += 1;
+      continue;
+    }
+
+    // BEGIN merge this frag sequence as much as possible
+    assert!(num_frags > 1);
+
+    let mut w = 0; // write point, for merged frags
+    let mut s = 0; // start point of current group
+    let mut e = 0; // end point of current group
+    loop {
+      if s >= num_frags {
+        break;
+      }
+      while e + 1 < num_frags
+        && frags_are_mergeable(
+          &frag_env[frag_ixs[e]],
+          &frag_env[frag_ixs[e + 1]],
+        )
+      {
+        e += 1;
+      }
+      // s to e inclusive is a maximal group
+      // emit (s, e)
+      if s == e {
+        // Can't compress this one
+        frag_ixs[w] = frag_ixs[s];
+      } else {
+        // Hack, kludge, hack, semantic muddyness, oh la la.  Let's hope
+        // nobody looks at these kludged-out fields (bix, kind, count) after
+        // this point.
+        let zFrag = RangeFrag {
+          bix: Z_INVALID_BLOCKIX,
+          kind: RangeFragKind::Multi,
+          first: frag_env[frag_ixs[s]].first,
+          last: frag_env[frag_ixs[e]].last,
+          count: Z_INVALID_COUNT,
+        };
+        //print!("Compressed ");
+        //for i in s ..= e {
+        //  print!("{:?} ", frag_env[frag_ixs[i]]);
+        //}
+        //println!("  to  {:?}", zFrag);
+        frag_env.push(zFrag);
+        frag_ixs[w] = RangeFragIx::new(frag_env.len() - 1);
+      }
+      // move on
+      w = w + 1;
+      s = e + 1;
+      e = s;
+    }
+    frag_ixs.truncate(w);
+    fragsOUT += w;
+    // END merge this frag sequence as much as possible
+  }
+  info!("alloc_main:   compress frags: in {}, out {}", fragsIN, fragsOUT);
 }
 
 //=============================================================================
@@ -1898,6 +2012,12 @@ pub fn alloc_main<F: Function>(
     }
     per_real_reg[rregIndex].add_RealRange(&rlr, &frag_env, &vlr_env);
   }
+
+  // BEGIN test frag compression
+  if true {
+    do_vlr_frag_compression(&mut vlr_env, &mut frag_env);
+  }
+  // END test frag compression
 
   let mut edit_list_move = Vec::<EditListItem>::new();
   let mut edit_list_other = Vec::<EditListItem>::new();

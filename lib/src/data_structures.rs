@@ -1311,6 +1311,14 @@ impl InstPoint {
   pub fn new_spill(iix: InstIx) -> Self {
     InstPoint { iix, pt: Point::Spill }
   }
+  pub fn step(&self) -> Self {
+    match self.pt {
+      Point::Reload => InstPoint::new(self.iix, Point::Use),
+      Point::Use => InstPoint::new(self.iix, Point::Def),
+      Point::Def => InstPoint::new(self.iix, Point::Spill),
+      Point::Spill => InstPoint::new(self.iix.plus(1), Point::Reload),
+    }
+  }
 }
 impl PartialOrd for InstPoint {
   // Again .. don't assume anything about the #derive'd version.  These have
@@ -1358,6 +1366,10 @@ pub enum RangeFragKind {
   LiveIn,  // Fragment is live in to a block, but ends inside it
   LiveOut, // Fragment is live out of a block, but starts inside it
   Thru,    // Fragment is live through the block (starts and ends outside it)
+  // Multi is a hack that is required by BT's experimental RangeFrag
+  // compression.  I hope to be able to get rid of it in subsequent work to
+  // clean up and improve the compression.
+  Multi, // Fragment spans multiple blocks ("is compressed")
 }
 impl fmt::Debug for RangeFragKind {
   fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -1366,6 +1378,8 @@ impl fmt::Debug for RangeFragKind {
       RangeFragKind::LiveIn => write!(fmt, "LiveIn"),
       RangeFragKind::LiveOut => write!(fmt, "LiveOut"),
       RangeFragKind::Thru => write!(fmt, "Thru"),
+      // Hack, per comment above
+      RangeFragKind::Multi => write!(fmt, "Multi"),
     }
   }
 }
