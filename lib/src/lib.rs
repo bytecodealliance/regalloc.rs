@@ -153,187 +153,193 @@ pub use crate::data_structures::{BlockIx, InstIx, Range};
 /// A trait defined by the regalloc client to provide access to its
 /// machine-instruction / CFG representation.
 pub trait Function {
-  /// Regalloc is parameterized on F: Function and so can use the projected
-  /// type F::Inst.
-  type Inst: Clone + fmt::Debug;
+    /// Regalloc is parameterized on F: Function and so can use the projected
+    /// type F::Inst.
+    type Inst: Clone + fmt::Debug;
 
-  // -------------
-  // CFG traversal
-  // -------------
+    // -------------
+    // CFG traversal
+    // -------------
 
-  /// Allow access to the underlying vector of instructions.
-  fn insns(&self) -> &[Self::Inst];
+    /// Allow access to the underlying vector of instructions.
+    fn insns(&self) -> &[Self::Inst];
 
-  /// Get all instruction indices as an iterable range.
-  fn insn_indices(&self) -> Range<InstIx> {
-    Range::new(InstIx::new(0), self.insns().len())
-  }
+    /// Get all instruction indices as an iterable range.
+    fn insn_indices(&self) -> Range<InstIx> {
+        Range::new(InstIx::new(0), self.insns().len())
+    }
 
-  /// Allow mutable access to the underlying vector of instructions.
-  fn insns_mut(&mut self) -> &mut [Self::Inst];
+    /// Allow mutable access to the underlying vector of instructions.
+    fn insns_mut(&mut self) -> &mut [Self::Inst];
 
-  /// Get an instruction with a type-safe InstIx index.
-  fn get_insn(&self, insn: InstIx) -> &Self::Inst;
+    /// Get an instruction with a type-safe InstIx index.
+    fn get_insn(&self, insn: InstIx) -> &Self::Inst;
 
-  /// Get a mutable borrow of an instruction with the given type-safe InstIx
-  /// index.
-  fn get_insn_mut(&mut self, insn: InstIx) -> &mut Self::Inst;
+    /// Get a mutable borrow of an instruction with the given type-safe InstIx
+    /// index.
+    fn get_insn_mut(&mut self, insn: InstIx) -> &mut Self::Inst;
 
-  /// Allow iteration over basic blocks (in instruction order).
-  fn blocks(&self) -> Range<BlockIx>;
+    /// Allow iteration over basic blocks (in instruction order).
+    fn blocks(&self) -> Range<BlockIx>;
 
-  /// Get the index of the entry block.
-  fn entry_block(&self) -> BlockIx;
+    /// Get the index of the entry block.
+    fn entry_block(&self) -> BlockIx;
 
-  /// Provide the range of instruction indices contained in each block.
-  fn block_insns(&self, block: BlockIx) -> Range<InstIx>;
+    /// Provide the range of instruction indices contained in each block.
+    fn block_insns(&self, block: BlockIx) -> Range<InstIx>;
 
-  /// Get CFG successors for a given block.
-  fn block_succs(&self, block: BlockIx) -> Vec<BlockIx>;
+    /// Get CFG successors for a given block.
+    fn block_succs(&self, block: BlockIx) -> Vec<BlockIx>;
 
-  /// Determine whether an instruction is a return instruction.
-  fn is_ret(&self, insn: InstIx) -> bool;
+    /// Determine whether an instruction is a return instruction.
+    fn is_ret(&self, insn: InstIx) -> bool;
 
-  // --------------------------
-  // Instruction register slots
-  // --------------------------
+    // --------------------------
+    // Instruction register slots
+    // --------------------------
 
-  /// Add to |collector| the used, defined, and modified registers for an
-  /// instruction.
-  fn get_regs(insn: &Self::Inst, collector: &mut RegUsageCollector);
+    /// Add to |collector| the used, defined, and modified registers for an
+    /// instruction.
+    fn get_regs(insn: &Self::Inst, collector: &mut RegUsageCollector);
 
-  /// Map each register slot through a virtual-to-real mapping indexed
-  /// by virtual register. The two separate maps provide the
-  /// mapping to use for uses (which semantically occur just prior
-  /// to the instruction's effect) and defs (which semantically occur
-  /// just after the instruction's effect). Regs that were "modified"
-  /// can use either map; the vreg should be the same in both.
-  ///
-  /// Note that this does not take a `self`, because we want to allow the
-  /// regalloc to have a mutable borrow of an insn (which borrows the whole
-  /// Function in turn) outstanding while calling this.
-  fn map_regs(
-    insn: &mut Self::Inst, pre_map: &Map<VirtualReg, RealReg>,
-    post_map: &Map<VirtualReg, RealReg>,
-  );
+    /// Map each register slot through a virtual-to-real mapping indexed
+    /// by virtual register. The two separate maps provide the
+    /// mapping to use for uses (which semantically occur just prior
+    /// to the instruction's effect) and defs (which semantically occur
+    /// just after the instruction's effect). Regs that were "modified"
+    /// can use either map; the vreg should be the same in both.
+    ///
+    /// Note that this does not take a `self`, because we want to allow the
+    /// regalloc to have a mutable borrow of an insn (which borrows the whole
+    /// Function in turn) outstanding while calling this.
+    fn map_regs(
+        insn: &mut Self::Inst,
+        pre_map: &Map<VirtualReg, RealReg>,
+        post_map: &Map<VirtualReg, RealReg>,
+    );
 
-  /// Allow the regalloc to query whether this is a move. Returns (dst, src).
-  fn is_move(&self, insn: &Self::Inst) -> Option<(Writable<Reg>, Reg)>;
+    /// Allow the regalloc to query whether this is a move. Returns (dst, src).
+    fn is_move(&self, insn: &Self::Inst) -> Option<(Writable<Reg>, Reg)>;
 
-  // --------------
-  // Spills/reloads
-  // --------------
+    // --------------
+    // Spills/reloads
+    // --------------
 
-  /// How many logical spill slots does the given regclass require?  E.g., on a
-  /// 64-bit machine, spill slots may nominally be 64-bit words, but a 128-bit
-  /// vector value will require two slots.  The regalloc will always align on
-  /// this size.
-  ///
-  /// This passes the associated virtual register to the client as well,
-  /// because the way in which we spill a real register may depend on the
-  /// value that we are using it for. E.g., if a machine has V128 registers
-  /// but we also use them for F32 and F64 values, we may use a different
-  /// store-slot size and smaller-operand store/load instructions for an F64
-  /// than for a true V128.
-  fn get_spillslot_size(&self, regclass: RegClass, for_vreg: VirtualReg)
-    -> u32;
+    /// How many logical spill slots does the given regclass require?  E.g., on a
+    /// 64-bit machine, spill slots may nominally be 64-bit words, but a 128-bit
+    /// vector value will require two slots.  The regalloc will always align on
+    /// this size.
+    ///
+    /// This passes the associated virtual register to the client as well,
+    /// because the way in which we spill a real register may depend on the
+    /// value that we are using it for. E.g., if a machine has V128 registers
+    /// but we also use them for F32 and F64 values, we may use a different
+    /// store-slot size and smaller-operand store/load instructions for an F64
+    /// than for a true V128.
+    fn get_spillslot_size(&self, regclass: RegClass, for_vreg: VirtualReg) -> u32;
 
-  /// Generate a spill instruction for insertion into the instruction
-  /// sequence. The associated virtual register (whose value is being spilled)
-  /// is passed so that the client may make decisions about the instruction to
-  /// generate based on the type of value in question.  Because the register
-  /// allocator will insert spill instructions at arbitrary points, the
-  /// returned instruction here must not modify the machine's condition codes.
-  fn gen_spill(
-    &self, to_slot: SpillSlot, from_reg: RealReg, for_vreg: VirtualReg,
-  ) -> Self::Inst;
+    /// Generate a spill instruction for insertion into the instruction
+    /// sequence. The associated virtual register (whose value is being spilled)
+    /// is passed so that the client may make decisions about the instruction to
+    /// generate based on the type of value in question.  Because the register
+    /// allocator will insert spill instructions at arbitrary points, the
+    /// returned instruction here must not modify the machine's condition codes.
+    fn gen_spill(&self, to_slot: SpillSlot, from_reg: RealReg, for_vreg: VirtualReg) -> Self::Inst;
 
-  /// Generate a reload instruction for insertion into the instruction
-  /// sequence. The associated virtual register (whose value is being loaded)
-  /// is passed as well.  The returned instruction must not modify the
-  /// machine's condition codes.
-  fn gen_reload(
-    &self, to_reg: Writable<RealReg>, from_slot: SpillSlot,
-    for_vreg: VirtualReg,
-  ) -> Self::Inst;
+    /// Generate a reload instruction for insertion into the instruction
+    /// sequence. The associated virtual register (whose value is being loaded)
+    /// is passed as well.  The returned instruction must not modify the
+    /// machine's condition codes.
+    fn gen_reload(
+        &self,
+        to_reg: Writable<RealReg>,
+        from_slot: SpillSlot,
+        for_vreg: VirtualReg,
+    ) -> Self::Inst;
 
-  /// Generate a register-to-register move for insertion into the instruction
-  /// sequence. The associated virtual register is passed as well.  The
-  /// returned instruction must not modify the machine's condition codes.
-  fn gen_move(
-    &self, to_reg: Writable<RealReg>, from_reg: RealReg, for_vreg: VirtualReg,
-  ) -> Self::Inst;
+    /// Generate a register-to-register move for insertion into the instruction
+    /// sequence. The associated virtual register is passed as well.  The
+    /// returned instruction must not modify the machine's condition codes.
+    fn gen_move(
+        &self,
+        to_reg: Writable<RealReg>,
+        from_reg: RealReg,
+        for_vreg: VirtualReg,
+    ) -> Self::Inst;
 
-  /// Generate an instruction which is a no-op and has zero length.
-  fn gen_zero_len_nop(&self) -> Self::Inst;
+    /// Generate an instruction which is a no-op and has zero length.
+    fn gen_zero_len_nop(&self) -> Self::Inst;
 
-  /// Try to alter an existing instruction to use a value directly in a
-  /// spillslot (accessing memory directly) instead of the given register. May
-  /// be useful on ISAs that have mem/reg ops, like x86.
-  ///
-  /// Note that this is not *quite* just fusing a load with the op; if the
-  /// value is def'd or modified, it should be written back to the spill slot
-  /// as well. In other words, it is just using the spillslot as if it were a
-  /// real register, for reads and/or writes.
-  ///
-  /// FIXME JRS 2020Feb06: state precisely the constraints on condition code
-  /// changes.
-  fn maybe_direct_reload(
-    &self, insn: &Self::Inst, reg: VirtualReg, slot: SpillSlot,
-  ) -> Option<Self::Inst>;
+    /// Try to alter an existing instruction to use a value directly in a
+    /// spillslot (accessing memory directly) instead of the given register. May
+    /// be useful on ISAs that have mem/reg ops, like x86.
+    ///
+    /// Note that this is not *quite* just fusing a load with the op; if the
+    /// value is def'd or modified, it should be written back to the spill slot
+    /// as well. In other words, it is just using the spillslot as if it were a
+    /// real register, for reads and/or writes.
+    ///
+    /// FIXME JRS 2020Feb06: state precisely the constraints on condition code
+    /// changes.
+    fn maybe_direct_reload(
+        &self,
+        insn: &Self::Inst,
+        reg: VirtualReg,
+        slot: SpillSlot,
+    ) -> Option<Self::Inst>;
 
-  // ----------------------------------------------------------
-  // Function liveins, liveouts, and direct-mode real registers
-  // ----------------------------------------------------------
+    // ----------------------------------------------------------
+    // Function liveins, liveouts, and direct-mode real registers
+    // ----------------------------------------------------------
 
-  /// Return the set of registers that should be considered live at the
-  /// beginning of the function. This is semantically equivalent to an
-  /// instruction at the top of the entry block def'ing all registers in this
-  /// set.
-  fn func_liveins(&self) -> Set<RealReg>;
+    /// Return the set of registers that should be considered live at the
+    /// beginning of the function. This is semantically equivalent to an
+    /// instruction at the top of the entry block def'ing all registers in this
+    /// set.
+    fn func_liveins(&self) -> Set<RealReg>;
 
-  /// Return the set of registers that should be considered live at the
-  /// end of the function (after every return instruction). This is
-  /// semantically equivalent to an instruction at each block with no successors
-  /// that uses each of these registers.
-  fn func_liveouts(&self) -> Set<RealReg>;
+    /// Return the set of registers that should be considered live at the
+    /// end of the function (after every return instruction). This is
+    /// semantically equivalent to an instruction at each block with no successors
+    /// that uses each of these registers.
+    fn func_liveouts(&self) -> Set<RealReg>;
 }
 
 /// The result of register allocation.  Note that allocation can fail!
 pub struct RegAllocResult<F: Function> {
-  /// A new sequence of instructions with all register slots filled with real
-  /// registers, and spills/fills/moves possibly inserted (and unneeded moves
-  /// elided).
-  pub insns: Vec<F::Inst>,
+    /// A new sequence of instructions with all register slots filled with real
+    /// registers, and spills/fills/moves possibly inserted (and unneeded moves
+    /// elided).
+    pub insns: Vec<F::Inst>,
 
-  /// Basic-block start indices for the new instruction list, indexed by the
-  /// original basic block indices. May be used by the client to, e.g., remap
-  /// branch targets appropriately.
-  pub target_map: TypedIxVec<BlockIx, InstIx>,
+    /// Basic-block start indices for the new instruction list, indexed by the
+    /// original basic block indices. May be used by the client to, e.g., remap
+    /// branch targets appropriately.
+    pub target_map: TypedIxVec<BlockIx, InstIx>,
 
-  /// Which real registers were overwritten? This will contain all real regs
-  /// that appear as defs or modifies in register slots of the output
-  /// instruction list.  This will only list registers that are available to
-  /// the allocator.  If one of the instructions clobbers a register which
-  /// isn't available to the allocator, it won't be mentioned here.
-  pub clobbered_registers: Set<RealReg>,
+    /// Which real registers were overwritten? This will contain all real regs
+    /// that appear as defs or modifies in register slots of the output
+    /// instruction list.  This will only list registers that are available to
+    /// the allocator.  If one of the instructions clobbers a register which
+    /// isn't available to the allocator, it won't be mentioned here.
+    pub clobbered_registers: Set<RealReg>,
 
-  /// How many spill slots were used?
-  pub num_spill_slots: u32,
+    /// How many spill slots were used?
+    pub num_spill_slots: u32,
 
-  /// Block annotation strings, for debugging.  Requires requesting in the
-  /// call to |allocate_registers|.  Creating of these annotations is
-  /// potentially expensive, so don't request them if you don't need them.
-  pub block_annotations: Option<TypedIxVec<BlockIx, Vec<String>>>,
+    /// Block annotation strings, for debugging.  Requires requesting in the
+    /// call to |allocate_registers|.  Creating of these annotations is
+    /// potentially expensive, so don't request them if you don't need them.
+    pub block_annotations: Option<TypedIxVec<BlockIx, Vec<String>>>,
 }
 
 /// A choice of register allocation algorithm to run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegAllocAlgorithm {
-  Backtracking,
-  BacktrackingChecked,
-  LinearScan,
-  LinearScanChecked,
+    Backtracking,
+    BacktrackingChecked,
+    LinearScan,
+    LinearScanChecked,
 }
 
 pub use crate::analysis::AnalysisError;
@@ -342,17 +348,17 @@ pub use crate::checker::{CheckerError, CheckerErrors};
 /// An error from the register allocator.
 #[derive(Clone, Debug)]
 pub enum RegAllocError {
-  OutOfRegisters(RegClass),
-  MissingSuggestedScratchReg(RegClass),
-  Analysis(AnalysisError),
-  RegChecker(CheckerErrors),
-  Other(String),
+    OutOfRegisters(RegClass),
+    MissingSuggestedScratchReg(RegClass),
+    Analysis(AnalysisError),
+    RegChecker(CheckerErrors),
+    Other(String),
 }
 
 impl fmt::Display for RegAllocError {
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    write!(f, "{:?}", self)
-  }
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 /// Allocate registers for a function's code, given a universe of real
@@ -368,27 +374,23 @@ impl fmt::Display for RegAllocError {
 /// sequence, or it may fail, returning an error.
 #[inline(never)]
 pub fn allocate_registers<F: Function>(
-  func: &mut F, algorithm: RegAllocAlgorithm, rreg_universe: &RealRegUniverse,
-  request_block_annotations: bool,
+    func: &mut F,
+    algorithm: RegAllocAlgorithm,
+    rreg_universe: &RealRegUniverse,
+    request_block_annotations: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
-  info!("");
-  info!("================ regalloc.rs: BEGIN function ================");
-  let res = match algorithm {
-    RegAllocAlgorithm::Backtracking
-    | RegAllocAlgorithm::BacktrackingChecked => {
-      let use_checker = algorithm == RegAllocAlgorithm::BacktrackingChecked;
-      backtracking::alloc_main(
-        func,
-        rreg_universe,
-        use_checker,
-        request_block_annotations,
-      )
-    }
-    RegAllocAlgorithm::LinearScan | RegAllocAlgorithm::LinearScanChecked => {
-      let use_checker = algorithm == RegAllocAlgorithm::LinearScanChecked;
-      linear_scan::run(func, rreg_universe, use_checker)
-    }
-  };
-  info!("================ regalloc.rs: END function ================");
-  res
+    info!("");
+    info!("================ regalloc.rs: BEGIN function ================");
+    let res = match algorithm {
+        RegAllocAlgorithm::Backtracking | RegAllocAlgorithm::BacktrackingChecked => {
+            let use_checker = algorithm == RegAllocAlgorithm::BacktrackingChecked;
+            backtracking::alloc_main(func, rreg_universe, use_checker, request_block_annotations)
+        }
+        RegAllocAlgorithm::LinearScan | RegAllocAlgorithm::LinearScanChecked => {
+            let use_checker = algorithm == RegAllocAlgorithm::LinearScanChecked;
+            linear_scan::run(func, rreg_universe, use_checker)
+        }
+    };
+    info!("================ regalloc.rs: END function ================");
+    res
 }
