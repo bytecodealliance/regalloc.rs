@@ -6,6 +6,7 @@
 #![allow(non_camel_case_types)]
 
 use log::{debug, info, log_enabled, Level};
+use smallvec::SmallVec;
 use std::fmt;
 
 use crate::data_structures::{
@@ -15,6 +16,9 @@ use crate::data_structures::{
 };
 use crate::trees_maps_sets::{SparseSet, SparseSetU, ToFromU32, UnionFind};
 use crate::Function;
+
+//=============================================================================
+// Debugging config.  Set all these to |false| for normal operation.
 
 // DEBUGGING: set to true to cross-check the merge_RangeFrags machinery.
 const CROSSCHECK_MERGE: bool = false;
@@ -1498,7 +1502,7 @@ fn get_RangeFrags_for_block<F: Function>(
 
     // The generated RangeFrags are initially are dumped in here.  We
     // group them by Reg at the end of this function.
-    let mut tmpResultVec = Vec::<(Reg, RangeFrag)>::new();
+    let mut tmpResultVec = SmallVec::<[(Reg, RangeFrag); 32]>::new();
 
     // First, set up `state` as if all of `livein` had been written just
     // prior to the block.
@@ -1885,7 +1889,12 @@ fn merge_RangeFrags_SLOW(
             if !valid {
                 continue;
             }
-            let sorted_frags = SortedRangeFragIxs::new(&frag_ixs.to_vec(), &frag_env);
+            // This isn't efficient, but it's debug code only.
+            let mut frag_ixs_sv = SmallVec::<[RangeFragIx; 4]>::new();
+            for fix in frag_ixs.iter() {
+                frag_ixs_sv.push(*fix);
+            }
+            let sorted_frags = SortedRangeFragIxs::new(frag_ixs_sv, &frag_env);
             let size = 0;
             // Set zero spill cost for now.  We'll fill it in for real later.
             let spill_cost = SpillCost::zero();
@@ -2194,11 +2203,11 @@ fn merge_RangeFrags(
         let eclasses = eclasses_uf.get_equiv_classes();
         for leader_triple_ix in eclasses.equiv_class_leaders_iter() {
             // `leader_triple_ix` is an eclass leader.  Enumerate the whole eclass.
-            let mut frag_ixs = Vec::<RangeFragIx>::new();
+            let mut frag_ixs = SmallVec::<[RangeFragIx; 4]>::new();
             for triple_ix in eclasses.equiv_class_elems_iter(leader_triple_ix) {
                 frag_ixs.push(triples[triple_ix].0 /*first field is frag ix*/);
             }
-            let sorted_frags = SortedRangeFragIxs::new(&frag_ixs.to_vec(), &frag_env);
+            let sorted_frags = SortedRangeFragIxs::new(frag_ixs, &frag_env);
             create_and_add_Range(&mut resR, &mut resV, *reg, sorted_frags);
         }
         // END merge `all_frag_ixs_for_reg` entries as much as possible

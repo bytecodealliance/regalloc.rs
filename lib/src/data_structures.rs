@@ -1619,13 +1619,10 @@ impl SortedRangeFragIxs {
         });
     }
 
-    pub fn new(source: &Vec<RangeFragIx>, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) -> Self {
-        let mut frag_ixs = SmallVec::<[RangeFragIx; 4]>::new();
-        frag_ixs.reserve(source.len());
-        for fix in source {
-            frag_ixs.push(*fix);
-        }
-
+    pub fn new(
+        frag_ixs: SmallVec<[RangeFragIx; 4]>,
+        fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+    ) -> Self {
         let mut res = SortedRangeFragIxs { frag_ixs };
         // check the source is ordered, and clone (or sort it)
         res.sort(fenv);

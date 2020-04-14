@@ -25,8 +25,10 @@ use crate::inst_stream::{edit_inst_stream, InstToInsert, InstToInsertAndPoint};
 use crate::trees_maps_sets::{ToFromU32, UnionFind, UnionFindEquivClasses};
 use crate::{Function, RegAllocError, RegAllocResult};
 
-// DEBUGGING: set to true to cross-check the CommitmentMap machinery.
+//=============================================================================
+// Debugging config.  Set all these to |false| for normal operation.
 
+// DEBUGGING: set to true to cross-check the CommitmentMap machinery.
 const CROSSCHECK_CM: bool = false;
 
 //=============================================================================
@@ -1979,11 +1981,8 @@ pub fn alloc_main<F: Function>(
         per_real_reg[rregIndex].add_RealRange(&rlr, &frag_env, &vlr_env);
     }
 
-    // BEGIN test frag compression
-    if true {
-        do_vlr_frag_compression(&mut vlr_env, &mut frag_env);
-    }
-    // END test frag compression
+    // Do RangeFrag compression.
+    do_vlr_frag_compression(&mut vlr_env, &mut frag_env);
 
     let mut edit_list_move = Vec::<EditListItem>::new();
     let mut edit_list_other = Vec::<EditListItem>::new();
@@ -2078,7 +2077,7 @@ pub fn alloc_main<F: Function>(
         // present the most favoured (weighty) first, so we merely need to retain
         // that ordering when copying into `hinted_regs`.
         // FIXME (very) SmallVec
-        let mut hinted_regs = Vec::<RealReg>::new();
+        let mut hinted_regs = SmallVec::<[RealReg; 8]>::new();
         let mut mb_curr_vlr_eclass: Option<Set<VirtualRangeIx>> = None;
 
         // === BEGIN collect all hints for `curr_vlr` ===
