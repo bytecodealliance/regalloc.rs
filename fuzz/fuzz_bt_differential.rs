@@ -18,7 +18,8 @@ fuzz_target!(|func: ir::Func| {
 
   let result = match regalloc::allocate_registers(
     &mut func,
-    regalloc::RegAllocAlgorithm::BacktrackingChecked,
+    // TODO reenable checking once #47 is fixed.
+    regalloc::RegAllocAlgorithm::Backtracking,
     &reg_universe,
     /*request_block_annotations=*/false
   ) {
