@@ -51,7 +51,7 @@ pub struct AVLTree<T> {
     // The freelist head.  This is a list of available entries.  Each item on
     // the freelist must have its .tag be AVLTag::Free, and will use its .left
     // field as the link to the next freelist item.  A freelist link value of
-    // AVL_NULL denotes the end of the list.  If |freelist| itself is AVL_NULL
+    // AVL_NULL denotes the end of the list.  If `freelist` itself is AVL_NULL
     // then the list is empty.
     freelist: u32,
     // Last but not least, the root node.
@@ -177,7 +177,7 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
         new_root
     }
 
-    // Private function: leftgrown: helper function for |insert|
+    // Private function: leftgrown: helper function for `insert`
     //
     //  Parameters:
     //
@@ -249,7 +249,7 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
         }
     }
 
-    // Private function: rightgrown: helper function for |insert|
+    // Private function: rightgrown: helper function for `insert`
     //
     //  See leftgrown for details.
     fn rightgrown(&mut self, mut root: u32) -> (u32, AVLRes) {
@@ -308,7 +308,7 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
     //
     //  Parameters:
     //
-    //    root        Root of the tree in whch to insert |d|.
+    //    root        Root of the tree in whch to insert `d`.
     //
     //    item        Item to be inserted.
     //
@@ -784,7 +784,7 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
     // then comparison is done directly using PartialOrd for the T values.
     //
     // If this is Some(cmp), then comparison is done by passing the two T values
-    // to |cmp|.  In this case, the routines will complain (panic) if |cmp|
+    // to `cmp`.  In this case, the routines will complain (panic) if `cmp`
     // indicates that its arguments are unordered.
 
     // Insert a value in the tree.  Returns true if an insert happened, false if
@@ -975,7 +975,7 @@ mod avl_tree_test_utils {
         for i in univ_min..univ_max {
             let should_be_in = should_be_in_tree.contains(i);
 
-            // Look it up with a null comparator (so |contains| compares
+            // Look it up with a null comparator (so `contains` compares
             // directly)
             let is_in = tree.contains::<fn(u32, u32) -> Option<Ordering>>(i, None);
             assert!(is_in == should_be_in);

@@ -39,10 +39,10 @@ pub enum AnalysisError {
 
     /// The incoming code has an explicit or implicit mention (use, def or mod)
     /// of a real register, which either (1) isn't listed in the universe at
-    /// all, or (2) is one of the |suggested_scratch| registers in the universe.
+    /// all, or (2) is one of the `suggested_scratch` registers in the universe.
     /// (1) isn't allowed because the client must mention *all* real registers
     /// in the universe.  (2) isn't allowed because the client promises to us
-    /// that the |suggested_scratch| registers really are completely unused in
+    /// that the `suggested_scratch` registers really are completely unused in
     /// the incoming code, so that the allocator can use them at literally any
     /// point it wants.
     IllegalRealReg(RealReg),
@@ -147,8 +147,8 @@ fn calc_preds_and_succs<F: Function>(
 //=============================================================================
 // Control flow analysis: calculation of block preorder and postorder sequences
 
-// Returned Vecs contain one element per block.  |None| is returned if the
-// sequences do not contain |nBlocks| elements, in which case the input
+// Returned Vecs contain one element per block.  `None` is returned if the
+// sequences do not contain `nBlocks` elements, in which case the input
 // contains blocks not reachable from the entry point, and is invalid.
 #[inline(never)]
 fn calc_preord_and_postord<F: Function>(
@@ -225,8 +225,8 @@ fn calc_preord_and_postord<F: Function>(
 // Computation of per-block dominator sets.  Note, this is slow, and will be
 // removed at some point.
 
-// Calculate the dominance relationship, given |pred_map| and a start node
-// |start|.  The resulting vector maps each block to the set of blocks that
+// Calculate the dominance relationship, given `pred_map` and a start node
+// `start`.  The resulting vector maps each block to the set of blocks that
 // dominate it. This algorithm is from Fig 7.14 of Muchnick 1997. The
 // algorithm is described as simple but not as performant as some others.
 #[inline(never)]
@@ -376,7 +376,7 @@ fn calc_dom_tree(
         let bixI = BlockIx::new(i);
         let preds_of_i = &pred_map[bixI];
         // All nodes must be reachable from the root.  That means that all nodes
-        // that aren't |start| must have at least one predecessor.  However, we
+        // that aren't `start` must have at least one predecessor.  However, we
         // can't assert the inverse case -- that the start node has no
         // predecessors -- because the start node might be a self-loop, in which
         // case it will have itself as a pred.  See tests/domtree_fuzz1.rat.
@@ -397,7 +397,7 @@ fn calc_dom_tree(
 
             let mut parent = DT_INVALID_BLOCKIX;
             if node_preds.is_empty() {
-                // No preds, |parent| remains invalid.
+                // No preds, `parent` remains invalid.
             } else {
                 for pred in node_preds.iter() {
                     let pred_rpo = bix2rpostord[*pred];
@@ -491,7 +491,7 @@ fn calc_loop_depths(
     // A "back edge" m->n is some edge m->n where n dominates m.  'n' is
     // the loop header node.
     //
-    // |back_edges| is a set rather than a vector so as to avoid complications
+    // `back_edges` is a set rather than a vector so as to avoid complications
     // that might later arise if the same loop is enumerated more than once.
     //
     // Iterate over all edges (m->n)
@@ -524,7 +524,7 @@ fn calc_loop_depths(
     // Now collect the sets of Blocks for each loop.  For each back edge,
     // collect up all the blocks in the natural loop defined by the back edge
     // M->N.  This algorithm is from Fig 7.21 of Muchnick 1997 (an excellent
-    // book).  Order in |natural_loops| has no particular meaning.
+    // book).  Order in `natural_loops` has no particular meaning.
     let mut natural_loops = Vec::<Set<BlockIx>>::new();
     for (bixM, bixN) in back_edges.iter() {
         let mut Loop: Set<BlockIx>;
@@ -550,7 +550,7 @@ fn calc_loop_depths(
     }
 
     // Here is a kludgey way to compute the depth of each loop.  First, order
-    // |natural_loops| by increasing size, so the largest loops are at the end.
+    // `natural_loops` by increasing size, so the largest loops are at the end.
     // Then, repeatedly scan forwards through the vector, in "upper triangular
     // matrix" style.  For each scan, remember the "current loop".  Initially
     // the "current loop is the start point of each scan.  If, during the scan,
@@ -741,11 +741,11 @@ impl CFGInfo {
 // virtual register or a real register available to the allocator.
 //
 // A real register is available to the allocator iff its index number is less
-// than |RealRegUniverse.allocable|.
+// than `RealRegUniverse.allocable`.
 //
 // Furthermore, it is not allowed that any incoming instruction mentions one
 // of the per-class scratch registers listed in
-// |RealRegUniverse.allocable_by_class[..].suggested_scratch| in either a use
+// `RealRegUniverse.allocable_by_class[..].suggested_scratch` in either a use
 // or mod role.  Sanitisation will also detect this case and return an error.
 // Mentions of a scratch register in a def role are tolerated; however, since
 // no instruction may use or modify a scratch register, all such writes are
@@ -756,9 +756,9 @@ impl CFGInfo {
 // instruction explicitly mentions the register or whether it is an implicit
 // mention (eg, %cl in x86 shift-by-a-variable-amount instructions).  In other
 // words, a "mention" is any use, def or mod as detected by the client's
-// |get_regs| routine.
+// `get_regs` routine.
 
-// === Filtering of register groups in |RegVec|s ===
+// === Filtering of register groups in `RegVec`s ===
 //
 // Filtering on a group is done by leaving the start point unchanged, sliding
 // back retained registers to fill the holes from non-retained registers, and
@@ -766,24 +766,24 @@ impl CFGInfo {
 // some registers in the group, but that's not a problem.
 //
 // Extraction of register usages for the whole function is done by
-// |get_sanitized_reg_uses_for_func|.  For each instruction, their used,
+// `get_sanitized_reg_uses_for_func`.  For each instruction, their used,
 // defined and modified register sets are acquired by calling the client's
-// |get_regs| function.  Then each of those three sets are cleaned up as
+// `get_regs` function.  Then each of those three sets are cleaned up as
 // follows:
 //
 // (1) duplicates are removed (after which they really are sets)
 //
 // (2) any registers in the modified set are removed from the used and defined
-//     sets.  This enforces the invariant that |intersect(modified,
-//     union(used, defined))| is the empty set.  Live range fragment
-//     computation (get_RangeFrags_for_block) depends on this property.
+//     sets.  This enforces the invariant that
+//    `intersect(modified, union(used, defined))` is the empty set.  Live range
+//    fragment computation (get_RangeFrags_for_block) depends on this property.
 //
 // (3) real registers unavailable to the allocator are removed, per the
 //     abovementioned sanitization rules.
 
 // ==== LOCAL FN ====
-// Given a register group in |regs[start, +len)|, remove duplicates from the
-// group.  The new group size is written to |*len|.
+// Given a register group in `regs[start, +len)`, remove duplicates from the
+// group.  The new group size is written to `*len`.
 #[inline(never)]
 fn remove_dups_from_group(regs: &mut Vec<Reg>, start: u32, len: &mut u8) {
     // First sort the group, to facilitate de-duplication.
@@ -805,13 +805,13 @@ fn remove_dups_from_group(regs: &mut Vec<Reg>, start: u32, len: &mut u8) {
 
     let new_len_usize = wr - start as usize;
     assert!(new_len_usize <= *len as usize);
-    // This narrowing is safe because the old |len| fitted in 8 bits.
+    // This narrowing is safe because the old `len` fitted in 8 bits.
     *len = new_len_usize as u8;
 }
 
 // ==== LOCAL FN ====
-// Remove from |group[group_start, +group_len)| any registers mentioned in
-// |mods[mods_start, +mods_len)|, and update |*group_len| accordingly.
+// Remove from `group[group_start, +group_len)` any registers mentioned in
+// `mods[mods_start, +mods_len)`, and update `*group_len` accordingly.
 #[inline(never)]
 fn remove_mods_from_group(
     group: &mut Vec<Reg>,
@@ -824,7 +824,7 @@ fn remove_mods_from_group(
     let mut wr = group_start as usize;
     for rd in group_start as usize..group_start as usize + *group_len as usize {
         let reg = group[rd];
-        // Only retain |reg| if it is not mentioned in |mods[mods_start, +mods_len)|
+        // Only retain `reg` if it is not mentioned in `mods[mods_start, +mods_len)`
         let mut retain = true;
         for i in mods_start as usize..mods_start as usize + mods_len as usize {
             if reg == mods[i] {
@@ -841,15 +841,15 @@ fn remove_mods_from_group(
     }
     let new_group_len_usize = wr - group_start as usize;
     assert!(new_group_len_usize <= *group_len as usize);
-    // This narrowing is safe because the old |group_len| fitted in 8 bits.
+    // This narrowing is safe because the old `group_len` fitted in 8 bits.
     *group_len = new_group_len_usize as u8;
 }
 
 // ==== EXPORTED FN ====
-// For instruction |inst|, add the register uses to the ends of |reg_vecs|,
-// and write bounds information into |bounds|.  The register uses are raw
+// For instruction `inst`, add the register uses to the ends of `reg_vecs`,
+// and write bounds information into `bounds`.  The register uses are raw
 // (unsanitized) but they are guaranteed to be duplicate-free and also to have
-// no |mod| mentions in the |use| or |def| groups.  That is, cleanups (1) and
+// no `mod` mentions in the `use` or `def` groups.  That is, cleanups (1) and
 // (2) above have been done.
 #[inline(never)]
 pub fn add_raw_reg_vecs_for_insn<F: Function>(
@@ -972,18 +972,18 @@ fn sanitize_should_retain_reg(
         }
     }
 
-    // |reg| is mentioned in the universe, is available to the allocator, and if
+    // `reg` is mentioned in the universe, is available to the allocator, and if
     // it is one of the scratch regs, it is only written, not read or modified.
     Ok(true)
 }
 // END helper fn
 
 // ==== LOCAL FN ====
-// Given a register group in |regs[start, +len)|, sanitize the group.  To do
+// Given a register group in `regs[start, +len)`, sanitize the group.  To do
 // this exactly right we also need to know whether the registers in the group
 // are mentioned in def roles (as opposed to use or mod roles).  Sanitisation
 // can fail, in which case we must propagate the error.  If it is successful,
-// the new group size is written to |*len|.
+// the new group size is written to `*len`.
 #[inline(never)]
 fn sanitize_group(
     reg_universe: &RealRegUniverse,
@@ -1008,14 +1008,14 @@ fn sanitize_group(
 
     let new_len_usize = wr - start as usize;
     assert!(new_len_usize <= *len as usize);
-    // This narrowing is safe because the old |len| fitted in 8 bits.
+    // This narrowing is safe because the old `len` fitted in 8 bits.
     *len = new_len_usize as u8;
     Ok(())
 }
 
 // ==== LOCAL FN ====
-// For instruction |inst|, add the fully cleaned-up register uses to the ends
-// of |reg_vecs|, and write bounds information into |bounds|.  Cleanups (1)
+// For instruction `inst`, add the fully cleaned-up register uses to the ends
+// of `reg_vecs`, and write bounds information into `bounds`.  Cleanups (1)
 // (2) and (3) mentioned above have been done.  Note, this can fail, and the
 // error must be propagated.
 #[inline(never)]
@@ -1075,7 +1075,7 @@ fn get_sanitized_reg_uses_for_func<F: Function>(
     bounds_vec.reserve(num_insns);
 
     // For each insn, add their register uses to the ends of the 3 vectors in
-    // |reg_vecs|, and create an admin entry to describe the 3 new groups.  Any
+    // `reg_vecs`, and create an admin entry to describe the 3 new groups.  Any
     // errors from sanitization are propagated.
     for insn in func.insns() {
         let mut bounds = RegVecBounds::new();
@@ -1145,7 +1145,7 @@ pub fn does_inst_use_def_or_mod_reg(
     let mut defs = false;
     let mut mods = false;
     // Since each group of registers is in order and duplicate-free (as a result
-    // of |remove_dups_from_group|), we could in theory binary-search here.  But
+    // of `remove_dups_from_group`), we could in theory binary-search here.  But
     // it'd almost certainly be a net loss; the group sizes are very small,
     // often zero.
     for i in bounds.uses_start as usize..bounds.uses_start as usize + bounds.uses_len as usize {
@@ -1171,7 +1171,7 @@ pub fn does_inst_use_def_or_mod_reg(
 
 // ==== EXPORTED ====
 // This is slow, really slow.  Don't use it on critical paths.  This applies
-// |get_regs| to |inst|, performs cleanups (1) and (2), but does not sanitize
+// `get_regs` to `inst`, performs cleanups (1) and (2), but does not sanitize
 // the results.  The results are wrapped up as Sets for convenience.
 // JRS 2020Apr09: remove this if no further use for it appears soon.
 #[allow(dead_code)]
@@ -1193,7 +1193,7 @@ pub fn get_raw_reg_sets_for_insn<F: Function>(inst: &F::Inst) -> RegSets {
 }
 
 // ==== EXPORTED ====
-// This is even slower.  This applies |get_regs| to |inst|, performs cleanups
+// This is even slower.  This applies `get_regs` to `inst`, performs cleanups
 // (1) (2) and (3).  The results are wrapped up as Sets for convenience.  Note
 // this function can fail.
 #[inline(never)]
@@ -1238,9 +1238,9 @@ fn calc_def_and_use<F: Function>(
         let mut uce = SparseSet::empty();
         for iix in func.block_insns(b) {
             let bounds_for_iix = &rvb.bounds[iix];
-            // Add to |uce|, any registers for which the first event in this block
+            // Add to `uce`, any registers for which the first event in this block
             // is a read.  Dealing with the "first event" constraint is a bit
-            // tricky.  In the next two loops, |u| and |m| is used (either read or
+            // tricky.  In the next two loops, `u` and `m` is used (either read or
             // modified) by the instruction.  Whether or not we should consider it
             // live-in for the block depends on whether it was been written earlier
             // in the block.  We can determine that by checking whether it is
@@ -1265,7 +1265,7 @@ fn calc_def_and_use<F: Function>(
                 }
             }
 
-            // Now add to |def|, all registers written by the instruction.
+            // Now add to `def`, all registers written by the instruction.
             // This is simpler.
             // FIXME: isn't this just: def union= (regs_d union regs_m) ?
             for i in bounds_for_iix.defs_start as usize
@@ -1355,7 +1355,7 @@ fn calc_livein_and_liveout<F: Function>(
 
         if !set.equals(&liveouts[bixI]) {
             liveouts[bixI] = set;
-            // Add |bixI|'s predecessors to the work queue, since their
+            // Add `bixI`'s predecessors to the work queue, since their
             // liveout values might be affected.
             for bixJ in cfg_info.pred_map[bixI].iter() {
                 let j = bixJ.get() as usize;
@@ -1420,9 +1420,9 @@ fn calc_livein_and_liveout<F: Function>(
 // handle (1) live-in and live-out Regs, (2) dead writes, and (3) instructions
 // that modify registers rather than merely reading or writing them.
 
-// Calculate all the RangeFrags for |bix|.  Add them to |outFEnv| and add to
-// |outMap|, the associated RangeFragIxs, segregated by Reg.  |bix|, |livein|,
-// |liveout| and |rvb| are expected to be valid in the context of the Func |f|
+// Calculate all the RangeFrags for `bix`.  Add them to `outFEnv` and add to
+// `outMap`, the associated RangeFragIxs, segregated by Reg.  `bix`, `livein`,
+// `liveout` and `rvb` are expected to be valid in the context of the Func `f`
 // (duh!)
 #[inline(never)]
 fn get_RangeFrags_for_block<F: Function>(
@@ -1442,7 +1442,7 @@ fn get_RangeFrags_for_block<F: Function>(
     // InstPoints for appearances of a Reg.
     //
     // ProtoRangeFrag also keeps count of the number of appearances of
-    // the Reg to which it pertains, using |uses|.  The counts get rolled
+    // the Reg to which it pertains, using `uses`.  The counts get rolled
     // into the resulting RangeFrags, and later are used to calculate
     // spill costs.
     //
@@ -1461,7 +1461,7 @@ fn get_RangeFrags_for_block<F: Function>(
 
         // And this is the InstPoint which is the end point (most recently
         // observed read, in general) for the current RangeFrag under
-        // construction.  In general we will move |last| forwards as we
+        // construction.  In general we will move `last` forwards as we
         // discover reads of the associated Reg.  If this is the last
         // InstPoint for the Block (the D point for the Block's highest
         // InstInx), that indicates that the associated reg is live-out
@@ -1500,7 +1500,7 @@ fn get_RangeFrags_for_block<F: Function>(
     // group them by Reg at the end of this function.
     let mut tmpResultVec = Vec::<(Reg, RangeFrag)>::new();
 
-    // First, set up |state| as if all of |livein| had been written just
+    // First, set up `state` as if all of `livein` had been written just
     // prior to the block.
     for r in livein.iter() {
         state.insert(
@@ -1526,15 +1526,15 @@ fn get_RangeFrags_for_block<F: Function>(
             let r = &rvb.vecs.uses[i];
             let new_pf: ProtoRangeFrag;
             match state.get(r) {
-                // First event for |r| is a read, but it's not listed in
-                // |livein|, since otherwise |state| would have an entry
+                // First event for `r` is a read, but it's not listed in
+                // `livein`, since otherwise `state` would have an entry
                 // for it.
                 None => {
                     panic!("get_RangeFrags_for_block: fail #1");
                 }
                 // This the first or subsequent read after a write.  Note
                 // that the "write" can be either a real write, or due to
-                // the fact that |r| is listed in |livein|.  We don't care
+                // the fact that `r` is listed in `livein`.  We don't care
                 // here.
                 Some(ProtoRangeFrag { uses, first, last }) => {
                     let new_last = InstPoint::new_use(iix);
@@ -1558,9 +1558,9 @@ fn get_RangeFrags_for_block<F: Function>(
             let r = &rvb.vecs.mods[i];
             let new_pf: ProtoRangeFrag;
             match state.get(r) {
-                // First event for |r| is a read (really, since this insn
-                // modifies |r|), but it's not listed in |livein|, since
-                // otherwise |state| would have an entry for it.
+                // First event for `r` is a read (really, since this insn
+                // modifies `r`), but it's not listed in `livein`, since
+                // otherwise `state` would have an entry for it.
                 None => {
                     panic!("get_RangeFrags_for_block: fail #2");
                 }
@@ -1580,7 +1580,7 @@ fn get_RangeFrags_for_block<F: Function>(
 
         // Examine writes (but not writes implied by modifies).  The
         // general idea is that a write causes us to terminate the
-        // existing ProtoRangeFrag, if any, add it to |tmpResultVec|,
+        // existing ProtoRangeFrag, if any, add it to `tmpResultVec`,
         // and start a new frag.
         for i in bounds_for_iix.defs_start as usize
             ..bounds_for_iix.defs_start as usize + bounds_for_iix.defs_len as usize
@@ -1598,7 +1598,7 @@ fn get_RangeFrags_for_block<F: Function>(
                         last: new_pt,
                     };
                 }
-                // There's already a ProtoRangeFrag for |r|.  This write
+                // There's already a ProtoRangeFrag for `r`.  This write
                 // will start a new one, so flush the existing one and
                 // note this write.
                 Some(ProtoRangeFrag { uses, first, last }) => {
@@ -1622,7 +1622,7 @@ fn get_RangeFrags_for_block<F: Function>(
     }
 
     // We are at the end of the block.  We still have to deal with
-    // live-out Regs.  We must also deal with ProtoRangeFrags in |state|
+    // live-out Regs.  We must also deal with ProtoRangeFrags in `state`
     // that are for registers not listed as live-out.
 
     // Deal with live-out Regs.  Treat each one as if it is read just
@@ -1630,16 +1630,16 @@ fn get_RangeFrags_for_block<F: Function>(
     for r in liveout.iter() {
         //println!("QQQQ post: liveout:  {}", r.show());
         match state.get(r) {
-            // This can't happen.  |r| is in |liveout|, but this implies
+            // This can't happen.  `r` is in `liveout`, but this implies
             // that it is neither defined in the block nor present in
-            // |livein|.
+            // `livein`.
             None => {
                 panic!("get_RangeFrags_for_block: fail #3");
             }
-            // |r| is written (or modified), either literally or by virtue
-            // of being present in |livein|, and may or may not
+            // `r` is written (or modified), either literally or by virtue
+            // of being present in `livein`, and may or may not
             // subsequently be read -- we don't care, because it must be
-            // read "after" the block.  Create a |LiveOut| or |Thru| frag
+            // read "after" the block.  Create a `LiveOut` or `Thru` frag
             // accordingly.
             Some(ProtoRangeFrag {
                 uses,
@@ -1650,12 +1650,12 @@ fn get_RangeFrags_for_block<F: Function>(
                 tmpResultVec.push((*r, frag));
             }
         }
-        // Remove the entry from |state| so that the following loop
+        // Remove the entry from `state` so that the following loop
         // doesn't process it again.
         state.remove(r);
     }
 
-    // Finally, round up any remaining ProtoRangeFrags left in |state|.
+    // Finally, round up any remaining ProtoRangeFrags left in `state`.
     for (r, pf) in state.iter() {
         //println!("QQQQ post: leftover: {} {}", r.show(), pf.show());
         if pf.first == pf.last {
@@ -1666,11 +1666,11 @@ fn get_RangeFrags_for_block<F: Function>(
         tmpResultVec.push((*r, frag));
     }
 
-    // Copy the entries in |tmpResultVec| into |outMap| and |outVec|.
+    // Copy the entries in `tmpResultVec` into `outMap` and `outVec`.
     // TODO: do this as we go along, so as to avoid the use of a temporary
     // vector.
     for (r, frag) in tmpResultVec {
-        // Allocate a new RangeFragIx for |frag|, except, make some minimal effort
+        // Allocate a new RangeFragIx for `frag`, except, make some minimal effort
         // to avoid huge numbers of duplicates by inspecting the previous two
         // entries, and using them if possible.
         let outFEnv_len = outFEnv.len();
@@ -1779,8 +1779,8 @@ fn merge_RangeFrags_SLOW(
         let n_for_this_reg = all_frag_ixs_for_reg.len();
         assert!(n_for_this_reg > 0);
 
-        // BEGIN merge |all_frag_ixs_for_reg| entries as much as possible.
-        // Each |state| entry has four components:
+        // BEGIN merge `all_frag_ixs_for_reg` entries as much as possible.
+        // Each `state` entry has four components:
         //    (1) An is-this-entry-still-valid flag
         //    (2) A set of RangeFragIxs.  These should refer to disjoint
         //        RangeFrags.
@@ -1838,7 +1838,7 @@ fn merge_RangeFrags_SLOW(
             state.push(mg);
         }
 
-        // Iterate over |state|, merging entries as much as possible.  This
+        // Iterate over `state`, merging entries as much as possible.  This
         // is, unfortunately, quadratic.
         let state_len = state.len();
         loop {
@@ -1876,7 +1876,7 @@ fn merge_RangeFrags_SLOW(
             }
         }
 
-        // Harvest the merged RangeFrag sets from |state|, and turn them into
+        // Harvest the merged RangeFrag sets from `state`, and turn them into
         // RealRanges or VirtualRanges.
         for MergeGroup {
             valid, frag_ixs, ..
@@ -1905,7 +1905,7 @@ fn merge_RangeFrags_SLOW(
             }
         }
 
-        // END merge |all_frag_ixs_for_reg| entries as much as possible
+        // END merge `all_frag_ixs_for_reg` entries as much as possible
     }
 
     info!("        out: {} VLRs, {} RLRs", resV.len(), resR.len());
@@ -2018,14 +2018,14 @@ fn merge_RangeFrags(
             continue 'per_reg_loop;
         }
 
-        // BEGIN merge |all_frag_ixs_for_reg| entries as much as possible.
+        // BEGIN merge `all_frag_ixs_for_reg` entries as much as possible.
         //
         // but .. if we come across independents (RangeKind::Local), pull them out
         // immediately.
 
         let mut triples = Vec::<(RangeFragIx, RangeFragKind, BlockIx)>::new();
 
-        // Create |triples|.  We will use it to guide the merging phase, but it is
+        // Create `triples`.  We will use it to guide the merging phase, but it is
         // immutable there.
         'per_frag_loop: for fix in all_frag_ixs_for_reg {
             let frag = &frag_env[*fix];
@@ -2053,25 +2053,25 @@ fn merge_RangeFrags(
 
         // This is the core of the merging algorithm.
         //
-        // For each ix@(fix, kind, bix) in |triples| (order unimportant):
+        // For each ix@(fix, kind, bix) in `triples` (order unimportant):
         //
         // (1) "Merge with blocks that are live 'downstream' from here":
         //     if fix is live-out or live-through:
         //        for b in succs[bix]
-        //           for each ix2@(fix2, kind2, bix2) in |triples|
+        //           for each ix2@(fix2, kind2, bix2) in `triples`
         //              if bix2 == b && kind2 is live-in or live-through:
         //                  merge(ix, ix2)
         //
         // (2) "Merge with blocks that are live 'upstream' from here":
         //     if fix is live-in or live-through:
         //        for b in preds[bix]
-        //           for each ix2@(fix2, kind2, bix2) in |triples|
+        //           for each ix2@(fix2, kind2, bix2) in `triples`
         //              if bix2 == b && kind2 is live-out or live-through:
         //                  merge(ix, ix2)
         //
-        // |triples| remains unchanged.  The equivalence class info is accumulated
-        // in |eclasses_uf| instead.  |eclasses_uf| entries are indices into
-        // |triples|.
+        // `triples` remains unchanged.  The equivalence class info is accumulated
+        // in `eclasses_uf` instead.  `eclasses_uf` entries are indices into
+        // `triples`.
         //
         // Now, you might think it necessary to do both (1) and (2).  But no, they
         // are mutually redundant, since if two blocks are connected by a live
@@ -2086,18 +2086,18 @@ fn merge_RangeFrags(
         // Having this protects us against bad behaviour for huge inputs whilst
         // still being fast for small inputs.
         if triples_len <= 250 {
-            // The simple way, which is N^2 in the length of |triples|.
+            // The simple way, which is N^2 in the length of `triples`.
             for ((_fix, kind, bix), ix) in triples.iter().zip(0..) {
-                // Deal with liveness flows outbound from |fix|.  Meaning, (1) above.
+                // Deal with liveness flows outbound from `fix`.  Meaning, (1) above.
                 if *kind == RangeFragKind::LiveOut || *kind == RangeFragKind::Thru {
                     for b in cfg_info.succ_map[*bix].iter() {
-                        // Visit all entries in |triples| that are for |b|
+                        // Visit all entries in `triples` that are for `b`
                         for ((_fix2, kind2, bix2), ix2) in triples.iter().zip(0..) {
                             if *bix2 != *b || *kind2 == RangeFragKind::LiveOut {
                                 continue;
                             }
                             // Now we know that liveness for this reg "flows" from
-                            // |triples[ix]| to |triples[ix2]|.  So those two frags must be
+                            // `triples[ix]` to `triples[ix2]`.  So those two frags must be
                             // part of the same live range.  Note this.
                             if ix != ix2 {
                                 eclasses_uf.union(ix, ix2); // Order of args irrelevant
@@ -2105,23 +2105,23 @@ fn merge_RangeFrags(
                         }
                     }
                 }
-            } // outermost iteration over |triples|
+            } // outermost iteration over `triples`
             n_multi_grps_small += 1;
             sz_multi_grps_small += triples_len;
         } else {
-            // The more complex way, which is N-log-N in the length of |triples|.
+            // The more complex way, which is N-log-N in the length of `triples`.
             // This is the same as the simple way, except that the innermost loop,
-            // which is a linear search in |triples| to find entries for some block
-            // |b|, is replaced by a binary search.  This means that |triples| first
+            // which is a linear search in `triples` to find entries for some block
+            // `b`, is replaced by a binary search.  This means that `triples` first
             // needs to be sorted by block index.
             triples.sort_unstable_by(|(_, _, bix1), (_, _, bix2)| bix1.partial_cmp(bix2).unwrap());
             for ((_fix, kind, bix), ix) in triples.iter().zip(0..) {
-                // Deal with liveness flows outbound from |fix|.  Meaning, (1) above.
+                // Deal with liveness flows outbound from `fix`.  Meaning, (1) above.
                 if *kind == RangeFragKind::LiveOut || *kind == RangeFragKind::Thru {
                     for b in cfg_info.succ_map[*bix].iter() {
                         //println!("QQQ looking for {:?}", b);
-                        // Visit all entries in |triples| that are for |b|.  Binary search
-                        // |triples| to find the lowest-indexed entry for |b|.
+                        // Visit all entries in `triples` that are for `b`.  Binary search
+                        // `triples` to find the lowest-indexed entry for `b`.
                         let mut ixL = 0;
                         let mut ixR = triples_len;
                         while ixL < ixR {
@@ -2132,10 +2132,10 @@ fn merge_RangeFrags(
                                 ixR = m;
                             }
                         }
-                        // It might be that there is no block for |b| in the sequence.
-                        // That's legit; it just means that block |bix| jumps to a
+                        // It might be that there is no block for `b` in the sequence.
+                        // That's legit; it just means that block `bix` jumps to a
                         // successor where the associated register isn't live-in/thru.  A
-                        // failure to find |b| can be indicated one of two ways:
+                        // failure to find `b` can be indicated one of two ways:
                         //
                         // * ixL == triples_len
                         // * ixL < triples_len and b < triples[ixL].b
@@ -2145,8 +2145,8 @@ fn merge_RangeFrags(
                         // the second variant into the first, so as to make it obvious
                         // that the loop won't do anything.
 
-                        // ixL now holds the lowest index of any |triples| entry for block
-                        // |b|.  Assert this.
+                        // ixL now holds the lowest index of any `triples` entry for block
+                        // `b`.  Assert this.
                         if ixL < triples_len && *b < triples[ixL].2 {
                             ixL = triples_len;
                         }
@@ -2162,7 +2162,7 @@ fn merge_RangeFrags(
                             }
                             let (_fix2, kind2, bix2) = triples[ix2];
                             if *b < bix2 {
-                                // We've come to the end of the sequence of |b|-blocks.
+                                // We've come to the end of the sequence of `b`-blocks.
                                 break;
                             }
                             debug_assert!(*b == bix2);
@@ -2171,7 +2171,7 @@ fn merge_RangeFrags(
                                 continue 'loop_over_entries_for_b;
                             }
                             // Now we know that liveness for this reg "flows" from
-                            // |triples[ix]| to |triples[ix2]|.  So those two frags must be
+                            // `triples[ix]` to `triples[ix2]`.  So those two frags must be
                             // part of the same live range.  Note this.
                             if ix != ix2 {
                                 eclasses_uf.union(ix, ix2); // Order of args irrelevant
@@ -2188,12 +2188,12 @@ fn merge_RangeFrags(
             sz_multi_grps_large += triples_len;
         }
 
-        // Now |eclasses_uf| contains the results of the merging-search.  Visit
+        // Now `eclasses_uf` contains the results of the merging-search.  Visit
         // each of its equivalence classes in turn, and convert each into a
         // virtual or real live range as appropriate.
         let eclasses = eclasses_uf.get_equiv_classes();
         for leader_triple_ix in eclasses.equiv_class_leaders_iter() {
-            // |leader_triple_ix| is an eclass leader.  Enumerate the whole eclass.
+            // `leader_triple_ix` is an eclass leader.  Enumerate the whole eclass.
             let mut frag_ixs = Vec::<RangeFragIx>::new();
             for triple_ix in eclasses.equiv_class_elems_iter(leader_triple_ix) {
                 frag_ixs.push(triples[triple_ix].0 /*first field is frag ix*/);
@@ -2201,7 +2201,7 @@ fn merge_RangeFrags(
             let sorted_frags = SortedRangeFragIxs::new(&frag_ixs.to_vec(), &frag_env);
             create_and_add_Range(&mut resR, &mut resV, *reg, sorted_frags);
         }
-        // END merge |all_frag_ixs_for_reg| entries as much as possible
+        // END merge `all_frag_ixs_for_reg` entries as much as possible
     } // 'per_reg_loop
       // END per_reg_loop
 
@@ -2257,12 +2257,12 @@ fn merge_RangeFrags(
 }
 
 //=============================================================================
-// Finalising of VirtualRanges, by setting the |size| and |spill_cost| metrics.
+// Finalising of VirtualRanges, by setting the `size` and `spill_cost` metrics.
 
-// |size|: this is simple.  Simply sum the size of the individual fragments.
+// `size`: this is simple.  Simply sum the size of the individual fragments.
 // Note that this must produce a value > 0 for a dead write, hence the "+1".
 //
-// |spill_cost|: try to estimate the number of spills and reloads that would
+// `spill_cost`: try to estimate the number of spills and reloads that would
 // result from spilling the VirtualRange, thusly:
 //    sum, for each frag
 //        # mentions of the VirtualReg in the frag
@@ -2372,7 +2372,7 @@ pub fn run_analysis<F: Function>(
     // Now perform dataflow analysis.  This is somewhat more complex.
     info!("  run_analysis: begin data flow analysis");
 
-    // See |get_sanitized_reg_uses_for_func| for the meaning of "sanitized".
+    // See `get_sanitized_reg_uses_for_func` for the meaning of "sanitized".
     let reg_vecs_and_bounds = get_sanitized_reg_uses_for_func(func, reg_universe)
         .map_err(|reg| AnalysisError::IllegalRealReg(reg))?;
     assert!(reg_vecs_and_bounds.is_sanitized());
@@ -2385,7 +2385,7 @@ pub fn run_analysis<F: Function>(
     // Calculate live-in and live-out sets per block, using the traditional
     // iterate-to-a-fixed-point scheme.
 
-    // |liveout_sets_per_block| is amended below for return blocks, hence `mut`.
+    // `liveout_sets_per_block` is amended below for return blocks, hence `mut`.
     let (livein_sets_per_block, mut liveout_sets_per_block) =
         calc_livein_and_liveout(func, &def_sets_per_block, &use_sets_per_block, &cfg_info);
     debug_assert!(livein_sets_per_block.len() == func.blocks().len() as u32);

@@ -343,7 +343,7 @@ pub enum Inst {
         op: BinOp,
         dst: Reg,
         src_right: RI,
-    }, // "mod" semantics for |dst|
+    }, // "mod" semantics for `dst`
     BinOpF {
         op: BinOpF,
         dst: Reg,
@@ -853,12 +853,12 @@ impl Inst {
     // respectively.
     //
     // Be careful here.  If an instruction really modifies a register -- as is
-    // typical for x86 -- that register needs to be in the |mod| set, and not in
-    // the |def| and |use| sets.  *Any* mistake in describing register uses here
+    // typical for x86 -- that register needs to be in the `mod` set, and not in
+    // the `def` and `use` sets.  *Any* mistake in describing register uses here
     // will almost certainly lead to incorrect register allocations.
     //
-    // Also the following must hold: the union of |def| and |use| must be
-    // disjoint from |mod|.
+    // Also the following must hold: the union of `def` and `use` must be
+    // disjoint from `mod`.
     pub fn get_reg_usage(&self, collector: &mut RegUsageCollector) {
         match self {
             Inst::NopZ {} => {}
@@ -1645,7 +1645,7 @@ pub struct Func {
     pub num_virtual_regs: u32,
     pub insns: TypedIxVec<InstIx, Inst>, // indexed by InstIx
 
-    // Note that |blocks| must be in order of increasing |Block::start|
+    // Note that `blocks` must be in order of increasing `Block::start`
     // fields.  Code that wants to traverse the blocks in some other order
     // must represent the ordering some other way; rearranging Func::blocks is
     // not allowed.
@@ -1723,7 +1723,7 @@ impl Func {
             for i in b.start.get()..b.start.get() + b.len {
                 let iix = InstIx::new(i);
 
-                // Get the use, def and mod sets for |self.insns[iix]|.  This is a bit
+                // Get the use, def and mod sets for `self.insns[iix]`.  This is a bit
                 // awkward since we don't have the library's internal convenience
                 // functions available here.
                 let mut ru_vecs = RegUsageCollector::get_empty_RegVecs_TEST_FRAMEWORK_ONLY(false);
@@ -2322,7 +2322,7 @@ impl regalloc::Function for Func {
     }
 }
 
-/// Create a universe for testing, with nI32 |I32| class regs and nF32 |F32|
+/// Create a universe for testing, with nI32 `I32` class regs and nF32 `F32`
 /// class regs.
 pub fn make_universe(num_i32: usize, num_f32: usize) -> RealRegUniverse {
     let total_regs = num_i32 + num_f32;

@@ -2244,7 +2244,7 @@ fn cmp_interval_tree(
     (left, left_id).partial_cmp(&(right, right_id))
 }
 
-// Allocator top level.  |func| is modified so that, when this function
+// Allocator top level.  `func` is modified so that, when this function
 // returns, it will contain no VirtualReg uses.  Allocation can fail if there
 // are insufficient registers to even generate spill/reload code, or if the
 // function appears to have any undefined VirtualReg/RealReg uses.
@@ -3265,10 +3265,10 @@ fn apply_registers<F: Function>(
     // FIXME: derive this information directly from the allocation data
     // structures used above.
     //
-    // NB at this point, the |san_reg_uses| that was computed in the analysis
+    // NB at this point, the `san_reg_uses` that was computed in the analysis
     // phase is no longer valid, because we've added and removed instructions to
-    // the function relative to the one that |san_reg_uses| was computed from,
-    // so we have to re-visit all insns with |add_raw_reg_vecs_for_insn|.
+    // the function relative to the one that `san_reg_uses` was computed from,
+    // so we have to re-visit all insns with `add_raw_reg_vecs_for_insn`.
     // That's inefficient, but we don't care .. this should only be a temporary
     // fix.
 

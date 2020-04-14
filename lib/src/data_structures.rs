@@ -237,8 +237,8 @@ impl<'a, T> Iterator for SetIter<'a, T> {
 //   for ent in startEnt .dotdot( endPlus1Ent ) {
 //   }
 //
-// until such time as |trait Step| is available in stable Rust.  At that point
-// |fn dotdot| and all of the following can be removed, and the loops
+// until such time as `trait Step` is available in stable Rust.  At that point
+// `fn dotdot` and all of the following can be removed, and the loops
 // rewritten using the standard syntax:
 //
 //   for ent in startEnt .. endPlus1Ent {
@@ -588,13 +588,13 @@ impl RegClass {
 // Virtual Reg:   1  rc:3                index:28
 // Real Reg:      0  rc:3  uu:12  enc:8  index:8
 //
-// |rc| is the register class.  |uu| means "unused".  |enc| is the hardware
-// encoding for the reg.  |index| is a zero based index which has the
+// `rc` is the register class.  `uu` means "unused".  `enc` is the hardware
+// encoding for the reg.  `index` is a zero based index which has the
 // following meanings:
 //
-// * for a Virtual Reg, |index| is just the virtual register number.
-// * for a Real Reg, |index| is the entry number in the associated
-//   |RealRegUniverse|.
+// * for a Virtual Reg, `index` is just the virtual register number.
+// * for a Real Reg, `index` is the entry number in the associated
+//   `RealRegUniverse`.
 //
 // This scheme gives us:
 //
@@ -874,7 +874,7 @@ impl fmt::Debug for SpillSlot {
 // Register uses: low level interface
 
 // This minimal struct is visible from outside the regalloc.rs interface.  It
-// is intended to be a safe wrapper around |RegVecs|, which isn't externally
+// is intended to be a safe wrapper around `RegVecs`, which isn't externally
 // visible.  It is used to collect unsanitized reg use info from client
 // instructions.
 pub struct RegUsageCollector<'a> {
@@ -924,8 +924,8 @@ impl<'a> RegUsageCollector<'a> {
 
 // Everything else is not visible outside the regalloc.rs interface.
 
-// There is one of these per function.  Note that |defs| and |mods| lose the
-// |Writable| constraint at this point.  This is for convenience of having all
+// There is one of these per function.  Note that `defs` and `mods` lose the
+// `Writable` constraint at this point.  This is for convenience of having all
 // three vectors be the same type, but comes at the cost of the loss of being
 // able to differentiate readonly vs read/write registers in the Rust type
 // system.
@@ -992,7 +992,7 @@ pub struct RegVecsAndBounds {
     // The three vectors of registers.  These can be arbitrarily long.
     pub vecs: RegVecs,
     // Admin info which tells us the location, for each insn, of its register
-    // groups in |vecs|.
+    // groups in `vecs`.
     pub bounds: TypedIxVec<InstIx, RegVecBounds>,
 }
 impl RegVecsAndBounds {
@@ -1012,7 +1012,7 @@ impl RegVecsAndBounds {
 
 // Some call sites want to get reg use information as three Sets.  This is a
 // "convenience facility" which is easier to use but much slower than working
-// with a whole-function |RegVecsAndBounds|.  It shouldn't be used on critical
+// with a whole-function `RegVecsAndBounds`.  It shouldn't be used on critical
 // paths.
 #[derive(Debug)]
 pub struct RegSets {
@@ -1081,15 +1081,15 @@ pub struct RealRegUniverse {
     // registers.
     pub regs: Vec<(RealReg, String)>,
 
-    // This is the size of the initial section of |regs| that is available to
-    // the allocator.  It must be < |regs|.len().
+    // This is the size of the initial section of `regs` that is available to
+    // the allocator.  It must be < `regs`.len().
     pub allocable: usize,
 
     // Information about groups of allocable registers. Used to quickly address
     // only a group of allocable registers belonging to the same register class.
-    // Indexes into |allocable_by_class| are RegClass values, such as
-    // RegClass::F32. If the resulting entry is |None| then there are no
-    // registers in that class.  Otherwise the value is a |RegClassInfo|, which
+    // Indexes into `allocable_by_class` are RegClass values, such as
+    // RegClass::F32. If the resulting entry is `None` then there are no
+    // registers in that class.  Otherwise the value is a `RegClassInfo`, which
     // provides a register range and possibly information about fixed uses.
     pub allocable_by_class: [Option<RegClassInfo>; NUM_REG_CLASSES],
 }
@@ -1101,12 +1101,12 @@ pub struct RegClassInfo {
     // register indices.
     //
     // A range (first, last) specifies the range of entries in
-    // |RealRegUniverse.regs| corresponding to that class.  The range includes
-    // both |first| and |last|.
+    // `RealRegUniverse.regs` corresponding to that class.  The range includes
+    // both `first` and `last`.
     //
-    // In all cases, |last| must be < |RealRegUniverse.allocable|.  In other
-    // words, all ranges together in |allocable_by_class| must describe only the
-    // allocable prefix of |regs|.
+    // In all cases, `last` must be < `RealRegUniverse.allocable`.  In other
+    // words, all ranges together in `allocable_by_class` must describe only the
+    // allocable prefix of `regs`.
     //
     // For example, let's say
     //    allocable_by_class[RegClass::F32] ==
@@ -1114,7 +1114,7 @@ pub struct RegClassInfo {
     // Then regs[10], regs[11], regs[12], regs[13], and regs[14] give all
     // registers of register class RegClass::F32.
     //
-    // The effect of the above is that registers in |regs| must form
+    // The effect of the above is that registers in `regs` must form
     // contiguous groups. This is checked by RealRegUniverse::check_is_sane().
     pub first: usize,
     pub last: usize,
@@ -1134,21 +1134,21 @@ impl RealRegUniverse {
         let regs_len = self.regs.len();
         let regs_allocable = self.allocable;
         // The universe must contain at most 256 registers.  That's because
-        // |Reg| only has an 8-bit index value field, so if the universe
+        // `Reg` only has an 8-bit index value field, so if the universe
         // contained more than 256 registers, we'd never be able to index into
         // entries 256 and above.  This is no limitation in practice since all
         // targets we're interested in contain (many) fewer than 256 regs in
         // total.
         let mut ok = regs_len <= 256;
         // The number of allocable registers must not exceed the number of
-        // |regs| presented.  In general it will be less, since the universe
+        // `regs` presented.  In general it will be less, since the universe
         // will list some registers (stack pointer, etc) which are not
         // available for allocation.
         if ok {
             ok = regs_allocable <= regs_len;
         }
         // All registers must have an index value which points back at the
-        // |regs| slot they are in.  Also they really must be real regs.
+        // `regs` slot they are in.  Also they really must be real regs.
         if ok {
             for i in 0..regs_len {
                 let (reg, _name) = &self.regs[i];
@@ -1157,8 +1157,8 @@ impl RealRegUniverse {
                 }
             }
         }
-        // The allocatable regclass groupings defined by |allocable_first| and
-        // |allocable_last| must be contiguous.
+        // The allocatable regclass groupings defined by `allocable_first` and
+        // `allocable_last` must be contiguous.
         if ok {
             let mut regclass_used = [false; NUM_REG_CLASSES];
             for rc in 0..NUM_REG_CLASSES {
@@ -1307,7 +1307,7 @@ impl PartialOrd for Point {
     }
 }
 
-// See comments below on |RangeFrag| for the meaning of |InstPoint|.
+// See comments below on `RangeFrag` for the meaning of `InstPoint`.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Ord)]
 pub struct InstPoint {
     pub iix: InstIx,
@@ -1357,7 +1357,7 @@ impl InstPoint {
 }
 impl PartialOrd for InstPoint {
     // Again .. don't assume anything about the #derive'd version.  These have
-    // to be ordered using |iix| as the primary key and |pt| as the
+    // to be ordered using `iix` as the primary key and `pt` as the
     // secondary.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.iix.partial_cmp(&other.iix) {
@@ -1459,7 +1459,7 @@ impl fmt::Debug for RangeFragKind {
 // different "points" within each instruction: the Use position, where
 // incoming registers are read, and the Def position, where outgoing registers
 // are written.  The Use position is considered to come before the Def
-// position, as described for |Point| above.
+// position, as described for `Point` above.
 //
 // When we come to generate spill/restore live ranges, Point::S and Point::R
 // also come into play.  Live ranges (and hence, RangeFrags) that do not perform
@@ -1475,14 +1475,14 @@ impl fmt::Debug for RangeFragKind {
 // block: the insn number is used as the primary key, and the Point part is
 // the secondary key, with Reload < Use < Def < Spill.
 //
-// Finally, a RangeFrag has a |count| field, which is a u16 indicating how often
+// Finally, a RangeFrag has a `count` field, which is a u16 indicating how often
 // the associated storage unit (Reg) is mentioned inside the RangeFrag.  It is
-// assumed that the RangeFrag is associated with some Reg.  If not, the |count|
+// assumed that the RangeFrag is associated with some Reg.  If not, the `count`
 // field is meaningless.
 //
-// The |bix| field is actually redundant, since the containing |Block| can be
-// inferred, laboriously, from |first| and |last|, providing you have a
-// |Block| table to hand.  It is included here for convenience.
+// The `bix` field is actually redundant, since the containing `Block` can be
+// inferred, laboriously, from `first` and `last`, providing you have a
+// `Block` table to hand.  It is included here for convenience.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RangeFrag {
     pub bix: BlockIx,
@@ -1673,7 +1673,7 @@ impl SpillCost {
         SpillCost::Infinite
     }
     pub fn finite(cost: f32) -> Self {
-        // "|is_normal| returns true if the number is neither zero, infinite,
+        // "`is_normal` returns true if the number is neither zero, infinite,
         // subnormal, or NaN."
         assert!(cost.is_normal() || cost == 0.0);
         // And also it can't be negative.
@@ -1711,7 +1711,7 @@ impl SpillCost {
     }
     pub fn partial_cmp_debug_only(&self, other: &Self) -> Option<Ordering> {
         // NB!  This is only for debugging; it serves only to give an arbitrary
-        // structural partial ordering on |SpillCost| so it can participate in
+        // structural partial ordering on `SpillCost` so it can participate in
         // sorting.  The induced ordering should not be used to make any
         // judgements about spill costs.
         match (self, other) {
@@ -1750,12 +1750,12 @@ impl SpillCost {
 //
 // VirtualRanges contain metrics.  Not all are initially filled in:
 //
-// * |size| is the number of instructions in total spanned by the LR.  It must
+// * `size` is the number of instructions in total spanned by the LR.  It must
 //   not be zero.
 //
-// * |spill_cost| is an abstractified measure of the cost of spilling the LR.
-//   The only constraint (w.r.t. correctness) is that normal LRs have a |Some|
-//   value, whilst |None| is reserved for live ranges created for spills and
+// * `spill_cost` is an abstractified measure of the cost of spilling the LR.
+//   The only constraint (w.r.t. correctness) is that normal LRs have a `Some`
+//   value, whilst `None` is reserved for live ranges created for spills and
 //   reloads and interpreted to mean "infinity".  This is needed to guarantee
 //   that allocation can always succeed in the worst case, in which all of the
 //   original live ranges of the program are spilled.
@@ -1765,16 +1765,16 @@ impl SpillCost {
 //
 // I find it helpful to think of a live range, both RealRange and
 // VirtualRange, as a "renaming equivalence class".  That is, if you rename
-// |reg| at some point inside |sorted_frags|, then you must rename *all*
-// occurrences of |reg| inside |sorted_frags|, since otherwise the program will
+// `reg` at some point inside `sorted_frags`, then you must rename *all*
+// occurrences of `reg` inside `sorted_frags`, since otherwise the program will
 // no longer work.
 //
-// Invariants for RealRange/VirtualRange RangeFrag sets (their |sfrags| fields):
+// Invariants for RealRange/VirtualRange RangeFrag sets (their `sfrags` fields):
 //
-// * Either |sorted_frags| contains just one RangeFrag, in which case it *must*
+// * Either `sorted_frags` contains just one RangeFrag, in which case it *must*
 //   be RangeFragKind::Local.
 //
-// * Or |sorted_frags| contains more than one RangeFrag, in which case: at
+// * Or `sorted_frags` contains more than one RangeFrag, in which case: at
 //   least one must be RangeFragKind::LiveOut, at least one must be
 //   RangeFragKind::LiveIn, and there may be zero or more RangeFragKind::Thrus.
 

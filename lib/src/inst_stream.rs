@@ -176,7 +176,7 @@ fn map_vregs_to_rregs<F: Function>(
             return true;
         }
         // A spill-related ("bridge") frag.  There are three possibilities,
-        // and they correspond exactly to |BridgeKind|.
+        // and they correspond exactly to `BridgeKind`.
         if frag.first.pt.is_reload() && frag.last.pt.is_use() && frag.last.iix == frag.first.iix {
             // BridgeKind::RtoU
             return true;
@@ -428,7 +428,7 @@ fn map_vregs_to_rregs<F: Function>(
 }
 
 //=============================================================================
-// Take the real-register-only code created by |map_vregs_to_rregs| and
+// Take the real-register-only code created by `map_vregs_to_rregs` and
 // interleave extra instructions (spills, reloads and moves) that the core
 // algorithm has asked us to add.
 
@@ -446,14 +446,14 @@ fn add_spills_reloads_and_moves<F: Function>(
 
     insts_to_add.sort_by_key(|mem_move| mem_move.point);
 
-    let mut curITA = 0; // cursor in |insts_to_add|
+    let mut curITA = 0; // cursor in `insts_to_add`
     let mut curB = BlockIx::new(0); // cursor in Func::blocks
 
     let mut insns: Vec<F::Inst> = vec![];
     let mut target_map: TypedIxVec<BlockIx, InstIx> = TypedIxVec::new();
 
     for iix in func.insn_indices() {
-        // Is |iix| the first instruction in a block?  Meaning, are we
+        // Is `iix` the first instruction in a block?  Meaning, are we
         // starting a new block?
         debug_assert!(curB.get() < func.blocks().len() as u32);
         if func.block_insns(curB).start() == iix {
@@ -462,24 +462,24 @@ fn add_spills_reloads_and_moves<F: Function>(
         }
 
         // Copy to the output vector, the extra insts that are to be placed at the
-        // reload point of |iix|.
+        // reload point of `iix`.
         while curITA < insts_to_add.len()
             && insts_to_add[curITA].point == InstPoint::new_reload(iix)
         {
             insns.push(insts_to_add[curITA].inst.construct(func));
             curITA += 1;
         }
-        // Copy the inst at |iix| itself
+        // Copy the inst at `iix` itself
         insns.push(func.get_insn(iix).clone());
         // And copy the extra insts that are to be placed at the spill point of
-        // |iix|.
+        // `iix`.
         while curITA < insts_to_add.len() && insts_to_add[curITA].point == InstPoint::new_spill(iix)
         {
             insns.push(insts_to_add[curITA].inst.construct(func));
             curITA += 1;
         }
 
-        // Is |iix| the last instruction in a block?
+        // Is `iix` the last instruction in a block?
         if iix == func.block_insns(curB).last() {
             debug_assert!(curB.get() < func.blocks().len() as u32);
             curB = curB.plus(1);
