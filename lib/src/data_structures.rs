@@ -40,186 +40,194 @@ pub type Map<K, V> = FxHashMap<K, V>;
 
 // Same comment as above for FxHashMap.
 pub struct Set<T> {
-  set: FxHashSet<T>,
+    set: FxHashSet<T>,
 }
 
 impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
-  #[inline(never)]
-  pub fn empty() -> Self {
-    Self { set: FxHashSet::<T>::default() }
-  }
-
-  #[inline(never)]
-  pub fn unit(item: T) -> Self {
-    let mut s = Self::empty();
-    s.insert(item);
-    s
-  }
-
-  #[inline(never)]
-  pub fn two(item1: T, item2: T) -> Self {
-    let mut s = Self::empty();
-    s.insert(item1);
-    s.insert(item2);
-    s
-  }
-
-  #[inline(never)]
-  pub fn card(&self) -> usize {
-    self.set.len()
-  }
-
-  #[inline(never)]
-  pub fn insert(&mut self, item: T) {
-    self.set.insert(item);
-  }
-
-  #[inline(never)]
-  pub fn delete(&mut self, item: T) {
-    self.set.remove(&item);
-  }
-
-  #[inline(never)]
-  pub fn is_empty(&self) -> bool {
-    self.set.is_empty()
-  }
-
-  #[inline(never)]
-  pub fn contains(&self, item: T) -> bool {
-    self.set.contains(&item)
-  }
-
-  #[inline(never)]
-  pub fn intersect(&mut self, other: &Self) {
-    let mut res = FxHashSet::<T>::default();
-    for item in self.set.iter() {
-      if other.set.contains(item) {
-        res.insert(*item);
-      }
+    #[inline(never)]
+    pub fn empty() -> Self {
+        Self {
+            set: FxHashSet::<T>::default(),
+        }
     }
-    self.set = res;
-  }
 
-  #[inline(never)]
-  pub fn union(&mut self, other: &Self) {
-    for item in other.set.iter() {
-      self.set.insert(*item);
+    #[inline(never)]
+    pub fn unit(item: T) -> Self {
+        let mut s = Self::empty();
+        s.insert(item);
+        s
     }
-  }
 
-  #[inline(never)]
-  pub fn remove(&mut self, other: &Self) {
-    for item in other.set.iter() {
-      self.set.remove(item);
+    #[inline(never)]
+    pub fn two(item1: T, item2: T) -> Self {
+        let mut s = Self::empty();
+        s.insert(item1);
+        s.insert(item2);
+        s
     }
-  }
 
-  #[inline(never)]
-  pub fn intersects(&self, other: &Self) -> bool {
-    !self.set.is_disjoint(&other.set)
-  }
-
-  #[inline(never)]
-  pub fn is_subset_of(&self, other: &Self) -> bool {
-    self.set.is_subset(&other.set)
-  }
-
-  #[inline(never)]
-  pub fn to_vec(&self) -> Vec<T> {
-    let mut res = Vec::<T>::new();
-    for item in self.set.iter() {
-      res.push(*item)
+    #[inline(never)]
+    pub fn card(&self) -> usize {
+        self.set.len()
     }
-    // Don't delete this.  It is important.
-    res.sort_unstable();
-    res
-  }
 
-  #[inline(never)]
-  pub fn from_vec(vec: Vec<T>) -> Self {
-    let mut res = Set::<T>::empty();
-    for x in vec {
-      res.insert(x);
+    #[inline(never)]
+    pub fn insert(&mut self, item: T) {
+        self.set.insert(item);
     }
-    res
-  }
 
-  #[inline(never)]
-  pub fn equals(&self, other: &Self) -> bool {
-    self.set == other.set
-  }
+    #[inline(never)]
+    pub fn delete(&mut self, item: T) {
+        self.set.remove(&item);
+    }
 
-  #[inline(never)]
-  pub fn retain<F>(&mut self, f: F)
-  where
-    F: FnMut(&T) -> bool,
-  {
-    self.set.retain(f)
-  }
+    #[inline(never)]
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
 
-  #[inline(never)]
-  pub fn map<F, U>(&self, f: F) -> Set<U>
-  where
-    F: Fn(&T) -> U,
-    U: Eq + Ord + Hash + Copy + fmt::Debug,
-  {
-    Set { set: self.set.iter().map(f).collect() }
-  }
+    #[inline(never)]
+    pub fn contains(&self, item: T) -> bool {
+        self.set.contains(&item)
+    }
 
-  #[inline(never)]
-  pub fn filter_map<F, U>(&self, f: F) -> Set<U>
-  where
-    F: Fn(&T) -> Option<U>,
-    U: Eq + Ord + Hash + Copy + fmt::Debug,
-  {
-    Set { set: self.set.iter().filter_map(f).collect() }
-  }
+    #[inline(never)]
+    pub fn intersect(&mut self, other: &Self) {
+        let mut res = FxHashSet::<T>::default();
+        for item in self.set.iter() {
+            if other.set.contains(item) {
+                res.insert(*item);
+            }
+        }
+        self.set = res;
+    }
+
+    #[inline(never)]
+    pub fn union(&mut self, other: &Self) {
+        for item in other.set.iter() {
+            self.set.insert(*item);
+        }
+    }
+
+    #[inline(never)]
+    pub fn remove(&mut self, other: &Self) {
+        for item in other.set.iter() {
+            self.set.remove(item);
+        }
+    }
+
+    #[inline(never)]
+    pub fn intersects(&self, other: &Self) -> bool {
+        !self.set.is_disjoint(&other.set)
+    }
+
+    #[inline(never)]
+    pub fn is_subset_of(&self, other: &Self) -> bool {
+        self.set.is_subset(&other.set)
+    }
+
+    #[inline(never)]
+    pub fn to_vec(&self) -> Vec<T> {
+        let mut res = Vec::<T>::new();
+        for item in self.set.iter() {
+            res.push(*item)
+        }
+        // Don't delete this.  It is important.
+        res.sort_unstable();
+        res
+    }
+
+    #[inline(never)]
+    pub fn from_vec(vec: Vec<T>) -> Self {
+        let mut res = Set::<T>::empty();
+        for x in vec {
+            res.insert(x);
+        }
+        res
+    }
+
+    #[inline(never)]
+    pub fn equals(&self, other: &Self) -> bool {
+        self.set == other.set
+    }
+
+    #[inline(never)]
+    pub fn retain<F>(&mut self, f: F)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.set.retain(f)
+    }
+
+    #[inline(never)]
+    pub fn map<F, U>(&self, f: F) -> Set<U>
+    where
+        F: Fn(&T) -> U,
+        U: Eq + Ord + Hash + Copy + fmt::Debug,
+    {
+        Set {
+            set: self.set.iter().map(f).collect(),
+        }
+    }
+
+    #[inline(never)]
+    pub fn filter_map<F, U>(&self, f: F) -> Set<U>
+    where
+        F: Fn(&T) -> Option<U>,
+        U: Eq + Ord + Hash + Copy + fmt::Debug,
+    {
+        Set {
+            set: self.set.iter().filter_map(f).collect(),
+        }
+    }
 }
 
 impl<T: Eq + Ord + Hash + Copy + fmt::Debug> fmt::Debug for Set<T> {
-  #[inline(never)]
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    // Print the elements in some way which depends only on what is
-    // present in the set, and not on any other factor.  In particular,
-    // <Debug for FxHashSet> has been observed to to print the elements
-    // of a two element set in both orders on different occasions.
-    let sorted_vec = self.to_vec();
-    let mut s = "{".to_string();
-    for i in 0..sorted_vec.len() {
-      if i > 0 {
-        s = s + &", ".to_string();
-      }
-      s = s + &format!("{:?}", &sorted_vec[i]);
+    #[inline(never)]
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        // Print the elements in some way which depends only on what is
+        // present in the set, and not on any other factor.  In particular,
+        // <Debug for FxHashSet> has been observed to to print the elements
+        // of a two element set in both orders on different occasions.
+        let sorted_vec = self.to_vec();
+        let mut s = "{".to_string();
+        for i in 0..sorted_vec.len() {
+            if i > 0 {
+                s = s + &", ".to_string();
+            }
+            s = s + &format!("{:?}", &sorted_vec[i]);
+        }
+        s = s + &"}".to_string();
+        write!(fmt, "{}", s)
     }
-    s = s + &"}".to_string();
-    write!(fmt, "{}", s)
-  }
 }
 
 impl<T: Eq + Ord + Hash + Copy + Clone + fmt::Debug> Clone for Set<T> {
-  #[inline(never)]
-  fn clone(&self) -> Self {
-    let mut res = Set::<T>::empty();
-    for item in self.set.iter() {
-      res.set.insert(item.clone());
+    #[inline(never)]
+    fn clone(&self) -> Self {
+        let mut res = Set::<T>::empty();
+        for item in self.set.iter() {
+            res.set.insert(item.clone());
+        }
+        res
     }
-    res
-  }
 }
 
 pub struct SetIter<'a, T> {
-  set_iter: std::collections::hash_set::Iter<'a, T>,
+    set_iter: std::collections::hash_set::Iter<'a, T>,
 }
 impl<T> Set<T> {
-  pub fn iter(&self) -> SetIter<T> {
-    SetIter { set_iter: self.set.iter() }
-  }
+    pub fn iter(&self) -> SetIter<T> {
+        SetIter {
+            set_iter: self.set.iter(),
+        }
+    }
 }
 impl<'a, T> Iterator for SetIter<'a, T> {
-  type Item = &'a T;
-  fn next(&mut self) -> Option<Self::Item> {
-    self.set_iter.next()
-  }
+    type Item = &'a T;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.set_iter.next()
+    }
 }
 
 //=============================================================================
@@ -237,76 +245,83 @@ impl<'a, T> Iterator for SetIter<'a, T> {
 //   }
 
 pub trait Zero {
-  fn zero() -> Self;
+    fn zero() -> Self;
 }
 
 pub trait PlusOne {
-  fn plus_one(&self) -> Self;
+    fn plus_one(&self) -> Self;
 }
 
 pub trait PlusN: PlusOne {
-  fn plus_n(&self, n: usize) -> Self;
+    fn plus_n(&self, n: usize) -> Self;
 }
 
 #[derive(Clone, Copy)]
 pub struct Range<T> {
-  first: T,
-  last_plus1: T,
-  len: usize,
+    first: T,
+    last_plus1: T,
+    len: usize,
 }
 
 impl<T: Copy + PartialOrd + PlusOne> IntoIterator for Range<T> {
-  type Item = T;
-  type IntoIter = MyIterator<T>;
-  fn into_iter(self) -> Self::IntoIter {
-    MyIterator { range: self, next: self.first }
-  }
+    type Item = T;
+    type IntoIter = MyIterator<T>;
+    fn into_iter(self) -> Self::IntoIter {
+        MyIterator {
+            range: self,
+            next: self.first,
+        }
+    }
 }
 
 impl<T: Copy + Eq + Ord + PlusOne + PlusN> Range<T> {
-  /// Create a new range object.
-  pub fn new(from: T, len: usize) -> Range<T> {
-    Range { first: from, last_plus1: from.plus_n(len), len }
-  }
+    /// Create a new range object.
+    pub fn new(from: T, len: usize) -> Range<T> {
+        Range {
+            first: from,
+            last_plus1: from.plus_n(len),
+            len,
+        }
+    }
 
-  pub fn start(&self) -> T {
-    self.first
-  }
+    pub fn start(&self) -> T {
+        self.first
+    }
 
-  pub fn first(&self) -> T {
-    assert!(self.len() > 0);
-    self.start()
-  }
+    pub fn first(&self) -> T {
+        assert!(self.len() > 0);
+        self.start()
+    }
 
-  pub fn last(&self) -> T {
-    assert!(self.len() > 0);
-    self.start().plus_n(self.len() - 1)
-  }
+    pub fn last(&self) -> T {
+        assert!(self.len() > 0);
+        self.start().plus_n(self.len() - 1)
+    }
 
-  pub fn len(&self) -> usize {
-    self.len
-  }
+    pub fn len(&self) -> usize {
+        self.len
+    }
 
-  pub fn contains(&self, t: T) -> bool {
-    t >= self.first && t < self.first.plus_n(self.len)
-  }
+    pub fn contains(&self, t: T) -> bool {
+        t >= self.first && t < self.first.plus_n(self.len)
+    }
 }
 
 pub struct MyIterator<T> {
-  range: Range<T>,
-  next: T,
+    range: Range<T>,
+    next: T,
 }
 impl<T: Copy + PartialOrd + PlusOne> Iterator for MyIterator<T> {
-  type Item = T;
-  fn next(&mut self) -> Option<Self::Item> {
-    if self.next >= self.range.last_plus1 {
-      None
-    } else {
-      let res = Some(self.next);
-      self.next = self.next.plus_one();
-      res
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next >= self.range.last_plus1 {
+            None
+        } else {
+            let res = Some(self.next);
+            self.next = self.next.plus_one();
+            res
+        }
     }
-  }
 }
 
 //=============================================================================
@@ -314,172 +329,181 @@ impl<T: Copy + PartialOrd + PlusOne> Iterator for MyIterator<T> {
 // most 2^32-1 elems can be stored.  What if this overflows?)
 
 pub struct TypedIxVec<TyIx, Ty> {
-  vek: Vec<Ty>,
-  ty_ix: PhantomData<TyIx>,
+    vek: Vec<Ty>,
+    ty_ix: PhantomData<TyIx>,
 }
 
 impl<TyIx, Ty> TypedIxVec<TyIx, Ty>
 where
-  Ty: Clone,
-  TyIx: Copy + Eq + Ord + Zero + PlusOne + PlusN + Into<u32>,
+    Ty: Clone,
+    TyIx: Copy + Eq + Ord + Zero + PlusOne + PlusN + Into<u32>,
 {
-  pub fn new() -> Self {
-    Self { vek: Vec::new(), ty_ix: PhantomData::<TyIx> }
-  }
-  pub fn from_vec(vek: Vec<Ty>) -> Self {
-    Self { vek, ty_ix: PhantomData::<TyIx> }
-  }
-  pub fn append(&mut self, other: &mut TypedIxVec<TyIx, Ty>) {
-    // FIXME what if this overflows?
-    self.vek.append(&mut other.vek);
-  }
-  pub fn iter(&self) -> Iter<Ty> {
-    self.vek.iter()
-  }
-  pub fn iter_mut(&mut self) -> IterMut<Ty> {
-    self.vek.iter_mut()
-  }
-  pub fn len(&self) -> u32 {
-    // FIXME what if this overflows?
-    self.vek.len() as u32
-  }
-  pub fn push(&mut self, item: Ty) {
-    // FIXME what if this overflows?
-    self.vek.push(item);
-  }
-  pub fn resize(&mut self, new_len: u32, value: Ty) {
-    self.vek.resize(new_len as usize, value);
-  }
-  pub fn reserve(&mut self, additional: usize) {
-    self.vek.reserve(additional);
-  }
-  pub fn elems(&self) -> &[Ty] {
-    &self.vek[..]
-  }
-  pub fn elems_mut(&mut self) -> &mut [Ty] {
-    &mut self.vek[..]
-  }
-  pub fn range(&self) -> Range<TyIx> {
-    Range::new(TyIx::zero(), self.len() as usize)
-  }
-  pub fn remove(&mut self, idx: TyIx) -> Ty {
-    self.vek.remove(idx.into() as usize)
-  }
-  pub fn sort_by<F: FnMut(&Ty, &Ty) -> Ordering>(&mut self, compare: F) {
-    self.vek.sort_by(compare)
-  }
-  pub fn clear(&mut self) {
-    self.vek.clear();
-  }
+    pub fn new() -> Self {
+        Self {
+            vek: Vec::new(),
+            ty_ix: PhantomData::<TyIx>,
+        }
+    }
+    pub fn from_vec(vek: Vec<Ty>) -> Self {
+        Self {
+            vek,
+            ty_ix: PhantomData::<TyIx>,
+        }
+    }
+    pub fn append(&mut self, other: &mut TypedIxVec<TyIx, Ty>) {
+        // FIXME what if this overflows?
+        self.vek.append(&mut other.vek);
+    }
+    pub fn iter(&self) -> Iter<Ty> {
+        self.vek.iter()
+    }
+    pub fn iter_mut(&mut self) -> IterMut<Ty> {
+        self.vek.iter_mut()
+    }
+    pub fn len(&self) -> u32 {
+        // FIXME what if this overflows?
+        self.vek.len() as u32
+    }
+    pub fn push(&mut self, item: Ty) {
+        // FIXME what if this overflows?
+        self.vek.push(item);
+    }
+    pub fn resize(&mut self, new_len: u32, value: Ty) {
+        self.vek.resize(new_len as usize, value);
+    }
+    pub fn reserve(&mut self, additional: usize) {
+        self.vek.reserve(additional);
+    }
+    pub fn elems(&self) -> &[Ty] {
+        &self.vek[..]
+    }
+    pub fn elems_mut(&mut self) -> &mut [Ty] {
+        &mut self.vek[..]
+    }
+    pub fn range(&self) -> Range<TyIx> {
+        Range::new(TyIx::zero(), self.len() as usize)
+    }
+    pub fn remove(&mut self, idx: TyIx) -> Ty {
+        self.vek.remove(idx.into() as usize)
+    }
+    pub fn sort_by<F: FnMut(&Ty, &Ty) -> Ordering>(&mut self, compare: F) {
+        self.vek.sort_by(compare)
+    }
+    pub fn clear(&mut self) {
+        self.vek.clear();
+    }
 }
 
 impl<TyIx, Ty> Index<TyIx> for TypedIxVec<TyIx, Ty>
 where
-  TyIx: Into<u32>,
+    TyIx: Into<u32>,
 {
-  type Output = Ty;
-  fn index(&self, ix: TyIx) -> &Ty {
-    &self.vek[ix.into() as usize]
-  }
+    type Output = Ty;
+    fn index(&self, ix: TyIx) -> &Ty {
+        &self.vek[ix.into() as usize]
+    }
 }
 
 impl<TyIx, Ty> IndexMut<TyIx> for TypedIxVec<TyIx, Ty>
 where
-  TyIx: Into<u32>,
+    TyIx: Into<u32>,
 {
-  fn index_mut(&mut self, ix: TyIx) -> &mut Ty {
-    &mut self.vek[ix.into() as usize]
-  }
+    fn index_mut(&mut self, ix: TyIx) -> &mut Ty {
+        &mut self.vek[ix.into() as usize]
+    }
 }
 
 impl<TyIx, Ty> Clone for TypedIxVec<TyIx, Ty>
 where
-  Ty: Clone,
+    Ty: Clone,
 {
-  // This is only needed for debug printing.
-  fn clone(&self) -> Self {
-    Self { vek: self.vek.clone(), ty_ix: PhantomData::<TyIx> }
-  }
+    // This is only needed for debug printing.
+    fn clone(&self) -> Self {
+        Self {
+            vek: self.vek.clone(),
+            ty_ix: PhantomData::<TyIx>,
+        }
+    }
 }
 
 //=============================================================================
 
 macro_rules! generate_boilerplate {
-  ($TypeIx:ident, $Type:ident, $PrintingPrefix:expr) => {
-    #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-    // Firstly, the indexing type (TypeIx)
-    pub enum $TypeIx {
-      $TypeIx(u32),
-    }
-    impl $TypeIx {
-      #[allow(dead_code)]
-      #[inline(always)]
-      pub fn new(n: u32) -> Self {
-        Self::$TypeIx(n)
-      }
-      #[allow(dead_code)]
-      #[inline(always)]
-      pub fn max_value() -> Self {
-        Self::$TypeIx(u32::max_value())
-      }
-      #[allow(dead_code)]
-      #[inline(always)]
-      pub fn min_value() -> Self {
-        Self::$TypeIx(u32::min_value())
-      }
-      #[allow(dead_code)]
-      #[inline(always)]
-      pub fn get(self) -> u32 {
-        match self {
-          $TypeIx::$TypeIx(n) => n,
+    ($TypeIx:ident, $Type:ident, $PrintingPrefix:expr) => {
+        #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+        // Firstly, the indexing type (TypeIx)
+        pub enum $TypeIx {
+            $TypeIx(u32),
         }
-      }
-      #[allow(dead_code)]
-      #[inline(always)]
-      pub fn plus(self, delta: u32) -> $TypeIx {
-        $TypeIx::$TypeIx(self.get() + delta)
-      }
-      #[allow(dead_code)]
-      #[inline(always)]
-      pub fn minus(self, delta: u32) -> $TypeIx {
-        $TypeIx::$TypeIx(self.get() - delta)
-      }
-      #[allow(dead_code)]
-      pub fn dotdot(&self, last_plus1: $TypeIx) -> Range<$TypeIx> {
-        let len = (last_plus1.get() - self.get()) as usize;
-        Range::new(*self, len)
-      }
-    }
-    impl fmt::Debug for $TypeIx {
-      fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "{}{}", $PrintingPrefix, &self.get())
-      }
-    }
-    impl PlusOne for $TypeIx {
-      #[inline(always)]
-      fn plus_one(&self) -> Self {
-        self.plus(1)
-      }
-    }
-    impl PlusN for $TypeIx {
-      #[inline(always)]
-      fn plus_n(&self, n: usize) -> Self {
-        self.plus(n as u32)
-      }
-    }
-    impl Into<u32> for $TypeIx {
-      #[inline(always)]
-      fn into(self) -> u32 {
-        self.get()
-      }
-    }
-    impl Zero for $TypeIx {
-      #[inline(always)]
-      fn zero() -> Self {
-        $TypeIx::new(0)
-      }
-    }
-  };
+        impl $TypeIx {
+            #[allow(dead_code)]
+            #[inline(always)]
+            pub fn new(n: u32) -> Self {
+                Self::$TypeIx(n)
+            }
+            #[allow(dead_code)]
+            #[inline(always)]
+            pub fn max_value() -> Self {
+                Self::$TypeIx(u32::max_value())
+            }
+            #[allow(dead_code)]
+            #[inline(always)]
+            pub fn min_value() -> Self {
+                Self::$TypeIx(u32::min_value())
+            }
+            #[allow(dead_code)]
+            #[inline(always)]
+            pub fn get(self) -> u32 {
+                match self {
+                    $TypeIx::$TypeIx(n) => n,
+                }
+            }
+            #[allow(dead_code)]
+            #[inline(always)]
+            pub fn plus(self, delta: u32) -> $TypeIx {
+                $TypeIx::$TypeIx(self.get() + delta)
+            }
+            #[allow(dead_code)]
+            #[inline(always)]
+            pub fn minus(self, delta: u32) -> $TypeIx {
+                $TypeIx::$TypeIx(self.get() - delta)
+            }
+            #[allow(dead_code)]
+            pub fn dotdot(&self, last_plus1: $TypeIx) -> Range<$TypeIx> {
+                let len = (last_plus1.get() - self.get()) as usize;
+                Range::new(*self, len)
+            }
+        }
+        impl fmt::Debug for $TypeIx {
+            fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+                write!(fmt, "{}{}", $PrintingPrefix, &self.get())
+            }
+        }
+        impl PlusOne for $TypeIx {
+            #[inline(always)]
+            fn plus_one(&self) -> Self {
+                self.plus(1)
+            }
+        }
+        impl PlusN for $TypeIx {
+            #[inline(always)]
+            fn plus_n(&self, n: usize) -> Self {
+                self.plus(n as u32)
+            }
+        }
+        impl Into<u32> for $TypeIx {
+            #[inline(always)]
+            fn into(self) -> u32 {
+                self.get()
+            }
+        }
+        impl Zero for $TypeIx {
+            #[inline(always)]
+            fn zero() -> Self {
+                $TypeIx::new(0)
+            }
+        }
+    };
 }
 
 generate_boilerplate!(InstIx, Inst, "i");
@@ -493,11 +517,11 @@ generate_boilerplate!(VirtualRangeIx, VirtualRange, "vr");
 generate_boilerplate!(RealRangeIx, RealRange, "rr");
 
 impl<TyIx, Ty: fmt::Debug> fmt::Debug for TypedIxVec<TyIx, Ty> {
-  // This is something of a hack in the sense that it doesn't show the
-  // indices, but oh well ..
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(fmt, "{:?}", self.vek)
-  }
+    // This is something of a hack in the sense that it doesn't show the
+    // indices, but oh well ..
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "{:?}", self.vek)
+    }
 }
 
 //=============================================================================
@@ -509,11 +533,11 @@ impl<TyIx, Ty: fmt::Debug> fmt::Debug for TypedIxVec<TyIx, Ty> {
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum RegClass {
-  I32,
-  F32,
-  I64,
-  F64,
-  V128,
+    I32,
+    F32,
+    I64,
+    F64,
+    V128,
 }
 
 /// The number of register classes that exist.
@@ -521,41 +545,41 @@ pub enum RegClass {
 pub const NUM_REG_CLASSES: usize = 5;
 
 impl RegClass {
-  /// Convert a register class to a u32 index.
-  pub fn rc_to_u32(self) -> u32 {
-    match self {
-      RegClass::I32 => 0,
-      RegClass::F32 => 1,
-      RegClass::I64 => 2,
-      RegClass::F64 => 3,
-      RegClass::V128 => 4,
+    /// Convert a register class to a u32 index.
+    pub fn rc_to_u32(self) -> u32 {
+        match self {
+            RegClass::I32 => 0,
+            RegClass::F32 => 1,
+            RegClass::I64 => 2,
+            RegClass::F64 => 3,
+            RegClass::V128 => 4,
+        }
     }
-  }
-  /// Convert a register class to a usize index.
-  pub fn rc_to_usize(self) -> usize {
-    self.rc_to_u32() as usize
-  }
-  /// Construct a register class from a u32.
-  pub fn rc_from_u32(rc: u32) -> RegClass {
-    match rc {
-      0 => RegClass::I32,
-      1 => RegClass::F32,
-      2 => RegClass::I64,
-      3 => RegClass::F64,
-      4 => RegClass::V128,
-      _ => panic!("rc_from_u32"),
+    /// Convert a register class to a usize index.
+    pub fn rc_to_usize(self) -> usize {
+        self.rc_to_u32() as usize
     }
-  }
+    /// Construct a register class from a u32.
+    pub fn rc_from_u32(rc: u32) -> RegClass {
+        match rc {
+            0 => RegClass::I32,
+            1 => RegClass::F32,
+            2 => RegClass::I64,
+            3 => RegClass::F64,
+            4 => RegClass::V128,
+            _ => panic!("rc_from_u32"),
+        }
+    }
 
-  pub fn short_name(self) -> &'static str {
-    match self {
-      RegClass::I32 => "I",
-      RegClass::I64 => "J",
-      RegClass::F32 => "F",
-      RegClass::F64 => "D",
-      RegClass::V128 => "V",
+    pub fn short_name(self) -> &'static str {
+        match self {
+            RegClass::I32 => "I",
+            RegClass::I64 => "J",
+            RegClass::F32 => "F",
+            RegClass::F64 => "D",
+            RegClass::V128 => "V",
+        }
     }
-  }
 }
 
 // Reg represents both real and virtual registers.  For compactness and speed,
@@ -591,75 +615,76 @@ impl RegClass {
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Reg {
-  do_not_access_this_directly: u32,
+    do_not_access_this_directly: u32,
 }
 
 impl Reg {
-  pub fn is_virtual(self) -> bool {
-    (self.do_not_access_this_directly & 0x8000_0000) != 0
-  }
-  pub fn is_real(self) -> bool {
-    !self.is_virtual()
-  }
-  pub fn new_real(rc: RegClass, enc: u8, index: u8) -> Self {
-    let n = (0 << 31)
-      | (rc.rc_to_u32() << 28)
-      | ((enc as u32) << 8)
-      | ((index as u32) << 0);
-    Reg { do_not_access_this_directly: n }
-  }
-  pub fn new_virtual(rc: RegClass, index: u32) -> Self {
-    if index >= (1 << 28) {
-      panic!("new_virtual(): index too large");
+    pub fn is_virtual(self) -> bool {
+        (self.do_not_access_this_directly & 0x8000_0000) != 0
     }
-    let n = (1 << 31) | (rc.rc_to_u32() << 28) | (index << 0);
-    Reg { do_not_access_this_directly: n }
-  }
-  pub fn get_class(self) -> RegClass {
-    RegClass::rc_from_u32((self.do_not_access_this_directly >> 28) & 0x7)
-  }
-  pub fn get_index(self) -> usize {
-    // Return type is usize because typically we will want to use the
-    // result for indexing into a Vec
-    if self.is_virtual() {
-      (self.do_not_access_this_directly & ((1 << 28) - 1)) as usize
-    } else {
-      (self.do_not_access_this_directly & ((1 << 8) - 1)) as usize
+    pub fn is_real(self) -> bool {
+        !self.is_virtual()
     }
-  }
-  pub fn get_hw_encoding(self) -> u8 {
-    if self.is_virtual() {
-      panic!("Virtual register does not have a hardware encoding")
-    } else {
-      ((self.do_not_access_this_directly >> 8) & ((1 << 8) - 1)) as u8
+    pub fn new_real(rc: RegClass, enc: u8, index: u8) -> Self {
+        let n = (0 << 31) | (rc.rc_to_u32() << 28) | ((enc as u32) << 8) | ((index as u32) << 0);
+        Reg {
+            do_not_access_this_directly: n,
+        }
     }
-  }
-  pub fn as_virtual_reg(self) -> Option<VirtualReg> {
-    if self.is_virtual() {
-      Some(VirtualReg { reg: self })
-    } else {
-      None
+    pub fn new_virtual(rc: RegClass, index: u32) -> Self {
+        if index >= (1 << 28) {
+            panic!("new_virtual(): index too large");
+        }
+        let n = (1 << 31) | (rc.rc_to_u32() << 28) | (index << 0);
+        Reg {
+            do_not_access_this_directly: n,
+        }
     }
-  }
-  pub fn as_real_reg(self) -> Option<RealReg> {
-    if self.is_real() {
-      Some(RealReg { reg: self })
-    } else {
-      None
+    pub fn get_class(self) -> RegClass {
+        RegClass::rc_from_u32((self.do_not_access_this_directly >> 28) & 0x7)
     }
-  }
+    pub fn get_index(self) -> usize {
+        // Return type is usize because typically we will want to use the
+        // result for indexing into a Vec
+        if self.is_virtual() {
+            (self.do_not_access_this_directly & ((1 << 28) - 1)) as usize
+        } else {
+            (self.do_not_access_this_directly & ((1 << 8) - 1)) as usize
+        }
+    }
+    pub fn get_hw_encoding(self) -> u8 {
+        if self.is_virtual() {
+            panic!("Virtual register does not have a hardware encoding")
+        } else {
+            ((self.do_not_access_this_directly >> 8) & ((1 << 8) - 1)) as u8
+        }
+    }
+    pub fn as_virtual_reg(self) -> Option<VirtualReg> {
+        if self.is_virtual() {
+            Some(VirtualReg { reg: self })
+        } else {
+            None
+        }
+    }
+    pub fn as_real_reg(self) -> Option<RealReg> {
+        if self.is_real() {
+            Some(RealReg { reg: self })
+        } else {
+            None
+        }
+    }
 }
 
 impl fmt::Debug for Reg {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(
-      fmt,
-      "{}{}{}",
-      if self.is_virtual() { "v" } else { "r" },
-      self.get_index(),
-      self.get_class().short_name(),
-    )
-  }
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            fmt,
+            "{}{}{}",
+            if self.is_virtual() { "v" } else { "r" },
+            self.get_index(),
+            self.get_class().short_name(),
+        )
+    }
 }
 
 // RealReg and VirtualReg are merely wrappers around Reg, which try to
@@ -668,105 +693,106 @@ impl fmt::Debug for Reg {
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RealReg {
-  reg: Reg,
+    reg: Reg,
 }
 impl Reg /* !!not RealReg!! */ {
-  pub fn to_real_reg(self) -> RealReg {
-    if self.is_virtual() {
-      panic!("Reg::to_real_reg: this is a virtual register")
-    } else {
-      RealReg { reg: self }
+    pub fn to_real_reg(self) -> RealReg {
+        if self.is_virtual() {
+            panic!("Reg::to_real_reg: this is a virtual register")
+        } else {
+            RealReg { reg: self }
+        }
     }
-  }
 }
 impl RealReg {
-  pub fn get_class(self) -> RegClass {
-    self.reg.get_class()
-  }
-  pub fn get_index(self) -> usize {
-    self.reg.get_index()
-  }
-  pub fn get_hw_encoding(self) -> usize {
-    self.reg.get_hw_encoding() as usize
-  }
-  pub fn to_reg(self) -> Reg {
-    self.reg
-  }
+    pub fn get_class(self) -> RegClass {
+        self.reg.get_class()
+    }
+    pub fn get_index(self) -> usize {
+        self.reg.get_index()
+    }
+    pub fn get_hw_encoding(self) -> usize {
+        self.reg.get_hw_encoding() as usize
+    }
+    pub fn to_reg(self) -> Reg {
+        self.reg
+    }
 }
 impl fmt::Debug for RealReg {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(fmt, "{:?}", self.reg)
-  }
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "{:?}", self.reg)
+    }
 }
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VirtualReg {
-  reg: Reg,
+    reg: Reg,
 }
 impl Reg /* !!not VirtualReg!! */ {
-  pub fn to_virtual_reg(self) -> VirtualReg {
-    if self.is_virtual() {
-      VirtualReg { reg: self }
-    } else {
-      panic!("Reg::to_virtual_reg: this is a real register")
+    pub fn to_virtual_reg(self) -> VirtualReg {
+        if self.is_virtual() {
+            VirtualReg { reg: self }
+        } else {
+            panic!("Reg::to_virtual_reg: this is a real register")
+        }
     }
-  }
 }
 impl VirtualReg {
-  pub fn get_class(self) -> RegClass {
-    self.reg.get_class()
-  }
-  pub fn get_index(self) -> usize {
-    self.reg.get_index()
-  }
-  pub fn to_reg(self) -> Reg {
-    self.reg
-  }
+    pub fn get_class(self) -> RegClass {
+        self.reg.get_class()
+    }
+    pub fn get_index(self) -> usize {
+        self.reg.get_index()
+    }
+    pub fn to_reg(self) -> Reg {
+        self.reg
+    }
 }
 impl fmt::Debug for VirtualReg {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(fmt, "{:?}", self.reg)
-  }
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "{:?}", self.reg)
+    }
 }
 
 impl Reg {
-  // Apply a vreg-rreg mapping to a Reg.  This used for registers used in
-  // either a read- or a write-role.
-  pub fn apply_defs_or_uses(&mut self, map: &Map<VirtualReg, RealReg>) {
-    if let Some(vreg) = self.as_virtual_reg() {
-      if let Some(rreg) = map.get(&vreg) {
-        debug_assert!(rreg.get_class() == vreg.get_class());
-        *self = rreg.to_reg();
-      } else {
-        panic!("Reg::apply_defs_or_uses: no mapping for {:?}", self);
-      }
+    // Apply a vreg-rreg mapping to a Reg.  This used for registers used in
+    // either a read- or a write-role.
+    pub fn apply_defs_or_uses(&mut self, map: &Map<VirtualReg, RealReg>) {
+        if let Some(vreg) = self.as_virtual_reg() {
+            if let Some(rreg) = map.get(&vreg) {
+                debug_assert!(rreg.get_class() == vreg.get_class());
+                *self = rreg.to_reg();
+            } else {
+                panic!("Reg::apply_defs_or_uses: no mapping for {:?}", self);
+            }
+        }
     }
-  }
-  // Apply a pair of vreg-rreg mappings to a Reg.  The mappings *must*
-  // agree!  This seems a bit strange at first.  It is used for registers
-  // used in a modify-role.
-  pub fn apply_mods(
-    &mut self, map_defs: &Map<VirtualReg, RealReg>,
-    map_uses: &Map<VirtualReg, RealReg>,
-  ) {
-    if let Some(vreg) = self.as_virtual_reg() {
-      let mb_result_def = map_defs.get(&vreg);
-      let mb_result_use = map_uses.get(&vreg);
-      // Failure of this is serious and should be investigated.
-      if mb_result_def != mb_result_use {
-        panic!(
-          "Reg::apply_mods: inconsistent mappings for {:?}: D={:?}, U={:?}",
-          vreg, mb_result_def, mb_result_use
-        );
-      }
-      if let Some(rreg) = mb_result_def {
-        debug_assert!(rreg.get_class() == vreg.get_class());
-        *self = rreg.to_reg();
-      } else {
-        panic!("Reg::apply: no mapping for {:?}", vreg);
-      }
+    // Apply a pair of vreg-rreg mappings to a Reg.  The mappings *must*
+    // agree!  This seems a bit strange at first.  It is used for registers
+    // used in a modify-role.
+    pub fn apply_mods(
+        &mut self,
+        map_defs: &Map<VirtualReg, RealReg>,
+        map_uses: &Map<VirtualReg, RealReg>,
+    ) {
+        if let Some(vreg) = self.as_virtual_reg() {
+            let mb_result_def = map_defs.get(&vreg);
+            let mb_result_use = map_uses.get(&vreg);
+            // Failure of this is serious and should be investigated.
+            if mb_result_def != mb_result_use {
+                panic!(
+                    "Reg::apply_mods: inconsistent mappings for {:?}: D={:?}, U={:?}",
+                    vreg, mb_result_def, mb_result_use
+                );
+            }
+            if let Some(rreg) = mb_result_def {
+                debug_assert!(rreg.get_class() == vreg.get_class());
+                *self = rreg.to_reg();
+            } else {
+                panic!("Reg::apply: no mapping for {:?}", vreg);
+            }
+        }
     }
-  }
 }
 
 /// A "writable register". This is a zero-cost wrapper that can be used to
@@ -788,64 +814,60 @@ impl Reg {
 /// invocation of this constructor in a machine backend (for example) is an
 /// error.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub struct Writable<
-  R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug,
-> {
-  reg: R,
+pub struct Writable<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug> {
+    reg: R,
 }
 
-impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug>
-  Writable<R>
-{
-  /// Create a Writable<R> from an R. The client should carefully audit where
-  /// it calls this constructor to ensure correctness (see `Writable<..>`
-  /// struct documentation).
-  pub fn from_reg(reg: R) -> Writable<R> {
-    Writable { reg }
-  }
+impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug> Writable<R> {
+    /// Create a Writable<R> from an R. The client should carefully audit where
+    /// it calls this constructor to ensure correctness (see `Writable<..>`
+    /// struct documentation).
+    pub fn from_reg(reg: R) -> Writable<R> {
+        Writable { reg }
+    }
 
-  /// Get the inner Reg.
-  pub fn to_reg(&self) -> R {
-    self.reg
-  }
+    /// Get the inner Reg.
+    pub fn to_reg(&self) -> R {
+        self.reg
+    }
 
-  pub fn map<F, U>(&self, f: F) -> Writable<U>
-  where
-    F: Fn(R) -> U,
-    U: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug,
-  {
-    Writable { reg: f(self.reg) }
-  }
+    pub fn map<F, U>(&self, f: F) -> Writable<U>
+    where
+        F: Fn(R) -> U,
+        U: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug,
+    {
+        Writable { reg: f(self.reg) }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub enum SpillSlot {
-  SpillSlot(u32),
+    SpillSlot(u32),
 }
 impl SpillSlot {
-  pub fn new(n: u32) -> Self {
-    SpillSlot::SpillSlot(n)
-  }
-  pub fn get(self) -> u32 {
-    match self {
-      SpillSlot::SpillSlot(n) => n,
+    pub fn new(n: u32) -> Self {
+        SpillSlot::SpillSlot(n)
     }
-  }
-  pub fn get_usize(self) -> usize {
-    self.get() as usize
-  }
-  pub fn round_up(self, num_slots: u32) -> SpillSlot {
-    assert!(num_slots > 0);
-    SpillSlot::new((self.get() + num_slots - 1) / num_slots * num_slots)
-  }
-  pub fn inc(self, num_slots: u32) -> SpillSlot {
-    SpillSlot::new(self.get() + num_slots)
-  }
+    pub fn get(self) -> u32 {
+        match self {
+            SpillSlot::SpillSlot(n) => n,
+        }
+    }
+    pub fn get_usize(self) -> usize {
+        self.get() as usize
+    }
+    pub fn round_up(self, num_slots: u32) -> SpillSlot {
+        assert!(num_slots > 0);
+        SpillSlot::new((self.get() + num_slots - 1) / num_slots * num_slots)
+    }
+    pub fn inc(self, num_slots: u32) -> SpillSlot {
+        SpillSlot::new(self.get() + num_slots)
+    }
 }
 impl fmt::Debug for SpillSlot {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(fmt, "S{}", self.get())
-  }
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "S{}", self.get())
+    }
 }
 
 //=============================================================================
@@ -856,50 +878,48 @@ impl fmt::Debug for SpillSlot {
 // visible.  It is used to collect unsanitized reg use info from client
 // instructions.
 pub struct RegUsageCollector<'a> {
-  pub reg_vecs: &'a mut RegVecs,
+    pub reg_vecs: &'a mut RegVecs,
 }
 impl<'a> RegUsageCollector<'a> {
-  pub fn new(reg_vecs: &'a mut RegVecs) -> Self {
-    Self { reg_vecs }
-  }
-  pub fn add_use(&mut self, r: Reg) {
-    self.reg_vecs.uses.push(r);
-  }
-  pub fn add_uses(&mut self, regs: &Set<Reg>) {
-    for reg in regs.iter() {
-      self.add_use(*reg);
+    pub fn new(reg_vecs: &'a mut RegVecs) -> Self {
+        Self { reg_vecs }
     }
-  }
-  pub fn add_def(&mut self, r: Writable<Reg>) {
-    self.reg_vecs.defs.push(r.to_reg());
-  }
-  pub fn add_defs(&mut self, regs: &Set<Writable<Reg>>) {
-    for reg in regs.iter() {
-      self.add_def(*reg);
+    pub fn add_use(&mut self, r: Reg) {
+        self.reg_vecs.uses.push(r);
     }
-  }
-  pub fn add_mod(&mut self, r: Writable<Reg>) {
-    self.reg_vecs.mods.push(r.to_reg());
-  }
-  pub fn add_mods(&mut self, regs: &Set<Writable<Reg>>) {
-    for reg in regs.iter() {
-      self.add_mod(*reg);
+    pub fn add_uses(&mut self, regs: &Set<Reg>) {
+        for reg in regs.iter() {
+            self.add_use(*reg);
+        }
     }
-  }
-  // The presence of the following two is a hack, needed to support fuzzing
-  // in the test framework.  Real clients should not call them.
-  pub fn get_use_def_mod_vecs_TEST_FRAMEWORK_ONLY(
-    &self,
-  ) -> (Vec<Reg>, Vec<Reg>, Vec<Reg>) {
-    (
-      self.reg_vecs.uses.clone(),
-      self.reg_vecs.defs.clone(),
-      self.reg_vecs.mods.clone(),
-    )
-  }
-  pub fn get_empty_RegVecs_TEST_FRAMEWORK_ONLY(sanitized: bool) -> RegVecs {
-    RegVecs::new(sanitized)
-  }
+    pub fn add_def(&mut self, r: Writable<Reg>) {
+        self.reg_vecs.defs.push(r.to_reg());
+    }
+    pub fn add_defs(&mut self, regs: &Set<Writable<Reg>>) {
+        for reg in regs.iter() {
+            self.add_def(*reg);
+        }
+    }
+    pub fn add_mod(&mut self, r: Writable<Reg>) {
+        self.reg_vecs.mods.push(r.to_reg());
+    }
+    pub fn add_mods(&mut self, regs: &Set<Writable<Reg>>) {
+        for reg in regs.iter() {
+            self.add_mod(*reg);
+        }
+    }
+    // The presence of the following two is a hack, needed to support fuzzing
+    // in the test framework.  Real clients should not call them.
+    pub fn get_use_def_mod_vecs_TEST_FRAMEWORK_ONLY(&self) -> (Vec<Reg>, Vec<Reg>, Vec<Reg>) {
+        (
+            self.reg_vecs.uses.clone(),
+            self.reg_vecs.defs.clone(),
+            self.reg_vecs.mods.clone(),
+        )
+    }
+    pub fn get_empty_RegVecs_TEST_FRAMEWORK_ONLY(sanitized: bool) -> RegVecs {
+        RegVecs::new(sanitized)
+    }
 }
 
 // Everything else is not visible outside the regalloc.rs interface.
@@ -911,75 +931,80 @@ impl<'a> RegUsageCollector<'a> {
 // system.
 #[derive(Debug)]
 pub struct RegVecs {
-  pub uses: Vec<Reg>,
-  pub defs: Vec<Reg>,
-  pub mods: Vec<Reg>,
-  sanitized: bool,
+    pub uses: Vec<Reg>,
+    pub defs: Vec<Reg>,
+    pub mods: Vec<Reg>,
+    sanitized: bool,
 }
 impl RegVecs {
-  pub fn new(sanitized: bool) -> Self {
-    Self { uses: vec![], defs: vec![], mods: vec![], sanitized }
-  }
-  pub fn is_sanitized(&self) -> bool {
-    self.sanitized
-  }
-  pub fn set_sanitized(&mut self, sanitized: bool) {
-    self.sanitized = sanitized;
-  }
-  pub fn clear(&mut self) {
-    self.uses.clear();
-    self.defs.clear();
-    self.mods.clear();
-  }
+    pub fn new(sanitized: bool) -> Self {
+        Self {
+            uses: vec![],
+            defs: vec![],
+            mods: vec![],
+            sanitized,
+        }
+    }
+    pub fn is_sanitized(&self) -> bool {
+        self.sanitized
+    }
+    pub fn set_sanitized(&mut self, sanitized: bool) {
+        self.sanitized = sanitized;
+    }
+    pub fn clear(&mut self) {
+        self.uses.clear();
+        self.defs.clear();
+        self.mods.clear();
+    }
 }
 
 // There is one of these per insn, so try and keep it as compact as possible.
 // I think this should fit in 16 bytes.
 #[derive(Clone, Debug)]
 pub struct RegVecBounds {
-  // These are the group start indices in RegVecs.{uses, defs, mods}.
-  pub uses_start: u32,
-  pub defs_start: u32,
-  pub mods_start: u32,
-  // And these are the group lengths.  This does limit each instruction to
-  // mentioning only 256 registers in any group, but that does not seem like a
-  // problem.
-  pub uses_len: u8,
-  pub defs_len: u8,
-  pub mods_len: u8,
+    // These are the group start indices in RegVecs.{uses, defs, mods}.
+    pub uses_start: u32,
+    pub defs_start: u32,
+    pub mods_start: u32,
+    // And these are the group lengths.  This does limit each instruction to
+    // mentioning only 256 registers in any group, but that does not seem like a
+    // problem.
+    pub uses_len: u8,
+    pub defs_len: u8,
+    pub mods_len: u8,
 }
 impl RegVecBounds {
-  pub fn new() -> Self {
-    Self {
-      uses_start: 0,
-      defs_start: 0,
-      mods_start: 0,
-      uses_len: 0,
-      defs_len: 0,
-      mods_len: 0,
+    pub fn new() -> Self {
+        Self {
+            uses_start: 0,
+            defs_start: 0,
+            mods_start: 0,
+            uses_len: 0,
+            defs_len: 0,
+            mods_len: 0,
+        }
     }
-  }
 }
 
 // This is the primary structure.  We compute just one of these for an entire
 // function.
 pub struct RegVecsAndBounds {
-  // The three vectors of registers.  These can be arbitrarily long.
-  pub vecs: RegVecs,
-  // Admin info which tells us the location, for each insn, of its register
-  // groups in |vecs|.
-  pub bounds: TypedIxVec<InstIx, RegVecBounds>,
+    // The three vectors of registers.  These can be arbitrarily long.
+    pub vecs: RegVecs,
+    // Admin info which tells us the location, for each insn, of its register
+    // groups in |vecs|.
+    pub bounds: TypedIxVec<InstIx, RegVecBounds>,
 }
 impl RegVecsAndBounds {
-  pub fn new(vecs: RegVecs, bounds: TypedIxVec<InstIx, RegVecBounds>) -> Self {
-    Self { vecs, bounds }
-  }
-  pub fn is_sanitized(&self) -> bool {
-    self.vecs.sanitized
-  }
-  pub fn num_insns(&self) -> u32 {
-    self.bounds.len()
-  }
+    pub fn new(vecs: RegVecs, bounds: TypedIxVec<InstIx, RegVecBounds>) -> Self {
+        Self { vecs, bounds }
+    }
+    pub fn is_sanitized(&self) -> bool {
+        self.vecs.sanitized
+    }
+    pub fn num_insns(&self) -> u32 {
+        self.bounds.len()
+    }
 }
 
 //=============================================================================
@@ -991,49 +1016,43 @@ impl RegVecsAndBounds {
 // paths.
 #[derive(Debug)]
 pub struct RegSets {
-  pub uses: Set<Reg>, // registers that are read.
-  pub defs: Set<Reg>, // registers that are written.
-  pub mods: Set<Reg>, // registers that are modified.
-  sanitized: bool,
+    pub uses: Set<Reg>, // registers that are read.
+    pub defs: Set<Reg>, // registers that are written.
+    pub mods: Set<Reg>, // registers that are modified.
+    sanitized: bool,
 }
 impl RegSets {
-  pub fn new(sanitized: bool) -> Self {
-    Self {
-      uses: Set::<Reg>::empty(),
-      defs: Set::<Reg>::empty(),
-      mods: Set::<Reg>::empty(),
-      sanitized,
+    pub fn new(sanitized: bool) -> Self {
+        Self {
+            uses: Set::<Reg>::empty(),
+            defs: Set::<Reg>::empty(),
+            mods: Set::<Reg>::empty(),
+            sanitized,
+        }
     }
-  }
-  pub fn is_sanitized(&self) -> bool {
-    self.sanitized
-  }
+    pub fn is_sanitized(&self) -> bool {
+        self.sanitized
+    }
 }
 
 impl RegVecsAndBounds {
-  /* !!not RegSets!! */
-  #[inline(never)]
-  // Convenience function.  Try to avoid using this.
-  pub fn get_reg_sets_for_iix(&self, iix: InstIx) -> RegSets {
-    let bounds = &self.bounds[iix];
-    let mut regsets = RegSets::new(self.vecs.sanitized);
-    for i in bounds.uses_start as usize
-      ..bounds.uses_start as usize + bounds.uses_len as usize
-    {
-      regsets.uses.insert(self.vecs.uses[i]);
+    /* !!not RegSets!! */
+    #[inline(never)]
+    // Convenience function.  Try to avoid using this.
+    pub fn get_reg_sets_for_iix(&self, iix: InstIx) -> RegSets {
+        let bounds = &self.bounds[iix];
+        let mut regsets = RegSets::new(self.vecs.sanitized);
+        for i in bounds.uses_start as usize..bounds.uses_start as usize + bounds.uses_len as usize {
+            regsets.uses.insert(self.vecs.uses[i]);
+        }
+        for i in bounds.defs_start as usize..bounds.defs_start as usize + bounds.defs_len as usize {
+            regsets.defs.insert(self.vecs.defs[i]);
+        }
+        for i in bounds.mods_start as usize..bounds.mods_start as usize + bounds.mods_len as usize {
+            regsets.mods.insert(self.vecs.mods[i]);
+        }
+        regsets
     }
-    for i in bounds.defs_start as usize
-      ..bounds.defs_start as usize + bounds.defs_len as usize
-    {
-      regsets.defs.insert(self.vecs.defs[i]);
-    }
-    for i in bounds.mods_start as usize
-      ..bounds.mods_start as usize + bounds.mods_len as usize
-    {
-      regsets.mods.insert(self.vecs.mods[i]);
-    }
-    regsets
-  }
 }
 
 //=============================================================================
@@ -1056,145 +1075,149 @@ impl RegVecsAndBounds {
 
 #[derive(Debug)]
 pub struct RealRegUniverse {
-  // The registers themselves.  All must be real registers, and all must
-  // have their index number (.get_index()) equal to the array index here,
-  // since this is the only place where we map index numbers to actual
-  // registers.
-  pub regs: Vec<(RealReg, String)>,
+    // The registers themselves.  All must be real registers, and all must
+    // have their index number (.get_index()) equal to the array index here,
+    // since this is the only place where we map index numbers to actual
+    // registers.
+    pub regs: Vec<(RealReg, String)>,
 
-  // This is the size of the initial section of |regs| that is available to
-  // the allocator.  It must be < |regs|.len().
-  pub allocable: usize,
+    // This is the size of the initial section of |regs| that is available to
+    // the allocator.  It must be < |regs|.len().
+    pub allocable: usize,
 
-  // Information about groups of allocable registers. Used to quickly address
-  // only a group of allocable registers belonging to the same register class.
-  // Indexes into |allocable_by_class| are RegClass values, such as
-  // RegClass::F32. If the resulting entry is |None| then there are no
-  // registers in that class.  Otherwise the value is a |RegClassInfo|, which
-  // provides a register range and possibly information about fixed uses.
-  pub allocable_by_class: [Option<RegClassInfo>; NUM_REG_CLASSES],
+    // Information about groups of allocable registers. Used to quickly address
+    // only a group of allocable registers belonging to the same register class.
+    // Indexes into |allocable_by_class| are RegClass values, such as
+    // RegClass::F32. If the resulting entry is |None| then there are no
+    // registers in that class.  Otherwise the value is a |RegClassInfo|, which
+    // provides a register range and possibly information about fixed uses.
+    pub allocable_by_class: [Option<RegClassInfo>; NUM_REG_CLASSES],
 }
 
 /// Information about a single register class in the `RealRegUniverse`.
 #[derive(Clone, Copy, Debug)]
 pub struct RegClassInfo {
-  // Range of allocatable registers in this register class, in terms of
-  // register indices.
-  //
-  // A range (first, last) specifies the range of entries in
-  // |RealRegUniverse.regs| corresponding to that class.  The range includes
-  // both |first| and |last|.
-  //
-  // In all cases, |last| must be < |RealRegUniverse.allocable|.  In other
-  // words, all ranges together in |allocable_by_class| must describe only the
-  // allocable prefix of |regs|.
-  //
-  // For example, let's say
-  //    allocable_by_class[RegClass::F32] ==
-  //      Some(RegClassInfo { first: 10, last: 14, .. })
-  // Then regs[10], regs[11], regs[12], regs[13], and regs[14] give all
-  // registers of register class RegClass::F32.
-  //
-  // The effect of the above is that registers in |regs| must form
-  // contiguous groups. This is checked by RealRegUniverse::check_is_sane().
-  pub first: usize,
-  pub last: usize,
+    // Range of allocatable registers in this register class, in terms of
+    // register indices.
+    //
+    // A range (first, last) specifies the range of entries in
+    // |RealRegUniverse.regs| corresponding to that class.  The range includes
+    // both |first| and |last|.
+    //
+    // In all cases, |last| must be < |RealRegUniverse.allocable|.  In other
+    // words, all ranges together in |allocable_by_class| must describe only the
+    // allocable prefix of |regs|.
+    //
+    // For example, let's say
+    //    allocable_by_class[RegClass::F32] ==
+    //      Some(RegClassInfo { first: 10, last: 14, .. })
+    // Then regs[10], regs[11], regs[12], regs[13], and regs[14] give all
+    // registers of register class RegClass::F32.
+    //
+    // The effect of the above is that registers in |regs| must form
+    // contiguous groups. This is checked by RealRegUniverse::check_is_sane().
+    pub first: usize,
+    pub last: usize,
 
-  // A register, if any, that is *guaranteed* not to be used as a fixed use
-  // in any code, and so that the register allocator can statically reserve
-  // for its own use as a temporary. Some register allocators may need such
-  // a register for various maneuvers, for example a spillslot-to-spillslot
-  // move when no (other) registers are free.
-  pub suggested_scratch: Option<usize>,
+    // A register, if any, that is *guaranteed* not to be used as a fixed use
+    // in any code, and so that the register allocator can statically reserve
+    // for its own use as a temporary. Some register allocators may need such
+    // a register for various maneuvers, for example a spillslot-to-spillslot
+    // move when no (other) registers are free.
+    pub suggested_scratch: Option<usize>,
 }
 
 impl RealRegUniverse {
-  /// Check that the given universe satisfies various invariants, and panic
-  /// if not.  All the invariants are important.
-  pub fn check_is_sane(&self) {
-    let regs_len = self.regs.len();
-    let regs_allocable = self.allocable;
-    // The universe must contain at most 256 registers.  That's because
-    // |Reg| only has an 8-bit index value field, so if the universe
-    // contained more than 256 registers, we'd never be able to index into
-    // entries 256 and above.  This is no limitation in practice since all
-    // targets we're interested in contain (many) fewer than 256 regs in
-    // total.
-    let mut ok = regs_len <= 256;
-    // The number of allocable registers must not exceed the number of
-    // |regs| presented.  In general it will be less, since the universe
-    // will list some registers (stack pointer, etc) which are not
-    // available for allocation.
-    if ok {
-      ok = regs_allocable <= regs_len;
-    }
-    // All registers must have an index value which points back at the
-    // |regs| slot they are in.  Also they really must be real regs.
-    if ok {
-      for i in 0..regs_len {
-        let (reg, _name) = &self.regs[i];
-        if ok && (reg.to_reg().is_virtual() || reg.get_index() != i) {
-          ok = false;
+    /// Check that the given universe satisfies various invariants, and panic
+    /// if not.  All the invariants are important.
+    pub fn check_is_sane(&self) {
+        let regs_len = self.regs.len();
+        let regs_allocable = self.allocable;
+        // The universe must contain at most 256 registers.  That's because
+        // |Reg| only has an 8-bit index value field, so if the universe
+        // contained more than 256 registers, we'd never be able to index into
+        // entries 256 and above.  This is no limitation in practice since all
+        // targets we're interested in contain (many) fewer than 256 regs in
+        // total.
+        let mut ok = regs_len <= 256;
+        // The number of allocable registers must not exceed the number of
+        // |regs| presented.  In general it will be less, since the universe
+        // will list some registers (stack pointer, etc) which are not
+        // available for allocation.
+        if ok {
+            ok = regs_allocable <= regs_len;
         }
-      }
-    }
-    // The allocatable regclass groupings defined by |allocable_first| and
-    // |allocable_last| must be contiguous.
-    if ok {
-      let mut regclass_used = [false; NUM_REG_CLASSES];
-      for rc in 0..NUM_REG_CLASSES {
-        regclass_used[rc] = false;
-      }
-      for i in 0..regs_allocable {
-        let (reg, _name) = &self.regs[i];
-        let rc = reg.get_class().rc_to_u32() as usize;
-        regclass_used[rc] = true;
-      }
-      // Scan forward through each grouping, checking that the listed
-      // registers really are of the claimed class.  Also count the
-      // total number visited.  This seems a fairly reliable way to
-      // ensure that the groupings cover all allocated registers exactly
-      // once, and that all classes are contiguous groups.
-      let mut regs_visited = 0;
-      for rc in 0..NUM_REG_CLASSES {
-        match &self.allocable_by_class[rc] {
-          &None => {
-            if regclass_used[rc] {
-              ok = false;
-            }
-          }
-          &Some(RegClassInfo { first, last, suggested_scratch }) => {
-            if !regclass_used[rc] {
-              ok = false;
-            }
-            if ok {
-              for i in first..last + 1 {
+        // All registers must have an index value which points back at the
+        // |regs| slot they are in.  Also they really must be real regs.
+        if ok {
+            for i in 0..regs_len {
                 let (reg, _name) = &self.regs[i];
-                if ok && RegClass::rc_from_u32(rc as u32) != reg.get_class() {
-                  ok = false;
+                if ok && (reg.to_reg().is_virtual() || reg.get_index() != i) {
+                    ok = false;
                 }
-                regs_visited += 1;
-              }
             }
-            if ok {
-              if let Some(s) = suggested_scratch {
-                if s < first || s > last {
-                  ok = false;
-                }
-              }
-            }
-          }
         }
-      }
-      if ok && regs_visited != regs_allocable {
-        ok = false;
-      }
+        // The allocatable regclass groupings defined by |allocable_first| and
+        // |allocable_last| must be contiguous.
+        if ok {
+            let mut regclass_used = [false; NUM_REG_CLASSES];
+            for rc in 0..NUM_REG_CLASSES {
+                regclass_used[rc] = false;
+            }
+            for i in 0..regs_allocable {
+                let (reg, _name) = &self.regs[i];
+                let rc = reg.get_class().rc_to_u32() as usize;
+                regclass_used[rc] = true;
+            }
+            // Scan forward through each grouping, checking that the listed
+            // registers really are of the claimed class.  Also count the
+            // total number visited.  This seems a fairly reliable way to
+            // ensure that the groupings cover all allocated registers exactly
+            // once, and that all classes are contiguous groups.
+            let mut regs_visited = 0;
+            for rc in 0..NUM_REG_CLASSES {
+                match &self.allocable_by_class[rc] {
+                    &None => {
+                        if regclass_used[rc] {
+                            ok = false;
+                        }
+                    }
+                    &Some(RegClassInfo {
+                        first,
+                        last,
+                        suggested_scratch,
+                    }) => {
+                        if !regclass_used[rc] {
+                            ok = false;
+                        }
+                        if ok {
+                            for i in first..last + 1 {
+                                let (reg, _name) = &self.regs[i];
+                                if ok && RegClass::rc_from_u32(rc as u32) != reg.get_class() {
+                                    ok = false;
+                                }
+                                regs_visited += 1;
+                            }
+                        }
+                        if ok {
+                            if let Some(s) = suggested_scratch {
+                                if s < first || s > last {
+                                    ok = false;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if ok && regs_visited != regs_allocable {
+                ok = false;
+            }
+        }
+        // So finally ..
+        if !ok {
+            panic!("RealRegUniverse::check_is_sane: invalid RealRegUniverse");
+        }
     }
-    // So finally ..
-    if !ok {
-      panic!("RealRegUniverse::check_is_sane: invalid RealRegUniverse");
-    }
-  }
 }
 
 //=============================================================================
@@ -1226,162 +1249,180 @@ impl RealRegUniverse {
 //
 // * A spill for instruction i is considered to be live from i.D to i.S.
 pub enum Point {
-  Reload,
-  Use,
-  Def,
-  Spill,
+    Reload,
+    Use,
+    Def,
+    Spill,
 }
 impl Point {
-  pub fn min_value() -> Self {
-    Self::Reload
-  }
-  pub fn max_value() -> Self {
-    Self::Spill
-  }
-  pub fn is_reload(self) -> bool {
-    match self {
-      Point::Reload => true,
-      _ => false,
+    pub fn min_value() -> Self {
+        Self::Reload
     }
-  }
-  pub fn is_use(self) -> bool {
-    match self {
-      Point::Use => true,
-      _ => false,
+    pub fn max_value() -> Self {
+        Self::Spill
     }
-  }
-  pub fn is_def(self) -> bool {
-    match self {
-      Point::Def => true,
-      _ => false,
+    pub fn is_reload(self) -> bool {
+        match self {
+            Point::Reload => true,
+            _ => false,
+        }
     }
-  }
-  pub fn is_spill(self) -> bool {
-    match self {
-      Point::Spill => true,
-      _ => false,
+    pub fn is_use(self) -> bool {
+        match self {
+            Point::Use => true,
+            _ => false,
+        }
     }
-  }
-  pub fn is_use_or_def(self) -> bool {
-    self.is_use() || self.is_def()
-  }
+    pub fn is_def(self) -> bool {
+        match self {
+            Point::Def => true,
+            _ => false,
+        }
+    }
+    pub fn is_spill(self) -> bool {
+        match self {
+            Point::Spill => true,
+            _ => false,
+        }
+    }
+    pub fn is_use_or_def(self) -> bool {
+        self.is_use() || self.is_def()
+    }
 }
 impl PartialOrd for Point {
-  // In short .. R < U < D < S.  This is probably what would be #derive'd
-  // anyway, but we need to be sure.
-  fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-    // This is a bit idiotic, but hey .. hopefully LLVM can turn it into a
-    // no-op.
-    fn convert(pt: &Point) -> u32 {
-      match pt {
-        Point::Reload => 0,
-        Point::Use => 1,
-        Point::Def => 2,
-        Point::Spill => 3,
-      }
+    // In short .. R < U < D < S.  This is probably what would be #derive'd
+    // anyway, but we need to be sure.
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // This is a bit idiotic, but hey .. hopefully LLVM can turn it into a
+        // no-op.
+        fn convert(pt: &Point) -> u32 {
+            match pt {
+                Point::Reload => 0,
+                Point::Use => 1,
+                Point::Def => 2,
+                Point::Spill => 3,
+            }
+        }
+        convert(self).partial_cmp(&convert(other))
     }
-    convert(self).partial_cmp(&convert(other))
-  }
 }
 
 // See comments below on |RangeFrag| for the meaning of |InstPoint|.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Ord)]
 pub struct InstPoint {
-  pub iix: InstIx,
-  pub pt: Point,
+    pub iix: InstIx,
+    pub pt: Point,
 }
 impl InstPoint {
-  #[inline(always)]
-  pub fn new(iix: InstIx, pt: Point) -> Self {
-    InstPoint { iix, pt }
-  }
-  #[inline(always)]
-  pub fn new_reload(iix: InstIx) -> Self {
-    InstPoint { iix, pt: Point::Reload }
-  }
-  #[inline(always)]
-  pub fn new_use(iix: InstIx) -> Self {
-    InstPoint { iix, pt: Point::Use }
-  }
-  #[inline(always)]
-  pub fn new_def(iix: InstIx) -> Self {
-    InstPoint { iix, pt: Point::Def }
-  }
-  #[inline(always)]
-  pub fn new_spill(iix: InstIx) -> Self {
-    InstPoint { iix, pt: Point::Spill }
-  }
-  pub fn step(&self) -> Self {
-    match self.pt {
-      Point::Reload => InstPoint::new(self.iix, Point::Use),
-      Point::Use => InstPoint::new(self.iix, Point::Def),
-      Point::Def => InstPoint::new(self.iix, Point::Spill),
-      Point::Spill => InstPoint::new(self.iix.plus(1), Point::Reload),
+    #[inline(always)]
+    pub fn new(iix: InstIx, pt: Point) -> Self {
+        InstPoint { iix, pt }
     }
-  }
+    #[inline(always)]
+    pub fn new_reload(iix: InstIx) -> Self {
+        InstPoint {
+            iix,
+            pt: Point::Reload,
+        }
+    }
+    #[inline(always)]
+    pub fn new_use(iix: InstIx) -> Self {
+        InstPoint {
+            iix,
+            pt: Point::Use,
+        }
+    }
+    #[inline(always)]
+    pub fn new_def(iix: InstIx) -> Self {
+        InstPoint {
+            iix,
+            pt: Point::Def,
+        }
+    }
+    #[inline(always)]
+    pub fn new_spill(iix: InstIx) -> Self {
+        InstPoint {
+            iix,
+            pt: Point::Spill,
+        }
+    }
+    pub fn step(&self) -> Self {
+        match self.pt {
+            Point::Reload => InstPoint::new(self.iix, Point::Use),
+            Point::Use => InstPoint::new(self.iix, Point::Def),
+            Point::Def => InstPoint::new(self.iix, Point::Spill),
+            Point::Spill => InstPoint::new(self.iix.plus(1), Point::Reload),
+        }
+    }
 }
 impl PartialOrd for InstPoint {
-  // Again .. don't assume anything about the #derive'd version.  These have
-  // to be ordered using |iix| as the primary key and |pt| as the
-  // secondary.
-  fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-    match self.iix.partial_cmp(&other.iix) {
-      Some(Ordering::Less) => Some(Ordering::Less),
-      Some(Ordering::Greater) => Some(Ordering::Greater),
-      Some(Ordering::Equal) => self.pt.partial_cmp(&other.pt),
-      None => panic!("InstPoint::partial_cmp: fail #1"),
+    // Again .. don't assume anything about the #derive'd version.  These have
+    // to be ordered using |iix| as the primary key and |pt| as the
+    // secondary.
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.iix.partial_cmp(&other.iix) {
+            Some(Ordering::Less) => Some(Ordering::Less),
+            Some(Ordering::Greater) => Some(Ordering::Greater),
+            Some(Ordering::Equal) => self.pt.partial_cmp(&other.pt),
+            None => panic!("InstPoint::partial_cmp: fail #1"),
+        }
     }
-  }
 }
 
 impl fmt::Debug for InstPoint {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(
-      fmt,
-      "{:?}{}",
-      self.iix,
-      match self.pt {
-        Point::Reload => ".r",
-        Point::Use => ".u",
-        Point::Def => ".d",
-        Point::Spill => ".s",
-      }
-    )
-  }
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            fmt,
+            "{:?}{}",
+            self.iix,
+            match self.pt {
+                Point::Reload => ".r",
+                Point::Use => ".u",
+                Point::Def => ".d",
+                Point::Spill => ".s",
+            }
+        )
+    }
 }
 
 impl InstPoint {
-  pub fn max_value() -> Self {
-    Self { iix: InstIx::max_value(), pt: Point::max_value() }
-  }
-  pub fn min_value() -> Self {
-    Self { iix: InstIx::min_value(), pt: Point::min_value() }
-  }
+    pub fn max_value() -> Self {
+        Self {
+            iix: InstIx::max_value(),
+            pt: Point::max_value(),
+        }
+    }
+    pub fn min_value() -> Self {
+        Self {
+            iix: InstIx::min_value(),
+            pt: Point::min_value(),
+        }
+    }
 }
 
 // A handy summary hint for a RangeFrag.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RangeFragKind {
-  Local,   // Fragment exists entirely inside one block
-  LiveIn,  // Fragment is live in to a block, but ends inside it
-  LiveOut, // Fragment is live out of a block, but starts inside it
-  Thru,    // Fragment is live through the block (starts and ends outside it)
-  // Multi is a hack that is required by BT's experimental RangeFrag
-  // compression.  I hope to be able to get rid of it in subsequent work to
-  // clean up and improve the compression.
-  Multi, // Fragment spans multiple blocks ("is compressed")
+    Local,   // Fragment exists entirely inside one block
+    LiveIn,  // Fragment is live in to a block, but ends inside it
+    LiveOut, // Fragment is live out of a block, but starts inside it
+    Thru,    // Fragment is live through the block (starts and ends outside it)
+    // Multi is a hack that is required by BT's experimental RangeFrag
+    // compression.  I hope to be able to get rid of it in subsequent work to
+    // clean up and improve the compression.
+    Multi, // Fragment spans multiple blocks ("is compressed")
 }
 impl fmt::Debug for RangeFragKind {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    match self {
-      RangeFragKind::Local => write!(fmt, "Local"),
-      RangeFragKind::LiveIn => write!(fmt, "LiveIn"),
-      RangeFragKind::LiveOut => write!(fmt, "LiveOut"),
-      RangeFragKind::Thru => write!(fmt, "Thru"),
-      // Hack, per comment above
-      RangeFragKind::Multi => write!(fmt, "Multi"),
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RangeFragKind::Local => write!(fmt, "Local"),
+            RangeFragKind::LiveIn => write!(fmt, "LiveIn"),
+            RangeFragKind::LiveOut => write!(fmt, "LiveOut"),
+            RangeFragKind::Thru => write!(fmt, "Thru"),
+            // Hack, per comment above
+            RangeFragKind::Multi => write!(fmt, "Multi"),
+        }
     }
-  }
 }
 
 //=============================================================================
@@ -1444,71 +1485,85 @@ impl fmt::Debug for RangeFragKind {
 // |Block| table to hand.  It is included here for convenience.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RangeFrag {
-  pub bix: BlockIx,
-  pub kind: RangeFragKind,
-  pub first: InstPoint,
-  pub last: InstPoint,
-  pub count: u16,
+    pub bix: BlockIx,
+    pub kind: RangeFragKind,
+    pub first: InstPoint,
+    pub last: InstPoint,
+    pub count: u16,
 }
 impl fmt::Debug for RangeFrag {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(
-      fmt,
-      "(RF: {:?}, count={}, {:?}, {:?}-{:?})",
-      self.bix, self.count, self.kind, self.first, self.last
-    )
-  }
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            fmt,
+            "(RF: {:?}, count={}, {:?}, {:?}-{:?})",
+            self.bix, self.count, self.kind, self.first, self.last
+        )
+    }
 }
 
 impl RangeFrag {
-  pub fn new_multi_block<F: Function>(
-    f: &F, bix: BlockIx, first: InstPoint, last: InstPoint, count: u16,
-  ) -> Self {
-    debug_assert!(first <= last);
-    if first == last {
-      debug_assert!(count == 1);
+    pub fn new_multi_block<F: Function>(
+        f: &F,
+        bix: BlockIx,
+        first: InstPoint,
+        last: InstPoint,
+        count: u16,
+    ) -> Self {
+        debug_assert!(first <= last);
+        if first == last {
+            debug_assert!(count == 1);
+        }
+        let first_iix_in_block = f.block_insns(bix).first();
+        let last_iix_in_block = f.block_insns(bix).last();
+        let first_pt_in_block = InstPoint::new_use(first_iix_in_block);
+        let last_pt_in_block = InstPoint::new_def(last_iix_in_block);
+        let kind = match (first == first_pt_in_block, last == last_pt_in_block) {
+            (false, false) => RangeFragKind::Local,
+            (false, true) => RangeFragKind::LiveOut,
+            (true, false) => RangeFragKind::LiveIn,
+            (true, true) => RangeFragKind::Thru,
+        };
+        RangeFrag {
+            bix,
+            kind,
+            first,
+            last,
+            count,
+        }
     }
-    let first_iix_in_block = f.block_insns(bix).first();
-    let last_iix_in_block = f.block_insns(bix).last();
-    let first_pt_in_block = InstPoint::new_use(first_iix_in_block);
-    let last_pt_in_block = InstPoint::new_def(last_iix_in_block);
-    let kind = match (first == first_pt_in_block, last == last_pt_in_block) {
-      (false, false) => RangeFragKind::Local,
-      (false, true) => RangeFragKind::LiveOut,
-      (true, false) => RangeFragKind::LiveIn,
-      (true, true) => RangeFragKind::Thru,
-    };
-    RangeFrag { bix, kind, first, last, count }
-  }
 
-  pub fn new<F: Function>(
-    f: &F, bix: BlockIx, first: InstPoint, last: InstPoint, count: u16,
-  ) -> Self {
-    debug_assert!(f.block_insns(bix).len() >= 1);
-    debug_assert!(f.block_insns(bix).contains(first.iix));
-    debug_assert!(f.block_insns(bix).contains(last.iix));
-    RangeFrag::new_multi_block(f, bix, first, last, count)
-  }
+    pub fn new<F: Function>(
+        f: &F,
+        bix: BlockIx,
+        first: InstPoint,
+        last: InstPoint,
+        count: u16,
+    ) -> Self {
+        debug_assert!(f.block_insns(bix).len() >= 1);
+        debug_assert!(f.block_insns(bix).contains(first.iix));
+        debug_assert!(f.block_insns(bix).contains(last.iix));
+        RangeFrag::new_multi_block(f, bix, first, last, count)
+    }
 }
 
 // Comparison of RangeFrags.  They form a partial order.
 
 pub fn cmp_range_frags(f1: &RangeFrag, f2: &RangeFrag) -> Option<Ordering> {
-  if f1.last < f2.first {
-    return Some(Ordering::Less);
-  }
-  if f1.first > f2.last {
-    return Some(Ordering::Greater);
-  }
-  if f1.first == f2.first && f1.last == f2.last {
-    return Some(Ordering::Equal);
-  }
-  None
+    if f1.last < f2.first {
+        return Some(Ordering::Less);
+    }
+    if f1.first > f2.last {
+        return Some(Ordering::Greater);
+    }
+    if f1.first == f2.first && f1.last == f2.last {
+        return Some(Ordering::Equal);
+    }
+    None
 }
 impl RangeFrag {
-  pub fn contains(&self, ipt: &InstPoint) -> bool {
-    self.first <= *ipt && *ipt <= self.last
-  }
+    pub fn contains(&self, ipt: &InstPoint) -> bool {
+        self.first <= *ipt && *ipt <= self.last
+    }
 }
 
 //=============================================================================
@@ -1523,72 +1578,69 @@ impl RangeFrag {
 
 #[derive(Clone)]
 pub struct SortedRangeFragIxs {
-  pub frag_ixs: SmallVec<[RangeFragIx; 4]>,
+    pub frag_ixs: SmallVec<[RangeFragIx; 4]>,
 }
 impl fmt::Debug for SortedRangeFragIxs {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    self.frag_ixs.fmt(fmt)
-  }
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        self.frag_ixs.fmt(fmt)
+    }
 }
 impl SortedRangeFragIxs {
-  pub fn cmp_debug_only(&self, other: &SortedRangeFragIxs) -> Ordering {
-    self.frag_ixs.cmp(&other.frag_ixs)
-  }
+    pub fn cmp_debug_only(&self, other: &SortedRangeFragIxs) -> Ordering {
+        self.frag_ixs.cmp(&other.frag_ixs)
+    }
 }
 
 impl SortedRangeFragIxs {
-  pub fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
-    let mut ok = true;
-    for i in 1..self.frag_ixs.len() {
-      let prev_frag = &fenv[self.frag_ixs[i - 1]];
-      let this_frag = &fenv[self.frag_ixs[i - 0]];
-      if cmp_range_frags(prev_frag, this_frag) != Some(Ordering::Less) {
-        ok = false;
-        break;
-      }
-    }
-    if !ok {
-      panic!("SortedRangeFragIxs::check: vector not ok");
-    }
-  }
-
-  pub fn sort(&mut self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
-    self.frag_ixs.sort_unstable_by(|fix_a, fix_b| {
-      match cmp_range_frags(&fenv[*fix_a], &fenv[*fix_b]) {
-        Some(Ordering::Less) => Ordering::Less,
-        Some(Ordering::Greater) => Ordering::Greater,
-        Some(Ordering::Equal) | None => {
-          panic!("SortedRangeFragIxs::new: overlapping Frags!")
+    pub fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
+        let mut ok = true;
+        for i in 1..self.frag_ixs.len() {
+            let prev_frag = &fenv[self.frag_ixs[i - 1]];
+            let this_frag = &fenv[self.frag_ixs[i - 0]];
+            if cmp_range_frags(prev_frag, this_frag) != Some(Ordering::Less) {
+                ok = false;
+                break;
+            }
         }
-      }
-    });
-  }
-
-  pub fn new(
-    source: &Vec<RangeFragIx>, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
-  ) -> Self {
-    let mut frag_ixs = SmallVec::<[RangeFragIx; 4]>::new();
-    frag_ixs.reserve(source.len());
-    for fix in source {
-      frag_ixs.push(*fix);
+        if !ok {
+            panic!("SortedRangeFragIxs::check: vector not ok");
+        }
     }
 
-    let mut res = SortedRangeFragIxs { frag_ixs };
-    // check the source is ordered, and clone (or sort it)
-    res.sort(fenv);
-    res.check(fenv);
-    res
-  }
+    pub fn sort(&mut self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
+        self.frag_ixs.sort_unstable_by(|fix_a, fix_b| {
+            match cmp_range_frags(&fenv[*fix_a], &fenv[*fix_b]) {
+                Some(Ordering::Less) => Ordering::Less,
+                Some(Ordering::Greater) => Ordering::Greater,
+                Some(Ordering::Equal) | None => {
+                    panic!("SortedRangeFragIxs::new: overlapping Frags!")
+                }
+            }
+        });
+    }
 
-  pub fn unit(
-    fix: RangeFragIx, fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
-  ) -> Self {
-    let mut res =
-      SortedRangeFragIxs { frag_ixs: SmallVec::<[RangeFragIx; 4]>::new() };
-    res.frag_ixs.push(fix);
-    res.check(fenv);
-    res
-  }
+    pub fn new(source: &Vec<RangeFragIx>, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) -> Self {
+        let mut frag_ixs = SmallVec::<[RangeFragIx; 4]>::new();
+        frag_ixs.reserve(source.len());
+        for fix in source {
+            frag_ixs.push(*fix);
+        }
+
+        let mut res = SortedRangeFragIxs { frag_ixs };
+        // check the source is ordered, and clone (or sort it)
+        res.sort(fenv);
+        res.check(fenv);
+        res
+    }
+
+    pub fn unit(fix: RangeFragIx, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) -> Self {
+        let mut res = SortedRangeFragIxs {
+            frag_ixs: SmallVec::<[RangeFragIx; 4]>::new(),
+        };
+        res.frag_ixs.push(fix);
+        res.check(fenv);
+        res
+    }
 }
 
 //=============================================================================
@@ -1602,86 +1654,86 @@ impl SortedRangeFragIxs {
 
 #[derive(Copy, Clone)]
 pub enum SpillCost {
-  Infinite,    // Infinite, positive
-  Finite(f32), // Finite, non-negative
+    Infinite,    // Infinite, positive
+    Finite(f32), // Finite, non-negative
 }
 impl fmt::Debug for SpillCost {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    match self {
-      SpillCost::Infinite => write!(fmt, "INFIN"),
-      SpillCost::Finite(c) => write!(fmt, "{:<.2}", c),
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SpillCost::Infinite => write!(fmt, "INFIN"),
+            SpillCost::Finite(c) => write!(fmt, "{:<.2}", c),
+        }
     }
-  }
 }
 impl SpillCost {
-  pub fn zero() -> Self {
-    SpillCost::Finite(0.0)
-  }
-  pub fn infinite() -> Self {
-    SpillCost::Infinite
-  }
-  pub fn finite(cost: f32) -> Self {
-    // "|is_normal| returns true if the number is neither zero, infinite,
-    // subnormal, or NaN."
-    assert!(cost.is_normal() || cost == 0.0);
-    // And also it can't be negative.
-    assert!(cost >= 0.0);
-    // Somewhat arbitrarily ..
-    assert!(cost < 1e18);
-    SpillCost::Finite(cost)
-  }
-  pub fn is_zero(&self) -> bool {
-    match self {
-      SpillCost::Infinite => false,
-      SpillCost::Finite(c) => *c == 0.0,
+    pub fn zero() -> Self {
+        SpillCost::Finite(0.0)
     }
-  }
-  pub fn is_infinite(&self) -> bool {
-    match self {
-      SpillCost::Infinite => true,
-      SpillCost::Finite(_) => false,
+    pub fn infinite() -> Self {
+        SpillCost::Infinite
     }
-  }
-  pub fn is_finite(&self) -> bool {
-    !self.is_infinite()
-  }
-  pub fn is_less_than(&self, other: &Self) -> bool {
-    match (self, other) {
-      // Dubious .. both are infinity
-      (SpillCost::Infinite, SpillCost::Infinite) => false,
-      // finite < inf
-      (SpillCost::Finite(_), SpillCost::Infinite) => true,
-      // inf is not < finite
-      (SpillCost::Infinite, SpillCost::Finite(_)) => false,
-      // straightforward
-      (SpillCost::Finite(c1), SpillCost::Finite(c2)) => c1 < c2,
+    pub fn finite(cost: f32) -> Self {
+        // "|is_normal| returns true if the number is neither zero, infinite,
+        // subnormal, or NaN."
+        assert!(cost.is_normal() || cost == 0.0);
+        // And also it can't be negative.
+        assert!(cost >= 0.0);
+        // Somewhat arbitrarily ..
+        assert!(cost < 1e18);
+        SpillCost::Finite(cost)
     }
-  }
-  pub fn partial_cmp_debug_only(&self, other: &Self) -> Option<Ordering> {
-    // NB!  This is only for debugging; it serves only to give an arbitrary
-    // structural partial ordering on |SpillCost| so it can participate in
-    // sorting.  The induced ordering should not be used to make any
-    // judgements about spill costs.
-    match (self, other) {
-      (SpillCost::Infinite, SpillCost::Infinite) => Some(Ordering::Equal),
-      (SpillCost::Finite(_), SpillCost::Infinite) => Some(Ordering::Less),
-      (SpillCost::Infinite, SpillCost::Finite(_)) => Some(Ordering::Greater),
-      (SpillCost::Finite(c1), SpillCost::Finite(c2)) => c1.partial_cmp(c2),
+    pub fn is_zero(&self) -> bool {
+        match self {
+            SpillCost::Infinite => false,
+            SpillCost::Finite(c) => *c == 0.0,
+        }
     }
-  }
-  pub fn add(&mut self, other: &Self) {
-    match (*self, other) {
-      (SpillCost::Finite(c1), SpillCost::Finite(c2)) => {
-        // The 10^18 limit above gives us a lot of headroom here, since max
-        // f32 is around 10^37.
-        *self = SpillCost::Finite(c1 + c2);
-      }
-      (_, _) => {
-        // All other cases produce an infinity.
-        *self = SpillCost::Infinite;
-      }
+    pub fn is_infinite(&self) -> bool {
+        match self {
+            SpillCost::Infinite => true,
+            SpillCost::Finite(_) => false,
+        }
     }
-  }
+    pub fn is_finite(&self) -> bool {
+        !self.is_infinite()
+    }
+    pub fn is_less_than(&self, other: &Self) -> bool {
+        match (self, other) {
+            // Dubious .. both are infinity
+            (SpillCost::Infinite, SpillCost::Infinite) => false,
+            // finite < inf
+            (SpillCost::Finite(_), SpillCost::Infinite) => true,
+            // inf is not < finite
+            (SpillCost::Infinite, SpillCost::Finite(_)) => false,
+            // straightforward
+            (SpillCost::Finite(c1), SpillCost::Finite(c2)) => c1 < c2,
+        }
+    }
+    pub fn partial_cmp_debug_only(&self, other: &Self) -> Option<Ordering> {
+        // NB!  This is only for debugging; it serves only to give an arbitrary
+        // structural partial ordering on |SpillCost| so it can participate in
+        // sorting.  The induced ordering should not be used to make any
+        // judgements about spill costs.
+        match (self, other) {
+            (SpillCost::Infinite, SpillCost::Infinite) => Some(Ordering::Equal),
+            (SpillCost::Finite(_), SpillCost::Infinite) => Some(Ordering::Less),
+            (SpillCost::Infinite, SpillCost::Finite(_)) => Some(Ordering::Greater),
+            (SpillCost::Finite(c1), SpillCost::Finite(c2)) => c1.partial_cmp(c2),
+        }
+    }
+    pub fn add(&mut self, other: &Self) {
+        match (*self, other) {
+            (SpillCost::Finite(c1), SpillCost::Finite(c2)) => {
+                // The 10^18 limit above gives us a lot of headroom here, since max
+                // f32 is around 10^37.
+                *self = SpillCost::Finite(c1 + c2);
+            }
+            (_, _) => {
+                // All other cases produce an infinity.
+                *self = SpillCost::Infinite;
+            }
+        }
+    }
 }
 
 //=============================================================================
@@ -1728,21 +1780,21 @@ impl SpillCost {
 
 #[derive(Clone)]
 pub struct RealRange {
-  pub rreg: RealReg,
-  pub sorted_frags: SortedRangeFragIxs,
+    pub rreg: RealReg,
+    pub sorted_frags: SortedRangeFragIxs,
 }
 impl fmt::Debug for RealRange {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(fmt, "(RR: {:?}, {:?})", self.rreg, self.sorted_frags)
-  }
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "(RR: {:?}, {:?})", self.rreg, self.sorted_frags)
+    }
 }
 impl RealRange {
-  pub fn cmp_debug_only(&self, other: &RealRange) -> Ordering {
-    match self.rreg.cmp(&other.rreg) {
-      Ordering::Equal => self.sorted_frags.cmp_debug_only(&other.sorted_frags),
-      oth1 => oth1,
+    pub fn cmp_debug_only(&self, other: &RealRange) -> Ordering {
+        match self.rreg.cmp(&other.rreg) {
+            Ordering::Equal => self.sorted_frags.cmp_debug_only(&other.sorted_frags),
+            oth1 => oth1,
+        }
     }
-  }
 }
 
 // VirtualRanges are live ranges for virtual regs (VirtualRegs).  This does
@@ -1753,46 +1805,44 @@ impl RealRange {
 
 #[derive(Clone)]
 pub struct VirtualRange {
-  pub vreg: VirtualReg,
-  pub rreg: Option<RealReg>,
-  pub sorted_frags: SortedRangeFragIxs,
-  pub size: u16,
-  pub spill_cost: SpillCost,
+    pub vreg: VirtualReg,
+    pub rreg: Option<RealReg>,
+    pub sorted_frags: SortedRangeFragIxs,
+    pub size: u16,
+    pub spill_cost: SpillCost,
 }
 impl fmt::Debug for VirtualRange {
-  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-    write!(fmt, "(VR: {:?},", self.vreg)?;
-    if self.rreg.is_some() {
-      write!(fmt, " -> {:?}", self.rreg.unwrap())?;
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "(VR: {:?},", self.vreg)?;
+        if self.rreg.is_some() {
+            write!(fmt, " -> {:?}", self.rreg.unwrap())?;
+        }
+        write!(
+            fmt,
+            " s={}, c={:?}, {:?})",
+            self.size, self.spill_cost, self.sorted_frags
+        )
     }
-    write!(
-      fmt,
-      " s={}, c={:?}, {:?})",
-      self.size, self.spill_cost, self.sorted_frags
-    )
-  }
 }
 impl VirtualRange {
-  pub fn cmp_debug_only(&self, other: &VirtualRange) -> Ordering {
-    match self.vreg.cmp(&other.vreg) {
-      Ordering::Equal => match self.rreg.cmp(&other.rreg) {
-        Ordering::Equal => {
-          match self.sorted_frags.cmp_debug_only(&other.sorted_frags) {
-            Ordering::Equal => match self.size.cmp(&other.size) {
-              Ordering::Equal => self
-                .spill_cost
-                .partial_cmp_debug_only(&other.spill_cost)
-                .unwrap(),
-              oth4 => oth4,
+    pub fn cmp_debug_only(&self, other: &VirtualRange) -> Ordering {
+        match self.vreg.cmp(&other.vreg) {
+            Ordering::Equal => match self.rreg.cmp(&other.rreg) {
+                Ordering::Equal => match self.sorted_frags.cmp_debug_only(&other.sorted_frags) {
+                    Ordering::Equal => match self.size.cmp(&other.size) {
+                        Ordering::Equal => self
+                            .spill_cost
+                            .partial_cmp_debug_only(&other.spill_cost)
+                            .unwrap(),
+                        oth4 => oth4,
+                    },
+                    oth3 => oth3,
+                },
+                oth2 => oth2,
             },
-            oth3 => oth3,
-          }
+            oth1 => oth1,
         }
-        oth2 => oth2,
-      },
-      oth1 => oth1,
     }
-  }
 }
 
 //=============================================================================
