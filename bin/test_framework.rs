@@ -1,7 +1,3 @@
-/* -*- Mode: Rust; tab-width: 8; indent-tabs-mode: nil; rust-indent-offset: 4 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
-*/
-
 //! As part of this set of test cases, we define a mini IR and implement the
 //! `Function` trait for it so that we can use the regalloc public interface.
 
