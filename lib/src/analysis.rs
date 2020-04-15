@@ -1229,6 +1229,7 @@ pub fn get_san_reg_sets_for_insn<F: Function>(
 fn calc_def_and_use<F: Function>(
     func: &F,
     rvb: &RegVecsAndBounds,
+    univ: &RealRegUniverse,
 ) -> (
     TypedIxVec<BlockIx, SparseSet<Reg>>,
     TypedIxVec<BlockIx, SparseSet<Reg>>,
@@ -1291,11 +1292,36 @@ fn calc_def_and_use<F: Function>(
 
     assert!(def_sets.len() == use_sets.len());
 
-    let mut n = 0;
-    debug!("");
-    for (def, uce) in def_sets.iter().zip(use_sets.iter()) {
-        debug!("{:<3?}   def {:<16?}  use {:?}", BlockIx::new(n), def, uce);
-        n += 1;
+    if log_enabled!(Level::Debug) {
+        let mut n = 0;
+        debug!("");
+        for (def_set, use_set) in def_sets.iter().zip(use_sets.iter()) {
+            let mut first = true;
+            let mut defs_str = "".to_string();
+            for def in def_set.to_vec() {
+                if !first {
+                    defs_str = defs_str + &" ".to_string();
+                }
+                first = false;
+                defs_str = defs_str + &def.show_with_rru(univ);
+            }
+            first = true;
+            let mut uses_str = "".to_string();
+            for uce in use_set.to_vec() {
+                if !first {
+                    uses_str = uses_str + &" ".to_string();
+                }
+                first = false;
+                uses_str = uses_str + &uce.show_with_rru(univ);
+            }
+            debug!(
+                "{:<3?}   def {{{}}}  use {{{}}}",
+                BlockIx::new(n),
+                defs_str,
+                uses_str
+            );
+            n += 1;
+        }
     }
 
     info!("    calc_def_and_use: end");
@@ -1313,6 +1339,7 @@ fn calc_livein_and_liveout<F: Function>(
     def_sets_per_block: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     use_sets_per_block: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     cfg_info: &CFGInfo,
+    univ: &RealRegUniverse,
 ) -> (
     TypedIxVec<BlockIx, SparseSet<Reg>>,
     TypedIxVec<BlockIx, SparseSet<Reg>>,
@@ -1401,16 +1428,36 @@ fn calc_livein_and_liveout<F: Function>(
         nBlocks, nEvals, ratio
     );
 
-    let mut n = 0;
-    debug!("");
-    for (livein, liveout) in liveins.iter().zip(liveouts.iter()) {
-        debug!(
-            "{:<3?}   livein {:<16?}  liveout {:<16?}",
-            BlockIx::new(n),
-            livein,
-            liveout
-        );
-        n += 1;
+    if log_enabled!(Level::Debug) {
+        let mut n = 0;
+        debug!("");
+        for (livein, liveout) in liveins.iter().zip(liveouts.iter()) {
+            let mut first = true;
+            let mut li_str = "".to_string();
+            for li in livein.to_vec() {
+                if !first {
+                    li_str = li_str + &" ".to_string();
+                }
+                first = false;
+                li_str = li_str + &li.show_with_rru(univ);
+            }
+            first = true;
+            let mut lo_str = "".to_string();
+            for lo in liveout.to_vec() {
+                if !first {
+                    lo_str = lo_str + &" ".to_string();
+                }
+                first = false;
+                lo_str = lo_str + &lo.show_with_rru(univ);
+            }
+            debug!(
+                "{:<3?}   livein {{{}}}  liveout {{{}}}",
+                BlockIx::new(n),
+                li_str,
+                lo_str
+            );
+            n += 1;
+        }
     }
 
     info!("    calc_livein_and_liveout: end");
@@ -1714,6 +1761,7 @@ fn get_RangeFrags<F: Function>(
     livein_sets_per_block: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     liveout_sets_per_block: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     rvb: &RegVecsAndBounds,
+    univ: &RealRegUniverse,
 ) -> (
     Map<Reg, Vec<RangeFragIx>>,
     TypedIxVec<RangeFragIx, RangeFrag>,
@@ -1745,7 +1793,7 @@ fn get_RangeFrags<F: Function>(
 
     debug!("");
     for (reg, frag_ixs) in resMap.iter() {
-        debug!("frags for {:?}   {:?}", reg, frag_ixs);
+        debug!("frags for {}   {:?}", reg.show_with_rru(univ), frag_ixs);
     }
 
     info!("    get_RangeFrags: end");
@@ -2387,7 +2435,8 @@ pub fn run_analysis<F: Function>(
     assert!(reg_vecs_and_bounds.is_sanitized());
 
     // Calculate block-local def/use sets.
-    let (def_sets_per_block, use_sets_per_block) = calc_def_and_use(func, &reg_vecs_and_bounds);
+    let (def_sets_per_block, use_sets_per_block) =
+        calc_def_and_use(func, &reg_vecs_and_bounds, &reg_universe);
     debug_assert!(def_sets_per_block.len() == func.blocks().len() as u32);
     debug_assert!(use_sets_per_block.len() == func.blocks().len() as u32);
 
@@ -2395,8 +2444,13 @@ pub fn run_analysis<F: Function>(
     // iterate-to-a-fixed-point scheme.
 
     // `liveout_sets_per_block` is amended below for return blocks, hence `mut`.
-    let (livein_sets_per_block, mut liveout_sets_per_block) =
-        calc_livein_and_liveout(func, &def_sets_per_block, &use_sets_per_block, &cfg_info);
+    let (livein_sets_per_block, mut liveout_sets_per_block) = calc_livein_and_liveout(
+        func,
+        &def_sets_per_block,
+        &use_sets_per_block,
+        &cfg_info,
+        &reg_universe,
+    );
     debug_assert!(livein_sets_per_block.len() == func.blocks().len() as u32);
     debug_assert!(liveout_sets_per_block.len() == func.blocks().len() as u32);
 
@@ -2441,6 +2495,7 @@ pub fn run_analysis<F: Function>(
         &livein_sets_per_block,
         &liveout_sets_per_block,
         &reg_vecs_and_bounds,
+        &reg_universe,
     );
 
     let (rlr_env, mut vlr_env) = merge_RangeFrags(&frag_ixs_per_reg, &frag_env, &cfg_info);
@@ -2452,7 +2507,11 @@ pub fn run_analysis<F: Function>(
     debug!("");
     let mut n = 0;
     for rlr in rlr_env.iter() {
-        debug!("{:<4?}   {:?}", RealRangeIx::new(n), rlr);
+        debug!(
+            "{:<4?}   {}",
+            RealRangeIx::new(n),
+            rlr.show_with_rru(&reg_universe)
+        );
         n += 1;
     }
 

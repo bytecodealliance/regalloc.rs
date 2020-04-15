@@ -380,10 +380,14 @@ enum Hint {
     // I would like to have exactly this real register.
     Exactly(RealReg, u32),
 }
-fn show_hint(h: &Hint) -> String {
+fn show_hint(h: &Hint, univ: &RealRegUniverse) -> String {
     match h {
         Hint::SameAs(vlrix, weight) => format!("(SameAs {:?}, weight={})", vlrix, weight),
-        Hint::Exactly(rreg, weight) => format!("(Exactly {:?}, weight={})", rreg, weight),
+        Hint::Exactly(rreg, weight) => format!(
+            "(Exactly {}, weight={})",
+            rreg.to_reg().show_with_rru(&univ),
+            weight
+        ),
     }
 }
 impl Hint {
@@ -413,6 +417,7 @@ fn do_coalescing_analysis<F: Function>(
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     est_freqs: &TypedIxVec<BlockIx, u32>,
+    univ: &RealRegUniverse,
 ) -> (
     TypedIxVec<VirtualRangeIx, Vec<Hint>>,
     UnionFindEquivClasses<VirtualRangeIx>,
@@ -657,7 +662,7 @@ fn do_coalescing_analysis<F: Function>(
         for hints_for_one_vlr in hints.iter() {
             let mut s = "".to_string();
             for hint in hints_for_one_vlr {
-                s = s + &show_hint(hint) + &" ".to_string();
+                s = s + &show_hint(hint, &univ) + &" ".to_string();
             }
             debug!("  hintsfor {:<4?} = {}", VirtualRangeIx::new(n), s);
             n += 1;
@@ -1937,6 +1942,7 @@ pub fn alloc_main<F: Function>(
         &vlr_env,
         &frag_env,
         &est_freqs,
+        &reg_universe,
     );
     let hints: TypedIxVec<VirtualRangeIx, Vec<Hint>> = coalescing_info.0;
     let vlrEquivClasses: UnionFindEquivClasses<VirtualRangeIx> = coalescing_info.1;

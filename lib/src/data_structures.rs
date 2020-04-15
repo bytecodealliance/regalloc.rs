@@ -683,6 +683,13 @@ impl Reg {
             None
         }
     }
+    pub fn show_with_rru(self, univ: &RealRegUniverse) -> String {
+        if self.is_real() && self.get_index() < univ.regs.len() {
+            univ.regs[self.get_index()].1.clone()
+        } else {
+            format!("{:?}", self)
+        }
+    }
 }
 
 impl fmt::Debug for Reg {
@@ -1844,6 +1851,13 @@ impl RealRange {
             Ordering::Equal => self.sorted_frags.cmp_debug_only(&other.sorted_frags),
             oth1 => oth1,
         }
+    }
+    pub fn show_with_rru(&self, univ: &RealRegUniverse) -> String {
+        format!(
+            "(RR: {}, {:?})",
+            self.rreg.to_reg().show_with_rru(univ),
+            self.sorted_frags
+        )
     }
 }
 
