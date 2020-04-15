@@ -1,7 +1,3 @@
-/* -*- Mode: Rust; tab-width: 8; indent-tabs-mode: nil; rust-indent-offset: 4 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
-*/
-
 //! Checker: verifies that spills/reloads/moves retain equivalent dataflow to original, vreg-based
 //! code.
 //!

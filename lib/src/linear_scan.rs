@@ -1,7 +1,3 @@
-/* -*- Mode: Rust; tab-width: 8; indent-tabs-mode: nil; rust-indent-offset: 4 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
-*/
-
 //! Implementation of the linear scan allocator algorithm.
 //!
 //! This tries to follow the implementation as suggested by:

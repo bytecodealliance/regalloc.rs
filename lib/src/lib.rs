@@ -1,7 +1,3 @@
-/* -*- Mode: Rust; tab-width: 8; indent-tabs-mode: nil; rust-indent-offset: 4 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
-*/
-
 //! Main file / top-level module for regalloc library.
 //!
 //! We have tried hard to make the library's interface as simple as possible,
