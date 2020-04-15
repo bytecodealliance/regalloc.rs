@@ -580,6 +580,16 @@ impl RegClass {
             RegClass::V128 => "V",
         }
     }
+
+    pub fn long_name(self) -> &'static str {
+        match self {
+            RegClass::I32 => "I32",
+            RegClass::I64 => "I32",
+            RegClass::F32 => "F32",
+            RegClass::F64 => "F32",
+            RegClass::V128 => "V128",
+        }
+    }
 }
 
 // Reg represents both real and virtual registers.  For compactness and speed,
@@ -1128,6 +1138,49 @@ pub struct RegClassInfo {
 }
 
 impl RealRegUniverse {
+    /// Show it in a pretty way.
+    pub fn show(&self) -> Vec<String> {
+        let mut res = vec![];
+        // Show the allocables
+        for classNo in 0..NUM_REG_CLASSES {
+            let mb_classInfo = &self.allocable_by_class[classNo];
+            if mb_classInfo.is_none() {
+                continue;
+            }
+            let classInfo = &mb_classInfo.unwrap();
+            let class = RegClass::rc_from_u32(classNo as u32);
+            let mut classStr = "class ".to_string()
+                + &class.long_name().to_string()
+                + &"(".to_string()
+                + &class.short_name().to_string()
+                + &") at ".to_string();
+            classStr = classStr + &format!("[{} .. {}]: ", classInfo.first, classInfo.last);
+            for ix in classInfo.first..=classInfo.last {
+                classStr = classStr + &self.regs[ix].1;
+                if let Some(suggestedIx) = classInfo.suggested_scratch {
+                    if ix == suggestedIx {
+                        classStr = classStr + "*";
+                    }
+                }
+                classStr = classStr + " ";
+            }
+            res.push(classStr);
+        }
+        // And the non-allocables
+        if self.allocable < self.regs.len() {
+            let mut stragglers = format!(
+                "not allocable at [{} .. {}]: ",
+                self.allocable,
+                self.regs.len() - 1
+            );
+            for ix in self.allocable..self.regs.len() {
+                stragglers = stragglers + &self.regs[ix].1 + &" ".to_string();
+            }
+            res.push(stragglers);
+        }
+        res
+    }
+
     /// Check that the given universe satisfies various invariants, and panic
     /// if not.  All the invariants are important.
     pub fn check_is_sane(&self) {

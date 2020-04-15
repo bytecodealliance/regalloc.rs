@@ -25,7 +25,7 @@ mod inst_stream;
 mod linear_scan;
 mod trees_maps_sets;
 
-use log::info;
+use log::{info, log_enabled, Level};
 use std::fmt;
 
 // Stuff that is defined by the library
@@ -381,6 +381,13 @@ pub fn allocate_registers<F: Function>(
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     info!("");
     info!("================ regalloc.rs: BEGIN function ================");
+    if log_enabled!(Level::Info) {
+        let strs = rreg_universe.show();
+        info!("using RealRegUniverse:");
+        for s in strs {
+            info!("  {}", s);
+        }
+    }
     let res = match algorithm {
         RegAllocAlgorithm::Backtracking | RegAllocAlgorithm::BacktrackingChecked => {
             let use_checker = algorithm == RegAllocAlgorithm::BacktrackingChecked;
