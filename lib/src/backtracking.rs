@@ -22,7 +22,7 @@ use crate::data_structures::{
     VirtualReg, Writable,
 };
 use crate::inst_stream::{edit_inst_stream, InstToInsert, InstToInsertAndPoint};
-use crate::trees_maps_sets::{ToFromU32, UnionFind, UnionFindEquivClasses};
+use crate::trees_maps_sets::{SparseSetU, ToFromU32, UnionFind, UnionFindEquivClasses};
 use crate::{Function, RegAllocError, RegAllocResult};
 
 //=============================================================================
@@ -1320,7 +1320,7 @@ fn handle_CM_entry(
 fn rec_helper(
     // The running state, threaded through the tree traversal.  These accumulate
     // ranges and costs as we traverse the tree.
-    running_set: &mut Set<VirtualRangeIx>,
+    running_set: &mut SparseSetU<[VirtualRangeIx; 4]>,
     running_cost: &mut SpillCost,
     // The root of the subtree to search.  This changes as we recurse down.
     root: u32,
@@ -1467,11 +1467,11 @@ impl PerRealReg {
         do_not_evict: &Set<VirtualRangeIx>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
         frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-    ) -> Option<(Set<VirtualRangeIx>, SpillCost)> {
+    ) -> Option<(SparseSetU<[VirtualRangeIx; 4]>, SpillCost)> {
         // Firstly, if the commitment tree is for this reg is empty, we can
         // declare success immediately.
         if self.committedFAST.tree.root == AVL_NULL {
-            let evict_set = Set::<VirtualRangeIx>::empty();
+            let evict_set = SparseSetU::<[VirtualRangeIx; 4]>::empty();
             let evict_cost = SpillCost::zero();
             return Some((evict_set, evict_cost));
         }
@@ -1488,7 +1488,7 @@ impl PerRealReg {
 
         // The overall evict set and cost so far.  These are updated as we iterate
         // over the fragments that make up `would_like_to_add`.
-        let mut running_set = Set::<VirtualRangeIx>::empty();
+        let mut running_set = SparseSetU::<[VirtualRangeIx; 4]>::empty();
         let mut running_cost = SpillCost::zero();
 
         // "wlta" = would like to add
@@ -1619,7 +1619,7 @@ impl PerRealReg {
         do_not_evict: &Set<VirtualRangeIx>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
         frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-    ) -> Option<(Set<VirtualRangeIx>, SpillCost)> {
+    ) -> Option<(SparseSetU<[VirtualRangeIx; 4]>, SpillCost)> {
         //let s1 = format!("{:?}", self.committed);
         //let s2 = format!("{:?}", self.committedFAST);
         //debug!("fESF: self.cm  = {}", s1);
@@ -2193,8 +2193,8 @@ pub fn alloc_main<F: Function>(
             } else {
                 &empty_Set_VirtualRangeIx
             };
-            let mb_evict_info: Option<(Set<VirtualRangeIx>, SpillCost)> = per_real_reg[rregNo]
-                .find_Evict_Set(
+            let mb_evict_info: Option<(SparseSetU<[VirtualRangeIx; 4]>, SpillCost)> =
+                per_real_reg[rregNo].find_Evict_Set(
                     curr_vlrix,
                     do_not_evict, // these are not to be considered for eviction
                     &vlr_env,
@@ -2258,13 +2258,18 @@ pub fn alloc_main<F: Function>(
             &Some(ref info) => (info.first, info.last),
         };
 
-        let mut best_so_far: Option<(/*rreg index*/ usize, Set<VirtualRangeIx>, SpillCost)> = None;
+        let mut best_so_far: Option<(
+            /*rreg index*/ usize,
+            SparseSetU<[VirtualRangeIx; 4]>,
+            SpillCost,
+        )> = None;
 
         'search_through_cand_rregs_loop: for rregNo in first_in_rc..last_in_rc + 1 {
             //debug!("--   Cand              {} ...",
             //       reg_universe.regs[rregNo].1);
 
-            let mb_evict_info: Option<(Set<VirtualRangeIx>, SpillCost)> = per_real_reg[rregNo]
+            let mb_evict_info: Option<(SparseSetU<[VirtualRangeIx; 4]>, SpillCost)> = per_real_reg
+                [rregNo]
                 .find_Evict_Set(curr_vlrix, &empty_Set_VirtualRangeIx, &vlr_env, &frag_env);
             //
             //match mb_evict_info {
