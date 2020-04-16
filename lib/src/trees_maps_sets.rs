@@ -1319,13 +1319,7 @@ where
     #[inline(never)]
     fn clone(&self) -> Self {
         match self {
-            SparseSetU::Large { set } => {
-                let mut set2 = FxHashSet::<A::Item>::default();
-                for item in set.iter() {
-                    set2.insert(item.clone());
-                }
-                SparseSetU::Large { set: set2 }
-            }
+            SparseSetU::Large { set } => SparseSetU::Large { set: set.clone() },
             SparseSetU::Small { card, arr } => {
                 let arr2 = arr.clone();
                 SparseSetU::Small {
