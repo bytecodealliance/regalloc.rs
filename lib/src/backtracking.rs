@@ -483,7 +483,8 @@ fn do_coalescing_analysis<F: Function>(
 
     // Range end checks for VRegs
     let doesVRegHaveXXat
-  // true = "last use" false = "first def"
+    // `xxIsLastUse` is true means "XX is last use"
+    // `xxIsLastUse` is false means "XX is first def"
     = |xxIsLastUse: bool, vreg: VirtualReg, iix: InstIx|
     -> Option<VirtualRangeIx> {
       let vreg_no = vreg.get_index();
@@ -515,7 +516,8 @@ fn do_coalescing_analysis<F: Function>(
 
     // Range end checks for RRegs
     let doesRRegHaveXXat
-  // true = "last use" false = "first def"
+    // `xxIsLastUse` is true means "XX is last use"
+    // `xxIsLastUse` is false means "XX is first def"
     = |xxIsLastUse: bool, rreg: RealReg, iix: InstIx|
     -> Option<RealRangeIx> {
       let rreg_no = rreg.get_index();
@@ -1256,7 +1258,7 @@ fn handle_CM_entry(
     pairs: &Vec<FIxAndVLRIx>,
     pairs_ix: usize,
     spill_cost_budget: SpillCost,
-    do_not_evict: &Set<VirtualRangeIx>,
+    do_not_evict: &SparseSetU<[VirtualRangeIx; 16]>,
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     _who: &'static str,
 ) -> bool {
@@ -1325,7 +1327,7 @@ fn rec_helper(
     // The FIxAndVLRIx we want to accommodate, in its components.
     pair_frag: &RangeFrag,
     spill_cost_budget: &SpillCost,
-    do_not_evict: &Set<VirtualRangeIx>,
+    do_not_evict: &SparseSetU<[VirtualRangeIx; 16]>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
 ) -> bool {
@@ -1460,7 +1462,7 @@ impl PerRealReg {
     fn find_Evict_Set_FAST(
         &self,
         would_like_to_add: VirtualRangeIx,
-        do_not_evict: &Set<VirtualRangeIx>,
+        do_not_evict: &SparseSetU<[VirtualRangeIx; 16]>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
         frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     ) -> Option<(SparseSetU<[VirtualRangeIx; 4]>, SpillCost)> {
@@ -1521,7 +1523,7 @@ impl PerRealReg {
     fn find_Evict_Set_CROSSCHECK(
         &self,
         would_like_to_add: VirtualRangeIx,
-        do_not_evict: &Set<VirtualRangeIx>,
+        do_not_evict: &SparseSetU<[VirtualRangeIx; 16]>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
         frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     ) -> Option<(Set<VirtualRangeIx>, SpillCost)> {
@@ -1612,7 +1614,7 @@ impl PerRealReg {
     fn find_Evict_Set(
         &self,
         would_like_to_add: VirtualRangeIx,
-        do_not_evict: &Set<VirtualRangeIx>,
+        do_not_evict: &SparseSetU<[VirtualRangeIx; 16]>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
         frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     ) -> Option<(SparseSetU<[VirtualRangeIx; 4]>, SpillCost)> {
@@ -2026,7 +2028,7 @@ pub fn alloc_main<F: Function>(
     debug!("-- MAIN ALLOCATION LOOP (DI means 'direct', CO means 'coalesced'):");
 
     // A handy constant
-    let empty_Set_VirtualRangeIx = Set::<VirtualRangeIx>::empty();
+    let empty_Set_VirtualRangeIx = SparseSetU::<[VirtualRangeIx; 16]>::empty();
 
     info!("alloc_main:   main allocation loop: begin");
 
@@ -2080,7 +2082,7 @@ pub fn alloc_main<F: Function>(
         // that ordering when copying into `hinted_regs`.
         // FIXME (very) SmallVec
         let mut hinted_regs = SmallVec::<[RealReg; 8]>::new();
-        let mut mb_curr_vlr_eclass: Option<Set<VirtualRangeIx>> = None;
+        let mut mb_curr_vlr_eclass: Option<SparseSetU<[VirtualRangeIx; 16]>> = None;
 
         // === BEGIN collect all hints for `curr_vlr` ===
         // `hints` has one entry per VLR, but only for VLRs which existed
@@ -2124,7 +2126,7 @@ pub fn alloc_main<F: Function>(
 
             // Find the equivalence class set for `curr_vlrix`.  We'll need it
             // later.
-            let mut curr_vlr_eclass = Set::<VirtualRangeIx>::empty();
+            let mut curr_vlr_eclass = SparseSetU::<[VirtualRangeIx; 16]>::empty();
             for vlrix in vlrEquivClasses.equiv_class_elems_iter(curr_vlrix) {
                 curr_vlr_eclass.insert(vlrix);
             }
