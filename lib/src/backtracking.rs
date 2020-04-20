@@ -415,7 +415,7 @@ fn do_coalescing_analysis<F: Function>(
     est_freqs: &TypedIxVec<BlockIx, u32>,
     univ: &RealRegUniverse,
 ) -> (
-    TypedIxVec<VirtualRangeIx, Vec<Hint>>,
+    TypedIxVec<VirtualRangeIx, SmallVec<[Hint; 8]>>,
     UnionFindEquivClasses<VirtualRangeIx>,
     TypedIxVec<InstIx, bool>,
 ) {
@@ -588,8 +588,8 @@ fn do_coalescing_analysis<F: Function>(
     // there are two identical copy insns at different points on the "boundary"
     // for some VLR.  I don't think it matters though since we're going to rank
     // the hints by strength and then choose at most one.
-    let mut hints = TypedIxVec::<VirtualRangeIx, Vec<Hint>>::new();
-    hints.resize(vlr_env.len(), vec![]);
+    let mut hints = TypedIxVec::<VirtualRangeIx, SmallVec<[Hint; 8]>>::new();
+    hints.resize(vlr_env.len(), smallvec![]);
 
     let mut is_vv_boundary_move = TypedIxVec::<InstIx, bool>::new();
     is_vv_boundary_move.resize(func.insns().len() as u32, false);
@@ -1942,7 +1942,7 @@ pub fn alloc_main<F: Function>(
         &est_freqs,
         &reg_universe,
     );
-    let hints: TypedIxVec<VirtualRangeIx, Vec<Hint>> = coalescing_info.0;
+    let hints: TypedIxVec<VirtualRangeIx, SmallVec<[Hint; 8]>> = coalescing_info.0;
     let vlrEquivClasses: UnionFindEquivClasses<VirtualRangeIx> = coalescing_info.1;
     let is_vv_boundary_move: TypedIxVec<InstIx, bool> = coalescing_info.2;
     debug_assert!(hints.len() == vlr_env.len());
