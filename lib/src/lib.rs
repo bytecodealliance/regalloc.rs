@@ -313,6 +313,16 @@ pub struct RegAllocResult<F: Function> {
     /// branch targets appropriately.
     pub target_map: TypedIxVec<BlockIx, InstIx>,
 
+    /// Full mapping from new instruction indices to original instruction
+    /// indices. May be needed by the client to, for example, update metadata
+    /// such as debug/source-location info as the instructions are spliced
+    /// and reordered.
+    ///
+    /// Each entry is an `InstIx`, but may be `InstIx::invalid_value()` if the
+    /// new instruction at this new index was inserted by the allocator
+    /// (i.e., if it is a load, spill or move instruction).
+    pub orig_insn_map: TypedIxVec</* new */ InstIx, /* orig */ InstIx>,
+
     /// Which real registers were overwritten? This will contain all real regs
     /// that appear as defs or modifies in register slots of the output
     /// instruction list.  This will only list registers that are available to

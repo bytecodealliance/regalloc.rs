@@ -432,7 +432,14 @@ fn map_vregs_to_rregs<F: Function>(
 fn add_spills_reloads_and_moves<F: Function>(
     func: &mut F,
     mut insts_to_add: Vec<InstToInsertAndPoint>,
-) -> Result<(Vec<F::Inst>, TypedIxVec<BlockIx, InstIx>), String> {
+) -> Result<
+    (
+        Vec<F::Inst>,
+        TypedIxVec<BlockIx, InstIx>,
+        TypedIxVec<InstIx, InstIx>,
+    ),
+    String,
+> {
     // Construct the final code by interleaving the mapped code with the the
     // spills, reloads and moves that we have been requested to insert.  To do
     // that requires having the latter sorted by InstPoint.
@@ -447,6 +454,9 @@ fn add_spills_reloads_and_moves<F: Function>(
 
     let mut insns: Vec<F::Inst> = vec![];
     let mut target_map: TypedIxVec<BlockIx, InstIx> = TypedIxVec::new();
+    let mut orig_insn_map: TypedIxVec<InstIx, InstIx> = TypedIxVec::new();
+    target_map.reserve(func.blocks().len());
+    orig_insn_map.reserve(func.insn_indices().len() + insts_to_add.len());
 
     for iix in func.insn_indices() {
         // Is `iix` the first instruction in a block?  Meaning, are we
@@ -463,15 +473,18 @@ fn add_spills_reloads_and_moves<F: Function>(
             && insts_to_add[curITA].point == InstPoint::new_reload(iix)
         {
             insns.push(insts_to_add[curITA].inst.construct(func));
+            orig_insn_map.push(InstIx::invalid_value());
             curITA += 1;
         }
         // Copy the inst at `iix` itself
+        orig_insn_map.push(iix);
         insns.push(func.get_insn(iix).clone());
         // And copy the extra insts that are to be placed at the spill point of
         // `iix`.
         while curITA < insts_to_add.len() && insts_to_add[curITA].point == InstPoint::new_spill(iix)
         {
             insns.push(insts_to_add[curITA].inst.construct(func));
+            orig_insn_map.push(InstIx::invalid_value());
             curITA += 1;
         }
 
@@ -485,7 +498,7 @@ fn add_spills_reloads_and_moves<F: Function>(
     debug_assert!(curITA == insts_to_add.len());
     debug_assert!(curB.get() == func.blocks().len() as u32);
 
-    Ok((insns, target_map))
+    Ok((insns, target_map, orig_insn_map))
 }
 
 //=============================================================================
@@ -501,7 +514,14 @@ pub(crate) fn edit_inst_stream<F: Function>(
     reg_universe: &RealRegUniverse,
     has_multiple_blocks_per_frag: bool,
     use_checker: bool,
-) -> Result<(Vec<F::Inst>, TypedIxVec<BlockIx, InstIx>), RegAllocError> {
+) -> Result<
+    (
+        Vec<F::Inst>,
+        TypedIxVec<BlockIx, InstIx>,
+        TypedIxVec<InstIx, InstIx>,
+    ),
+    RegAllocError,
+> {
     map_vregs_to_rregs(
         func,
         frag_map,

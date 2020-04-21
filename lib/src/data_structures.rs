@@ -435,21 +435,38 @@ macro_rules! generate_boilerplate {
             #[allow(dead_code)]
             #[inline(always)]
             pub fn new(n: u32) -> Self {
+                debug_assert!(n != u32::max_value());
                 Self::$TypeIx(n)
             }
             #[allow(dead_code)]
             #[inline(always)]
-            pub fn max_value() -> Self {
-                Self::$TypeIx(u32::max_value())
+            pub const fn max_value() -> Self {
+                Self::$TypeIx(u32::max_value() - 1)
             }
             #[allow(dead_code)]
             #[inline(always)]
-            pub fn min_value() -> Self {
+            pub const fn min_value() -> Self {
                 Self::$TypeIx(u32::min_value())
             }
             #[allow(dead_code)]
             #[inline(always)]
+            pub const fn invalid_value() -> Self {
+                Self::$TypeIx(u32::max_value())
+            }
+            #[allow(dead_code)]
+            #[inline(always)]
+            pub fn is_valid(self) -> bool {
+                self != Self::invalid_value()
+            }
+            #[allow(dead_code)]
+            #[inline(always)]
+            pub fn is_invalid(self) -> bool {
+                self == Self::invalid_value()
+            }
+            #[allow(dead_code)]
+            #[inline(always)]
             pub fn get(self) -> u32 {
+                debug_assert!(self.is_valid());
                 match self {
                     $TypeIx::$TypeIx(n) => n,
                 }
@@ -457,39 +474,49 @@ macro_rules! generate_boilerplate {
             #[allow(dead_code)]
             #[inline(always)]
             pub fn plus(self, delta: u32) -> $TypeIx {
+                debug_assert!(self.is_valid());
                 $TypeIx::$TypeIx(self.get() + delta)
             }
             #[allow(dead_code)]
             #[inline(always)]
             pub fn minus(self, delta: u32) -> $TypeIx {
+                debug_assert!(self.is_valid());
                 $TypeIx::$TypeIx(self.get() - delta)
             }
             #[allow(dead_code)]
             pub fn dotdot(&self, last_plus1: $TypeIx) -> Range<$TypeIx> {
+                debug_assert!(self.is_valid());
                 let len = (last_plus1.get() - self.get()) as usize;
                 Range::new(*self, len)
             }
         }
         impl fmt::Debug for $TypeIx {
             fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-                write!(fmt, "{}{}", $PrintingPrefix, &self.get())
+                if self.is_invalid() {
+                    write!(fmt, "{}<NONE>", $PrintingPrefix)
+                } else {
+                    write!(fmt, "{}{}", $PrintingPrefix, &self.get())
+                }
             }
         }
         impl PlusOne for $TypeIx {
             #[inline(always)]
             fn plus_one(&self) -> Self {
+                debug_assert!(self.is_valid());
                 self.plus(1)
             }
         }
         impl PlusN for $TypeIx {
             #[inline(always)]
             fn plus_n(&self, n: usize) -> Self {
+                debug_assert!(self.is_valid());
                 self.plus(n as u32)
             }
         }
         impl Into<u32> for $TypeIx {
             #[inline(always)]
             fn into(self) -> u32 {
+                debug_assert!(self.is_valid());
                 self.get()
             }
         }
