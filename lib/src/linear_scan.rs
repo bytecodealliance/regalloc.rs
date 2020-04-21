@@ -3251,7 +3251,7 @@ fn apply_registers<F: Function>(
         use_checker,
     );
 
-    let (final_insns, target_map) = match final_insns_and_targetmap_or_err {
+    let (final_insns, target_map, orig_insn_map) = match final_insns_and_targetmap_or_err {
         Err(e) => return Err(e),
         Ok(pair) => pair,
     };
@@ -3295,6 +3295,7 @@ fn apply_registers<F: Function>(
     let ra_res = RegAllocResult {
         insns: final_insns,
         target_map,
+        orig_insn_map,
         clobbered_registers,
         num_spill_slots,
         block_annotations: None,

@@ -180,7 +180,7 @@ impl SpillSlotAllocator {
             self.slots.push(LogicalSpillSlot::Unavail);
         }
         // And now the new slot.
-        let dflt = RangeFragIx::new(0xFFFF_FFFF); // value is unimportant
+        let dflt = RangeFragIx::invalid_value();
         let tree = AVLTree::<RangeFragIx>::new(dflt);
         let res = self.slots.len() as u32;
         self.slots.push(LogicalSpillSlot::InUse {
@@ -1108,12 +1108,11 @@ fn cmp_tree_entries_for_CommitmentMapFAST(
 impl CommitmentMapFAST {
     pub fn new() -> Self {
         // The AVL tree constructor needs a default value for the elements.  It
-        // will never be used.  To be on the safe side, give it something that
-        // will show as obviously bogus if we ever try to "dereference" any part
-        // of it.
+        // will never be used.  The not-present index value will show as
+        // obviously bogus if we ever try to "dereference" any part of it.
         let dflt = FIxAndVLRIx::new(
-            RangeFragIx::new(0xFFFF_FFFF),
-            Some(VirtualRangeIx::new(0xFFFF_FFFF)),
+            RangeFragIx::invalid_value(),
+            Some(VirtualRangeIx::invalid_value()),
         );
         Self {
             tree: AVLTree::<FIxAndVLRIx>::new(dflt),
@@ -1740,7 +1739,7 @@ fn frags_are_mergeable(frag1: &RangeFrag, frag2: &RangeFrag) -> bool {
     false
 }
 
-const Z_INVALID_BLOCKIX: BlockIx = BlockIx::BlockIx(0xFFFF_FFFF);
+const Z_INVALID_BLOCKIX: BlockIx = BlockIx::invalid_value();
 const Z_INVALID_COUNT: u16 = 0xFFFF;
 
 // Try and compress the fragments for each virtual range in `vlr_env`, adding
@@ -2803,7 +2802,7 @@ pub fn alloc_main<F: Function>(
     // ======== BEGIN Create the RegAllocResult ========
 
     match final_insns_and_targetmap__or_err {
-        Ok((ref final_insns, ref _targetmap)) => {
+        Ok((ref final_insns, ..)) => {
             info!(
                 "alloc_main:   out: VLRs: {} initially, {} processed",
                 num_vlrs_initial, num_vlrs_processed
@@ -2829,7 +2828,7 @@ pub fn alloc_main<F: Function>(
         }
     }
 
-    let (final_insns, target_map) = match final_insns_and_targetmap__or_err {
+    let (final_insns, target_map, orig_insn_map) = match final_insns_and_targetmap__or_err {
         Err(e) => {
             info!("alloc_main: fail");
             return Err(e);
@@ -2891,6 +2890,7 @@ pub fn alloc_main<F: Function>(
     let ra_res = RegAllocResult {
         insns: final_insns,
         target_map,
+        orig_insn_map,
         clobbered_registers,
         num_spill_slots: spill_slot_allocator.slots.len() as u32,
         block_annotations,
