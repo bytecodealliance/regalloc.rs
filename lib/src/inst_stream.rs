@@ -147,20 +147,11 @@ fn map_vregs_to_rregs<F: Function>(
             .unwrap()
     });
 
-    //debug!("Firsts: {}", fragMapsByStart.show());
-    //debug!("Lasts:  {}", fragMapsByEnd.show());
-
     let mut cursor_starts = 0;
     let mut cursor_ends = 0;
     let mut cursor_nop = 0;
 
     let mut map = Map::<VirtualReg, RealReg>::default();
-
-    //fn showMap(m: &Map<VirtualReg, RealReg>) -> String {
-    //  let mut vec: Vec<(&VirtualReg, &RealReg)> = m.iter().collect();
-    //  vec.sort_by(|p1, p2| p1.0.partial_cmp(p2.0).unwrap());
-    //  format!("{:?}", vec)
-    //}
 
     fn is_sane(frag: &RangeFrag) -> bool {
         // "Normal" frag (unrelated to spilling).  No normal frag may start or
@@ -195,10 +186,6 @@ fn map_vregs_to_rregs<F: Function>(
         assert!(insnIx.get() as i32 > lastInsnIx);
         lastInsnIx = insnIx.get() as i32;
 
-        //debug!("");
-        //debug!("QQQQ insn {}: {}",
-        //         insnIx, func.insns[insnIx].show());
-        //debug!("QQQQ init map {}", showMap(&map));
         // advance [cursorStarts, +numStarts) to the group for insnIx
         while cursor_starts < frag_maps_by_start.len()
             && frag_env[frag_maps_by_start[cursor_starts].0].first.iix < insnIx
@@ -241,20 +228,6 @@ fn map_vregs_to_rregs<F: Function>(
         // order.  And fragMapsByEnd[cursorEnd, +numEnd) are the RangeFragIxs
         // for fragments that end at this instruction.
 
-        //debug!("insn no {}:", insnIx);
-        //for j in cursorStarts .. cursorStarts + numStarts {
-        //    debug!("   s: {} {}",
-        //             (fragMapsByStart[j].1, fragMapsByStart[j].2).show(),
-        //             frag_env[ fragMapsByStart[j].0 ]
-        //             .show());
-        //}
-        //for j in cursorEnds .. cursorEnds + numEnds {
-        //    debug!("   e: {} {}",
-        //             (fragMapsByEnd[j].1, fragMapsByEnd[j].2).show(),
-        //             frag_env[ fragMapsByEnd[j].0 ]
-        //             .show());
-        //}
-
         // Sanity check all frags.  In particular, reload and spill frags are
         // heavily constrained.  No functional effect.
         for j in cursor_starts..cursor_starts + numStarts {
@@ -287,8 +260,6 @@ fn map_vregs_to_rregs<F: Function>(
         //   remove frags ending at I.s
         // apply map_uses/map_defs to I
 
-        //debug!("QQQQ mapping insn {:?}", insnIx);
-        //debug!("QQQQ current map {}", showMap(&map));
         trace!("current map {:?}", map);
 
         // Update map for I.r:
@@ -299,10 +270,6 @@ fn map_vregs_to_rregs<F: Function>(
             if frag.first.pt.is_reload() {
                 //////// STARTS at I.r
                 map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
-                //debug!(
-                //  "QQQQ inserted frag from reload: {:?} -> {:?}",
-                //  fragMapsByStart[j].1, fragMapsByStart[j].2
-                //);
             }
         }
 
@@ -315,10 +282,6 @@ fn map_vregs_to_rregs<F: Function>(
             if frag.first.pt.is_use() {
                 //////// STARTS at I.u
                 map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
-                //debug!(
-                //  "QQQQ inserted frag from use: {:?} -> {:?}",
-                //  fragMapsByStart[j].1, fragMapsByStart[j].2
-                //);
             }
         }
         let map_uses = map.clone();
@@ -327,7 +290,6 @@ fn map_vregs_to_rregs<F: Function>(
             if frag.last.pt.is_use() {
                 //////// ENDS at I.U
                 map.remove(&frag_maps_by_end[j].1);
-                //debug!("QQQQ removed frag after use: {:?}", fragMapsByStart[j].1);
             }
         }
 
@@ -343,10 +305,6 @@ fn map_vregs_to_rregs<F: Function>(
             if frag.first.pt.is_def() {
                 //////// STARTS at I.d
                 map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
-                //debug!(
-                //  "QQQQ inserted frag from def: {:?} -> {:?}",
-                //  fragMapsByStart[j].1, fragMapsByStart[j].2
-                //);
             }
         }
         let map_defs = map.clone();
@@ -355,7 +313,6 @@ fn map_vregs_to_rregs<F: Function>(
             if frag.last.pt.is_def() {
                 //////// ENDS at I.d
                 map.remove(&frag_maps_by_end[j].1);
-                //debug!("QQQQ ended frag from def: {:?}", fragMapsByEnd[j].1);
             }
         }
 
@@ -370,12 +327,8 @@ fn map_vregs_to_rregs<F: Function>(
             if frag.last.pt.is_spill() {
                 //////// ENDS at I.s
                 map.remove(&frag_maps_by_end[j].1);
-                //debug!("QQQQ ended frag from spill: {:?}", fragMapsByEnd[j].1);
             }
         }
-
-        //debug!("QQQQ map_uses {}", showMap(&map_uses));
-        //debug!("QQQQ map_defs {}", showMap(&map_defs));
 
         // If we have a checker, update it with spills, reloads, moves, and this
         // instruction, while we have `map_uses` and `map_defs` available.
@@ -386,7 +339,6 @@ fn map_vregs_to_rregs<F: Function>(
             // We only build the insn->block index when the checker is enabled, so
             // we can only perform this debug-assert here.
             if func.block_insns(blockIx).last() == insnIx {
-                //debug!("Block end");
                 debug_assert!(has_multiple_blocks_per_frag || map.is_empty());
             }
         }
