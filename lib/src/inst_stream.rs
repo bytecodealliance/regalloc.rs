@@ -1,6 +1,3 @@
-#![allow(non_snake_case)]
-#![allow(non_camel_case_types)]
-
 use crate::checker::Inst as CheckerInst;
 use crate::checker::{CheckerContext, CheckerErrors};
 use crate::data_structures::{
@@ -112,9 +109,9 @@ fn map_vregs_to_rregs<F: Function>(
     if use_checker {
         checker = Some(CheckerContext::new(func, reg_universe, insts_to_add));
         insn_blocks.resize(func.insns().len(), BlockIx::new(0));
-        for blockIx in func.blocks() {
-            for insnIx in func.block_insns(blockIx) {
-                insn_blocks[insnIx.get() as usize] = blockIx;
+        for block_ix in func.blocks() {
+            for insn_ix in func.block_insns(block_ix) {
+                insn_blocks[insn_ix.get() as usize] = block_ix;
             }
         }
     }
@@ -180,66 +177,69 @@ fn map_vregs_to_rregs<F: Function>(
         false
     }
 
-    let mut lastInsnIx = -1;
-    for insnIx in func.insn_indices() {
+    let mut last_insn_ix = -1;
+    for insn_ix in func.insn_indices() {
         // Ensure instruction indices are in order. Logic below requires this.
-        assert!(insnIx.get() as i32 > lastInsnIx);
-        lastInsnIx = insnIx.get() as i32;
+        assert!(insn_ix.get() as i32 > last_insn_ix);
+        last_insn_ix = insn_ix.get() as i32;
 
-        // advance [cursorStarts, +numStarts) to the group for insnIx
+        // advance [cursorStarts, +num_starts) to the group for insn_ix
         while cursor_starts < frag_maps_by_start.len()
-            && frag_env[frag_maps_by_start[cursor_starts].0].first.iix < insnIx
+            && frag_env[frag_maps_by_start[cursor_starts].0].first.iix < insn_ix
         {
             cursor_starts += 1;
         }
-        let mut numStarts = 0;
-        while cursor_starts + numStarts < frag_maps_by_start.len()
-            && frag_env[frag_maps_by_start[cursor_starts + numStarts].0]
+        let mut num_starts = 0;
+        while cursor_starts + num_starts < frag_maps_by_start.len()
+            && frag_env[frag_maps_by_start[cursor_starts + num_starts].0]
                 .first
                 .iix
-                == insnIx
+                == insn_ix
         {
-            numStarts += 1;
+            num_starts += 1;
         }
 
-        // advance [cursorEnds, +numEnds) to the group for insnIx
+        // advance [cursorEnds, +num_ends) to the group for insn_ix
         while cursor_ends < frag_maps_by_end.len()
-            && frag_env[frag_maps_by_end[cursor_ends].0].last.iix < insnIx
+            && frag_env[frag_maps_by_end[cursor_ends].0].last.iix < insn_ix
         {
             cursor_ends += 1;
         }
-        let mut numEnds = 0;
-        while cursor_ends + numEnds < frag_maps_by_end.len()
-            && frag_env[frag_maps_by_end[cursor_ends + numEnds].0].last.iix == insnIx
+        let mut num_ends = 0;
+        while cursor_ends + num_ends < frag_maps_by_end.len()
+            && frag_env[frag_maps_by_end[cursor_ends + num_ends].0]
+                .last
+                .iix
+                == insn_ix
         {
-            numEnds += 1;
+            num_ends += 1;
         }
 
         // advance cursor_nop in the iixs_to_nop_out list.
-        while cursor_nop < iixs_to_nop_out.len() && iixs_to_nop_out[cursor_nop] < insnIx {
+        while cursor_nop < iixs_to_nop_out.len() && iixs_to_nop_out[cursor_nop] < insn_ix {
             cursor_nop += 1;
         }
 
         let nop_this_insn =
-            cursor_nop < iixs_to_nop_out.len() && iixs_to_nop_out[cursor_nop] == insnIx;
+            cursor_nop < iixs_to_nop_out.len() && iixs_to_nop_out[cursor_nop] == insn_ix;
 
-        // So now, fragMapsByStart[cursorStarts, +numStarts) are the mappings
+        // So now, fragMapsByStart[cursorStarts, +num_starts) are the mappings
         // for fragments that begin at this instruction, in no particular
         // order.  And fragMapsByEnd[cursorEnd, +numEnd) are the RangeFragIxs
         // for fragments that end at this instruction.
 
         // Sanity check all frags.  In particular, reload and spill frags are
         // heavily constrained.  No functional effect.
-        for j in cursor_starts..cursor_starts + numStarts {
+        for j in cursor_starts..cursor_starts + num_starts {
             let frag = &frag_env[frag_maps_by_start[j].0];
             // "It really starts here, as claimed."
-            debug_assert!(frag.first.iix == insnIx);
+            debug_assert!(frag.first.iix == insn_ix);
             debug_assert!(is_sane(&frag));
         }
-        for j in cursor_ends..cursor_ends + numEnds {
+        for j in cursor_ends..cursor_ends + num_ends {
             let frag = &frag_env[frag_maps_by_end[j].0];
             // "It really ends here, as claimed."
-            debug_assert!(frag.last.iix == insnIx);
+            debug_assert!(frag.last.iix == insn_ix);
             debug_assert!(is_sane(frag));
         }
 
@@ -265,7 +265,7 @@ fn map_vregs_to_rregs<F: Function>(
         // Update map for I.r:
         //   add frags starting at I.r
         //   no frags should end at I.r (it's a reload insn)
-        for j in cursor_starts..cursor_starts + numStarts {
+        for j in cursor_starts..cursor_starts + num_starts {
             let frag = &frag_env[frag_maps_by_start[j].0];
             if frag.first.pt.is_reload() {
                 //////// STARTS at I.r
@@ -277,7 +277,7 @@ fn map_vregs_to_rregs<F: Function>(
         //   add frags starting at I.u
         //   map_uses := map
         //   remove frags ending at I.u
-        for j in cursor_starts..cursor_starts + numStarts {
+        for j in cursor_starts..cursor_starts + num_starts {
             let frag = &frag_env[frag_maps_by_start[j].0];
             if frag.first.pt.is_use() {
                 //////// STARTS at I.u
@@ -285,7 +285,7 @@ fn map_vregs_to_rregs<F: Function>(
             }
         }
         let map_uses = map.clone();
-        for j in cursor_ends..cursor_ends + numEnds {
+        for j in cursor_ends..cursor_ends + num_ends {
             let frag = &frag_env[frag_maps_by_end[j].0];
             if frag.last.pt.is_use() {
                 //////// ENDS at I.U
@@ -300,7 +300,7 @@ fn map_vregs_to_rregs<F: Function>(
         //   add frags starting at I.d
         //   map_defs := map
         //   remove frags ending at I.d
-        for j in cursor_starts..cursor_starts + numStarts {
+        for j in cursor_starts..cursor_starts + num_starts {
             let frag = &frag_env[frag_maps_by_start[j].0];
             if frag.first.pt.is_def() {
                 //////// STARTS at I.d
@@ -308,7 +308,7 @@ fn map_vregs_to_rregs<F: Function>(
             }
         }
         let map_defs = map.clone();
-        for j in cursor_ends..cursor_ends + numEnds {
+        for j in cursor_ends..cursor_ends + num_ends {
             let frag = &frag_env[frag_maps_by_end[j].0];
             if frag.last.pt.is_def() {
                 //////// ENDS at I.d
@@ -322,7 +322,7 @@ fn map_vregs_to_rregs<F: Function>(
         // Update map for I.s:
         //   no frags should start at I.s (it's a spill insn)
         //   remove frags ending at I.s
-        for j in cursor_ends..cursor_ends + numEnds {
+        for j in cursor_ends..cursor_ends + num_ends {
             let frag = &frag_env[frag_maps_by_end[j].0];
             if frag.last.pt.is_spill() {
                 //////// ENDS at I.s
@@ -333,12 +333,12 @@ fn map_vregs_to_rregs<F: Function>(
         // If we have a checker, update it with spills, reloads, moves, and this
         // instruction, while we have `map_uses` and `map_defs` available.
         if let &mut Some(ref mut checker) = &mut checker {
-            let blockIx = insn_blocks[insnIx.get() as usize];
-            checker.handle_insn(reg_universe, func, blockIx, insnIx, &map_uses, &map_defs)?;
+            let block_ix = insn_blocks[insn_ix.get() as usize];
+            checker.handle_insn(reg_universe, func, block_ix, insn_ix, &map_uses, &map_defs)?;
 
             // We only build the insn->block index when the checker is enabled, so
             // we can only perform this debug-assert here.
-            if func.block_insns(blockIx).last() == insnIx {
+            if func.block_insns(block_ix).last() == insn_ix {
                 debug_assert!(has_multiple_blocks_per_frag || map.is_empty());
             }
         }
@@ -346,8 +346,8 @@ fn map_vregs_to_rregs<F: Function>(
         // Finally, we have map_uses/map_defs set correctly for this instruction.
         // Apply it.
         if !nop_this_insn {
-            trace!("map_regs for {:?}", insnIx);
-            let mut insn = func.get_insn_mut(insnIx);
+            trace!("map_regs for {:?}", insn_ix);
+            let mut insn = func.get_insn_mut(insn_ix);
             F::map_regs(&mut insn, &map_uses, &map_defs);
             trace!("mapped instruction: {:?}", insn);
         } else {
@@ -355,15 +355,15 @@ fn map_vregs_to_rregs<F: Function>(
             // checker call, because the checker must observe even elided moves
             // (they may carry useful information about a move between two virtual
             // locations mapped to the same physical location).
-            trace!("nop'ing out {:?}", insnIx);
+            trace!("nop'ing out {:?}", insn_ix);
             let nop = func.gen_zero_len_nop();
-            let insn = func.get_insn_mut(insnIx);
+            let insn = func.get_insn_mut(insn_ix);
             *insn = nop;
         }
 
         // Update cursorStarts and cursorEnds for the next iteration
-        cursor_starts += numStarts;
-        cursor_ends += numEnds;
+        cursor_starts += num_starts;
+        cursor_ends += num_ends;
     }
 
     debug_assert!(map.is_empty());
@@ -401,8 +401,8 @@ fn add_spills_reloads_and_moves<F: Function>(
 
     insts_to_add.sort_by_key(|mem_move| mem_move.point);
 
-    let mut curITA = 0; // cursor in `insts_to_add`
-    let mut curB = BlockIx::new(0); // cursor in Func::blocks
+    let mut cur_inst_to_add = 0;
+    let mut cur_block = BlockIx::new(0);
 
     let mut insns: Vec<F::Inst> = vec![];
     let mut target_map: TypedIxVec<BlockIx, InstIx> = TypedIxVec::new();
@@ -413,42 +413,45 @@ fn add_spills_reloads_and_moves<F: Function>(
     for iix in func.insn_indices() {
         // Is `iix` the first instruction in a block?  Meaning, are we
         // starting a new block?
-        debug_assert!(curB.get() < func.blocks().len() as u32);
-        if func.block_insns(curB).start() == iix {
-            assert!(curB.get() == target_map.len());
+        debug_assert!(cur_block.get() < func.blocks().len() as u32);
+        if func.block_insns(cur_block).start() == iix {
+            assert!(cur_block.get() == target_map.len());
             target_map.push(InstIx::new(insns.len() as u32));
         }
 
         // Copy to the output vector, the extra insts that are to be placed at the
         // reload point of `iix`.
-        while curITA < insts_to_add.len()
-            && insts_to_add[curITA].point == InstPoint::new_reload(iix)
+        while cur_inst_to_add < insts_to_add.len()
+            && insts_to_add[cur_inst_to_add].point == InstPoint::new_reload(iix)
         {
-            insns.push(insts_to_add[curITA].inst.construct(func));
+            insns.push(insts_to_add[cur_inst_to_add].inst.construct(func));
             orig_insn_map.push(InstIx::invalid_value());
-            curITA += 1;
+            cur_inst_to_add += 1;
         }
+
         // Copy the inst at `iix` itself
         orig_insn_map.push(iix);
         insns.push(func.get_insn(iix).clone());
+
         // And copy the extra insts that are to be placed at the spill point of
         // `iix`.
-        while curITA < insts_to_add.len() && insts_to_add[curITA].point == InstPoint::new_spill(iix)
+        while cur_inst_to_add < insts_to_add.len()
+            && insts_to_add[cur_inst_to_add].point == InstPoint::new_spill(iix)
         {
-            insns.push(insts_to_add[curITA].inst.construct(func));
+            insns.push(insts_to_add[cur_inst_to_add].inst.construct(func));
             orig_insn_map.push(InstIx::invalid_value());
-            curITA += 1;
+            cur_inst_to_add += 1;
         }
 
         // Is `iix` the last instruction in a block?
-        if iix == func.block_insns(curB).last() {
-            debug_assert!(curB.get() < func.blocks().len() as u32);
-            curB = curB.plus(1);
+        if iix == func.block_insns(cur_block).last() {
+            debug_assert!(cur_block.get() < func.blocks().len() as u32);
+            cur_block = cur_block.plus(1);
         }
     }
 
-    debug_assert!(curITA == insts_to_add.len());
-    debug_assert!(curB.get() == func.blocks().len() as u32);
+    debug_assert!(cur_inst_to_add == insts_to_add.len());
+    debug_assert!(cur_block.get() == func.blocks().len() as u32);
 
     Ok((insns, target_map, orig_insn_map))
 }
