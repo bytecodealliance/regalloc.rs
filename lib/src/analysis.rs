@@ -14,7 +14,7 @@ use crate::trees_maps_sets::{SparseSet, SparseSetU, ToFromU32, UnionFind};
 use crate::Function;
 
 //=============================================================================
-// Debugging config.  Set all these to |false| for normal operation.
+// Debugging config.  Set all these to `false` for normal operation.
 
 // DEBUGGING: set to true to cross-check the merge_RangeFrags machinery.
 const CROSSCHECK_MERGE: bool = false;

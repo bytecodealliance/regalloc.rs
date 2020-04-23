@@ -22,7 +22,7 @@ use crate::trees_maps_sets::{SparseSetU, ToFromU32, UnionFind, UnionFindEquivCla
 use crate::{Function, RegAllocError, RegAllocResult};
 
 //=============================================================================
-// Debugging config.  Set all these to |false| for normal operation.
+// Debugging config.  Set all these to `false` for normal operation.
 
 // DEBUGGING: set to true to cross-check the CommitmentMap machinery.
 const CROSSCHECK_CM: bool = false;
