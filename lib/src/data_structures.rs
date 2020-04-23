@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 //! Data structures for the whole crate.
 
 use rustc_hash::FxHashMap;
@@ -950,14 +948,14 @@ impl<'a> RegUsageCollector<'a> {
     }
     // The presence of the following two is a hack, needed to support fuzzing
     // in the test framework.  Real clients should not call them.
-    pub fn get_use_def_mod_vecs_TEST_FRAMEWORK_ONLY(&self) -> (Vec<Reg>, Vec<Reg>, Vec<Reg>) {
+    pub fn get_use_def_mod_vecs_test_framework_only(&self) -> (Vec<Reg>, Vec<Reg>, Vec<Reg>) {
         (
             self.reg_vecs.uses.clone(),
             self.reg_vecs.defs.clone(),
             self.reg_vecs.mods.clone(),
         )
     }
-    pub fn get_empty_RegVecs_TEST_FRAMEWORK_ONLY(sanitized: bool) -> RegVecs {
+    pub fn get_empty_reg_vecs_test_framework_only(sanitized: bool) -> RegVecs {
         RegVecs::new(sanitized)
     }
 }
@@ -976,6 +974,7 @@ pub struct RegVecs {
     pub mods: Vec<Reg>,
     sanitized: bool,
 }
+
 impl RegVecs {
     pub fn new(sanitized: bool) -> Self {
         Self {
@@ -1013,6 +1012,7 @@ pub struct RegVecBounds {
     pub defs_len: u8,
     pub mods_len: u8,
 }
+
 impl RegVecBounds {
     pub fn new() -> Self {
         Self {
@@ -1035,6 +1035,7 @@ pub struct RegVecsAndBounds {
     // groups in `vecs`.
     pub bounds: TypedIxVec<InstIx, RegVecBounds>,
 }
+
 impl RegVecsAndBounds {
     pub fn new(vecs: RegVecs, bounds: TypedIxVec<InstIx, RegVecBounds>) -> Self {
         Self { vecs, bounds }
@@ -1061,6 +1062,7 @@ pub struct RegSets {
     pub mods: Set<Reg>, // registers that are modified.
     sanitized: bool,
 }
+
 impl RegSets {
     pub fn new(sanitized: bool) -> Self {
         Self {
@@ -1172,29 +1174,28 @@ impl RealRegUniverse {
     pub fn show(&self) -> Vec<String> {
         let mut res = vec![];
         // Show the allocables
-        for classNo in 0..NUM_REG_CLASSES {
-            let mb_classInfo = &self.allocable_by_class[classNo];
-            if mb_classInfo.is_none() {
-                continue;
-            }
-            let classInfo = &mb_classInfo.unwrap();
-            let class = RegClass::rc_from_u32(classNo as u32);
-            let mut classStr = "class ".to_string()
+        for class_num in 0..NUM_REG_CLASSES {
+            let class_info = match &self.allocable_by_class[class_num] {
+                None => continue,
+                Some(info) => info,
+            };
+            let class = RegClass::rc_from_u32(class_num as u32);
+            let mut class_str = "class ".to_string()
                 + &class.long_name().to_string()
                 + &"(".to_string()
                 + &class.short_name().to_string()
                 + &") at ".to_string();
-            classStr = classStr + &format!("[{} .. {}]: ", classInfo.first, classInfo.last);
-            for ix in classInfo.first..=classInfo.last {
-                classStr = classStr + &self.regs[ix].1;
-                if let Some(suggestedIx) = classInfo.suggested_scratch {
-                    if ix == suggestedIx {
-                        classStr = classStr + "*";
+            class_str = class_str + &format!("[{} .. {}]: ", class_info.first, class_info.last);
+            for ix in class_info.first..=class_info.last {
+                class_str = class_str + &self.regs[ix].1;
+                if let Some(suggested_ix) = class_info.suggested_scratch {
+                    if ix == suggested_ix {
+                        class_str = class_str + "*";
                     }
                 }
-                classStr = classStr + " ";
+                class_str = class_str + " ";
             }
-            res.push(classStr);
+            res.push(class_str);
         }
         // And the non-allocables
         if self.allocable < self.regs.len() {
@@ -1331,12 +1332,14 @@ impl RealRegUniverse {
 // * A reload for instruction i is considered to be live from i.R to i.U.
 //
 // * A spill for instruction i is considered to be live from i.D to i.S.
+
 pub enum Point {
     Reload,
     Use,
     Def,
     Spill,
 }
+
 impl Point {
     pub fn min_value() -> Self {
         Self::Reload
@@ -1372,6 +1375,7 @@ impl Point {
         self.is_use() || self.is_def()
     }
 }
+
 impl PartialOrd for Point {
     // In short .. R < U < D < S.  This is probably what would be #derive'd
     // anyway, but we need to be sure.
@@ -1396,6 +1400,7 @@ pub struct InstPoint {
     pub iix: InstIx,
     pub pt: Point,
 }
+
 impl InstPoint {
     #[inline(always)]
     pub fn new(iix: InstIx, pt: Point) -> Self {
@@ -1437,7 +1442,20 @@ impl InstPoint {
             Point::Spill => InstPoint::new(self.iix.plus(1), Point::Reload),
         }
     }
+    pub fn max_value() -> Self {
+        Self {
+            iix: InstIx::max_value(),
+            pt: Point::max_value(),
+        }
+    }
+    pub fn min_value() -> Self {
+        Self {
+            iix: InstIx::min_value(),
+            pt: Point::min_value(),
+        }
+    }
 }
+
 impl PartialOrd for InstPoint {
     // Again .. don't assume anything about the #derive'd version.  These have
     // to be ordered using `iix` as the primary key and `pt` as the
@@ -1468,21 +1486,6 @@ impl fmt::Debug for InstPoint {
     }
 }
 
-impl InstPoint {
-    pub fn max_value() -> Self {
-        Self {
-            iix: InstIx::max_value(),
-            pt: Point::max_value(),
-        }
-    }
-    pub fn min_value() -> Self {
-        Self {
-            iix: InstIx::min_value(),
-            pt: Point::min_value(),
-        }
-    }
-}
-
 // A handy summary hint for a RangeFrag.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RangeFragKind {
@@ -1495,6 +1498,7 @@ pub enum RangeFragKind {
     // clean up and improve the compression.
     Multi, // Fragment spans multiple blocks ("is compressed")
 }
+
 impl fmt::Debug for RangeFragKind {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -1566,6 +1570,7 @@ impl fmt::Debug for RangeFragKind {
 // The `bix` field is actually redundant, since the containing `Block` can be
 // inferred, laboriously, from `first` and `last`, providing you have a
 // `Block` table to hand.  It is included here for convenience.
+
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RangeFrag {
     pub bix: BlockIx,
@@ -1574,6 +1579,7 @@ pub struct RangeFrag {
     pub last: InstPoint,
     pub count: u16,
 }
+
 impl fmt::Debug for RangeFrag {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -1643,6 +1649,7 @@ pub fn cmp_range_frags(f1: &RangeFrag, f2: &RangeFrag) -> Option<Ordering> {
     }
     None
 }
+
 impl RangeFrag {
     pub fn contains(&self, ipt: &InstPoint) -> bool {
         self.first <= *ipt && *ipt <= self.last
@@ -1663,18 +1670,18 @@ impl RangeFrag {
 pub struct SortedRangeFragIxs {
     pub frag_ixs: SmallVec<[RangeFragIx; 4]>,
 }
+
 impl fmt::Debug for SortedRangeFragIxs {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         self.frag_ixs.fmt(fmt)
     }
 }
+
 impl SortedRangeFragIxs {
     pub fn cmp_debug_only(&self, other: &SortedRangeFragIxs) -> Ordering {
         self.frag_ixs.cmp(&other.frag_ixs)
     }
-}
 
-impl SortedRangeFragIxs {
     pub fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
         let mut ok = true;
         for i in 1..self.frag_ixs.len() {
@@ -1737,6 +1744,7 @@ pub enum SpillCost {
     Infinite,    // Infinite, positive
     Finite(f32), // Finite, non-negative
 }
+
 impl fmt::Debug for SpillCost {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -1745,6 +1753,7 @@ impl fmt::Debug for SpillCost {
         }
     }
 }
+
 impl SpillCost {
     pub fn zero() -> Self {
         SpillCost::Finite(0.0)
@@ -1863,11 +1872,13 @@ pub struct RealRange {
     pub rreg: RealReg,
     pub sorted_frags: SortedRangeFragIxs,
 }
+
 impl fmt::Debug for RealRange {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(fmt, "(RR: {:?}, {:?})", self.rreg, self.sorted_frags)
     }
 }
+
 impl RealRange {
     pub fn cmp_debug_only(&self, other: &RealRange) -> Ordering {
         match self.rreg.cmp(&other.rreg) {
@@ -1898,6 +1909,7 @@ pub struct VirtualRange {
     pub size: u16,
     pub spill_cost: SpillCost,
 }
+
 impl fmt::Debug for VirtualRange {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         write!(fmt, "(VR: {:?},", self.vreg)?;
@@ -1911,6 +1923,7 @@ impl fmt::Debug for VirtualRange {
         )
     }
 }
+
 impl VirtualRange {
     pub fn cmp_debug_only(&self, other: &VirtualRange) -> Ordering {
         match self.vreg.cmp(&other.vreg) {
