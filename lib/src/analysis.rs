@@ -1,6 +1,3 @@
-#![allow(non_snake_case)]
-#![allow(non_camel_case_types)]
-
 use log::{debug, info, log_enabled, Level};
 use smallvec::SmallVec;
 use std::fmt;
@@ -16,7 +13,7 @@ use crate::Function;
 //=============================================================================
 // Debugging config.  Set all these to `false` for normal operation.
 
-// DEBUGGING: set to true to cross-check the merge_RangeFrags machinery.
+// DEBUGGING: set to true to cross-check the merge_range_frags machinery.
 const CROSSCHECK_MERGE: bool = false;
 
 // DEBUGGING: set to true to cross-check the dominator-tree computation.
@@ -90,14 +87,14 @@ impl ToString for AnalysisError {
 #[inline(never)]
 fn calc_preds_and_succs<F: Function>(
     func: &F,
-    nBlocks: u32,
+    num_blocks: u32,
 ) -> (
     TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
     TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
 ) {
     info!("      calc_preds_and_succs: begin");
 
-    assert!(func.blocks().len() == nBlocks as usize);
+    assert!(func.blocks().len() == num_blocks as usize);
 
     // First calculate the succ map, since we can do that directly from the
     // Func.
@@ -108,16 +105,16 @@ fn calc_preds_and_succs<F: Function>(
     let mut succ_map = TypedIxVec::<BlockIx, SparseSetU<[BlockIx; 4]>>::new();
     for b in func.blocks() {
         let succs = func.block_succs(b);
-        let mut bixSet = SparseSetU::<[BlockIx; 4]>::empty();
+        let mut bix_set = SparseSetU::<[BlockIx; 4]>::empty();
         for bix in succs.iter() {
-            bixSet.insert(*bix);
+            bix_set.insert(*bix);
         }
-        succ_map.push(bixSet);
+        succ_map.push(bix_set);
     }
 
     // Now invert the mapping
     let mut pred_map = TypedIxVec::<BlockIx, SparseSetU<[BlockIx; 4]>>::new();
-    pred_map.resize(nBlocks, SparseSetU::<[BlockIx; 4]>::empty());
+    pred_map.resize(num_blocks, SparseSetU::<[BlockIx; 4]>::empty());
     for (src, dst_set) in (0..).zip(succ_map.iter()) {
         for dst in dst_set.iter() {
             pred_map[*dst].insert(BlockIx::new(src));
@@ -125,8 +122,8 @@ fn calc_preds_and_succs<F: Function>(
     }
 
     // Stay sane ..
-    assert!(pred_map.len() == nBlocks);
-    assert!(succ_map.len() == nBlocks);
+    assert!(pred_map.len() == num_blocks);
+    assert!(succ_map.len() == num_blocks);
 
     let mut n = 0;
     debug!("");
@@ -148,12 +145,12 @@ fn calc_preds_and_succs<F: Function>(
 // Control flow analysis: calculation of block preorder and postorder sequences
 
 // Returned Vecs contain one element per block.  `None` is returned if the
-// sequences do not contain `nBlocks` elements, in which case the input
+// sequences do not contain `num_blocks` elements, in which case the input
 // contains blocks not reachable from the entry point, and is invalid.
 #[inline(never)]
 fn calc_preord_and_postord<F: Function>(
     func: &F,
-    nBlocks: u32,
+    num_blocks: u32,
     succ_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
 ) -> Option<(Vec<BlockIx>, Vec<BlockIx>)> {
     info!("      calc_preord_and_postord: begin");
@@ -164,7 +161,7 @@ fn calc_preord_and_postord<F: Function>(
     let mut post_ord = Vec::<BlockIx>::new();
 
     let mut visited = TypedIxVec::<BlockIx, bool>::new();
-    visited.resize(nBlocks, false);
+    visited.resize(num_blocks, false);
 
     // FIXME: change this to use an explicit stack.
     fn dfs(
@@ -194,30 +191,30 @@ fn calc_preord_and_postord<F: Function>(
     );
 
     assert!(pre_ord.len() == post_ord.len());
-    assert!(pre_ord.len() <= nBlocks as usize);
-    if pre_ord.len() < nBlocks as usize {
+    assert!(pre_ord.len() <= num_blocks as usize);
+    if pre_ord.len() < num_blocks as usize {
         info!(
             "      calc_preord_and_postord: invalid: {} blocks, {} reachable",
-            nBlocks,
+            num_blocks,
             pre_ord.len()
         );
         return None;
     }
 
-    assert!(pre_ord.len() == nBlocks as usize);
-    assert!(post_ord.len() == nBlocks as usize);
+    assert!(pre_ord.len() == num_blocks as usize);
+    assert!(post_ord.len() == num_blocks as usize);
     #[cfg(debug_assertions)]
     {
         let mut pre_ord_sorted: Vec<BlockIx> = pre_ord.clone();
         let mut post_ord_sorted: Vec<BlockIx> = post_ord.clone();
         pre_ord_sorted.sort_by(|bix1, bix2| bix1.get().partial_cmp(&bix2.get()).unwrap());
         post_ord_sorted.sort_by(|bix1, bix2| bix1.get().partial_cmp(&bix2.get()).unwrap());
-        let expected: Vec<BlockIx> = (0..nBlocks).map(|u| BlockIx::new(u)).collect();
+        let expected: Vec<BlockIx> = (0..num_blocks).map(|u| BlockIx::new(u)).collect();
         debug_assert!(pre_ord_sorted == expected);
         debug_assert!(post_ord_sorted == expected);
     }
 
-    info!("      calc_preord_and_postord: end.  {} blocks", nBlocks);
+    info!("      calc_preord_and_postord: end.  {} blocks", num_blocks);
     Some((pre_ord, post_ord))
 }
 
@@ -230,49 +227,53 @@ fn calc_preord_and_postord<F: Function>(
 // dominate it. This algorithm is from Fig 7.14 of Muchnick 1997. The
 // algorithm is described as simple but not as performant as some others.
 #[inline(never)]
-fn calc_dom_sets_SLOW(
-    nBlocks: u32,
+fn calc_dom_sets_slow(
+    num_blocks: u32,
     pred_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
     post_ord: &Vec<BlockIx>,
     start: BlockIx,
 ) -> TypedIxVec<BlockIx, Set<BlockIx>> {
-    info!("          calc_dom_sets_SLOW: begin");
-    // FIXME: nice up the variable names (D, T, etc) a bit.
+    info!("          calc_dom_sets_slow: begin");
+
     let mut dom_map = TypedIxVec::<BlockIx, Set<BlockIx>>::new();
+
+    // FIXME find better names for n/d/t sets.
     {
-        let r: BlockIx = start;
-        let N: Set<BlockIx> =
-            Set::from_vec((0..nBlocks).map(|bixNo| BlockIx::new(bixNo)).collect());
-        let mut D: Set<BlockIx>;
-        let mut T: Set<BlockIx>;
-        dom_map.resize(nBlocks, Set::<BlockIx>::empty());
-        dom_map[r] = Set::unit(r);
-        for ixnoN in 0..nBlocks {
-            let bixN = BlockIx::new(ixnoN);
-            if bixN != r {
-                dom_map[bixN] = N.clone();
+        let root: BlockIx = start;
+        let n_set: Set<BlockIx> =
+            Set::from_vec((0..num_blocks).map(|bix| BlockIx::new(bix)).collect());
+        let mut d_set: Set<BlockIx>;
+        let mut t_set: Set<BlockIx>;
+
+        dom_map.resize(num_blocks, Set::<BlockIx>::empty());
+        dom_map[root] = Set::unit(root);
+        for block_i in 0..num_blocks {
+            let block_ix = BlockIx::new(block_i);
+            if block_ix != root {
+                dom_map[block_ix] = n_set.clone();
             }
         }
-        let mut nnn = 0;
+
+        let mut num_iter = 0;
         loop {
-            nnn += 1;
-            info!("          calc_dom_sets_SLOW:   outer loop {}", nnn);
+            num_iter += 1;
+            info!("          calc_dom_sets_slow:   outer loop {}", num_iter);
             let mut change = false;
-            for i in 0..nBlocks {
-                // bixN travels in "reverse preorder"
-                let bixN = post_ord[(nBlocks - 1 - i) as usize];
-                if bixN == r {
+            for i in 0..num_blocks {
+                // block_ix travels in "reverse preorder"
+                let block_ix = post_ord[(num_blocks - 1 - i) as usize];
+                if block_ix == root {
                     continue;
                 }
-                T = N.clone();
-                for bixP in pred_map[bixN].iter() {
-                    T.intersect(&dom_map[*bixP]);
+                t_set = n_set.clone();
+                for pred_ix in pred_map[block_ix].iter() {
+                    t_set.intersect(&dom_map[*pred_ix]);
                 }
-                D = T.clone();
-                D.insert(bixN);
-                if !D.equals(&dom_map[bixN]) {
+                d_set = t_set.clone();
+                d_set.insert(block_ix);
+                if !d_set.equals(&dom_map[block_ix]) {
                     change = true;
-                    dom_map[bixN] = D;
+                    dom_map[block_ix] = d_set;
                 }
             }
             if !change {
@@ -282,12 +283,12 @@ fn calc_dom_sets_SLOW(
     }
 
     debug!("");
-    let mut n = 0;
+    let mut block_ix = 0;
     for dom_set in dom_map.iter() {
-        debug!("{:<3?}   dom_set {:<16?}", BlockIx::new(n), dom_set);
-        n += 1;
+        debug!("{:<3?}   dom_set {:<16?}", BlockIx::new(block_ix), dom_set);
+        block_ix += 1;
     }
-    info!("          calc_dom_sets_SLOW: end");
+    info!("          calc_dom_sets_slow: end");
     dom_map
 }
 
@@ -334,7 +335,7 @@ fn dt_merge_sets(
 
 #[inline(never)]
 fn calc_dom_tree(
-    nBlocks: u32,
+    num_blocks: u32,
     pred_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
     post_ord: &Vec<BlockIx>,
     start: BlockIx,
@@ -343,7 +344,7 @@ fn calc_dom_tree(
 
     // We use 2^32-1 as a marker for an invalid BlockIx or postorder number.
     // Hence we need this:
-    assert!(nBlocks < DT_INVALID_POSTORD);
+    assert!(num_blocks < DT_INVALID_POSTORD);
 
     // We have post_ord, which is the postorder sequence.
 
@@ -352,35 +353,35 @@ fn calc_dom_tree(
     // BlockIx.
     let mut bix2rpostord = TypedIxVec::<BlockIx, u32>::new();
     let mut rpostord2bix = Vec::<BlockIx>::new();
-    bix2rpostord.resize(nBlocks, DT_INVALID_POSTORD);
-    rpostord2bix.resize(nBlocks as usize, DT_INVALID_BLOCKIX);
-    for n in 0..nBlocks {
+    bix2rpostord.resize(num_blocks, DT_INVALID_POSTORD);
+    rpostord2bix.resize(num_blocks as usize, DT_INVALID_BLOCKIX);
+    for n in 0..num_blocks {
         // bix visits the blocks in reverse postorder
-        let bix = post_ord[(nBlocks - 1 - n) as usize];
+        let bix = post_ord[(num_blocks - 1 - n) as usize];
         // Hence:
         bix2rpostord[bix] = n;
         // and
         rpostord2bix[n as usize] = bix;
     }
-    for n in 0..nBlocks {
-        debug_assert!(bix2rpostord[BlockIx::new(n)] < nBlocks);
+    for n in 0..num_blocks {
+        debug_assert!(bix2rpostord[BlockIx::new(n)] < num_blocks);
     }
 
     let mut idom = TypedIxVec::<BlockIx, BlockIx>::new();
-    idom.resize(nBlocks, DT_INVALID_BLOCKIX);
+    idom.resize(num_blocks, DT_INVALID_BLOCKIX);
 
     // The start node must have itself as a parent.
     idom[start] = start;
 
-    for i in 0..nBlocks {
-        let bixI = BlockIx::new(i);
-        let preds_of_i = &pred_map[bixI];
+    for i in 0..num_blocks {
+        let block_ix = BlockIx::new(i);
+        let preds_of_i = &pred_map[block_ix];
         // All nodes must be reachable from the root.  That means that all nodes
         // that aren't `start` must have at least one predecessor.  However, we
         // can't assert the inverse case -- that the start node has no
         // predecessors -- because the start node might be a self-loop, in which
         // case it will have itself as a pred.  See tests/domtree_fuzz1.rat.
-        if bixI != start {
+        if block_ix != start {
             assert!(!preds_of_i.is_empty());
         }
     }
@@ -388,7 +389,7 @@ fn calc_dom_tree(
     let mut changed = true;
     while changed {
         changed = false;
-        for n in 0..nBlocks {
+        for n in 0..num_blocks {
             // Consider blocks in reverse postorder.
             let node = rpostord2bix[n as usize];
             assert!(node != DT_INVALID_BLOCKIX);
@@ -432,12 +433,12 @@ fn calc_dom_tree(
     // no dead blocks in the graph, and hence that there is only one dominator
     // tree, that covers the whole graph.
     assert!(idom[start] == start);
-    for i in 0..nBlocks {
-        let bixI = BlockIx::new(i);
+    for i in 0..num_blocks {
+        let block_ix = BlockIx::new(i);
         // All "parent pointers" are valid.
-        assert!(idom[bixI] != DT_INVALID_BLOCKIX);
+        assert!(idom[block_ix] != DT_INVALID_BLOCKIX);
         // The only node whose parent pointer points to itself is the start node.
-        assert!((idom[bixI] == bixI) == (bixI == start));
+        assert!((idom[block_ix] == block_ix) == (block_ix == start));
     }
 
     if CROSSCHECK_DOMS {
@@ -447,19 +448,19 @@ fn calc_dom_tree(
         // what the simple algorithm produced.
 
         info!("        calc_dom_tree crosscheck: begin");
-        let slow_sets = calc_dom_sets_SLOW(nBlocks, pred_map, post_ord, start);
+        let slow_sets = calc_dom_sets_slow(num_blocks, pred_map, post_ord, start);
         assert!(slow_sets.len() == idom.len());
 
-        for i in 0..nBlocks {
-            let mut bixI = BlockIx::new(i);
+        for i in 0..num_blocks {
+            let mut block_ix = BlockIx::new(i);
             let mut set = Set::<BlockIx>::empty();
             loop {
-                set.insert(bixI);
-                let bixI2 = idom[bixI];
-                if bixI2 == bixI {
+                set.insert(block_ix);
+                let other_block_ix = idom[block_ix];
+                if other_block_ix == block_ix {
                     break;
                 }
-                bixI = bixI2;
+                block_ix = other_block_ix;
             }
             assert!(set.to_vec() == slow_sets[BlockIx::new(i)].to_vec());
         }
@@ -475,19 +476,19 @@ fn calc_dom_tree(
 
 #[inline(never)]
 fn calc_loop_depths(
-    nBlocks: u32,
+    num_blocks: u32,
     pred_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
     succ_map: &TypedIxVec<BlockIx, SparseSetU<[BlockIx; 4]>>,
     post_ord: &Vec<BlockIx>,
     start: BlockIx,
 ) -> TypedIxVec<BlockIx, u32> {
     info!("      calc_loop_depths: begin");
-    let idom = calc_dom_tree(nBlocks, pred_map, post_ord, start);
+    let idom = calc_dom_tree(num_blocks, pred_map, post_ord, start);
 
     // Find the loops.  First, find the "loop header nodes", and from those,
     // derive the loops.
     //
-    // Loop headers:
+    // loop_set headers:
     // A "back edge" m->n is some edge m->n where n dominates m.  'n' is
     // the loop header node.
     //
@@ -496,27 +497,27 @@ fn calc_loop_depths(
     //
     // Iterate over all edges (m->n)
     let mut back_edges = Set::<(BlockIx, BlockIx)>::empty();
-    for bixM in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
-        for bixN in succ_map[bixM].iter() {
+    for block_m_ix in BlockIx::new(0).dotdot(BlockIx::new(num_blocks)) {
+        for block_n_ix in succ_map[block_m_ix].iter() {
             // Figure out if N dominates M.  Do this by walking the dom tree from M
             // back up to the root, and seeing if we encounter N on the way.
             let mut n_dominates_m = false;
-            let mut bixI = bixM;
+            let mut block_ix = block_m_ix;
             loop {
-                if bixI == *bixN {
+                if block_ix == *block_n_ix {
                     n_dominates_m = true;
                     break;
                 }
-                let bixI2 = idom[bixI];
-                if bixI2 == bixI {
+                let other_block_ix = idom[block_ix];
+                if other_block_ix == block_ix {
                     break;
                 }
-                bixI = bixI2;
+                block_ix = other_block_ix;
             }
             if n_dominates_m {
                 //println!("QQQQ back edge {} -> {}",
-                //         bixM.show(), bixN.show());
-                back_edges.insert((bixM, *bixN));
+                //         block_m_ix.show(), block_n_ix.show());
+                back_edges.insert((block_m_ix, *block_n_ix));
             }
         }
     }
@@ -526,27 +527,25 @@ fn calc_loop_depths(
     // M->N.  This algorithm is from Fig 7.21 of Muchnick 1997 (an excellent
     // book).  Order in `natural_loops` has no particular meaning.
     let mut natural_loops = Vec::<Set<BlockIx>>::new();
-    for (bixM, bixN) in back_edges.iter() {
-        let mut Loop: Set<BlockIx>;
-        let mut Stack: Vec<BlockIx>;
-        Stack = Vec::<BlockIx>::new();
-        Loop = Set::<BlockIx>::two(*bixM, *bixN);
-        if bixM != bixN {
+    for (block_m_ix, block_n_ix) in back_edges.iter() {
+        let mut loop_set: Set<BlockIx>;
+        let mut stack: Vec<BlockIx>;
+        stack = Vec::<BlockIx>::new();
+        loop_set = Set::<BlockIx>::two(*block_m_ix, *block_n_ix);
+        if block_m_ix != block_n_ix {
             // The next line is missing in the Muchnick description.  Without it the
             // algorithm doesn't make any sense, though.
-            Stack.push(*bixM);
-            while let Some(bixP) = Stack.pop() {
-                for bixQ in pred_map[bixP].iter() {
-                    if !Loop.contains(*bixQ) {
-                        Loop.insert(*bixQ);
-                        Stack.push(*bixQ);
+            stack.push(*block_m_ix);
+            while let Some(block_p_ix) = stack.pop() {
+                for block_q_ix in pred_map[block_p_ix].iter() {
+                    if !loop_set.contains(*block_q_ix) {
+                        loop_set.insert(*block_q_ix);
+                        stack.push(*block_q_ix);
                     }
                 }
             }
         }
-        //println!("QQQQ back edge {} -> {} has loop {}",
-        //         bixM.show(), bixN.show(), Loop.show());
-        natural_loops.push(Loop);
+        natural_loops.push(loop_set);
     }
 
     // Here is a kludgey way to compute the depth of each loop.  First, order
@@ -561,17 +560,21 @@ fn calc_loop_depths(
     // completely accurate, I _think_ this requires the property that loops are
     // either disjoint or nested, but are in no case intersecting.
 
-    natural_loops
-        .sort_by(|blockSet1, blockSet2| blockSet1.card().partial_cmp(&blockSet2.card()).unwrap());
+    natural_loops.sort_by(|left_block_set, right_block_set| {
+        left_block_set
+            .card()
+            .partial_cmp(&right_block_set.card())
+            .unwrap()
+    });
 
-    let nLoops = natural_loops.len();
+    let num_loops = natural_loops.len();
     let mut loop_depths = Vec::<u32>::new();
-    loop_depths.resize(nLoops, 0);
+    loop_depths.resize(num_loops, 0);
 
-    for i in 0..nLoops {
+    for i in 0..num_loops {
         let mut curr = i;
         let mut depth = 1;
-        for j in i + 1..nLoops {
+        for j in i + 1..num_loops {
             debug_assert!(curr < j);
             if natural_loops[curr].is_subset_of(&natural_loops[j]) {
                 depth += 1;
@@ -584,17 +587,16 @@ fn calc_loop_depths(
     // Now that we have a depth for each loop, we can finally compute the depth
     // for each block.
     let mut depth_map = TypedIxVec::<BlockIx, u32>::new();
-    depth_map.resize(nBlocks, 0);
-    for (loopBixs, depth) in natural_loops.iter().zip(loop_depths) {
-        //println!("QQQQ4 {} {}", depth.show(), loopBixs.show());
-        for loopBix in loopBixs.iter() {
-            if depth_map[*loopBix] < depth {
-                depth_map[*loopBix] = depth;
+    depth_map.resize(num_blocks, 0);
+    for (loop_block_indexes, depth) in natural_loops.iter().zip(loop_depths) {
+        for loop_block_ix in loop_block_indexes.iter() {
+            if depth_map[*loop_block_ix] < depth {
+                depth_map[*loop_block_ix] = depth;
             }
         }
     }
 
-    debug_assert!(depth_map.len() == nBlocks);
+    debug_assert!(depth_map.len() == num_blocks);
 
     let mut n = 0;
     debug!("");
@@ -641,14 +643,15 @@ impl CFGInfo {
 
         // Throw out insanely large inputs.  They'll probably cause failure later
         // on.
-        let nBlocksUSize = func.blocks().len();
-        if nBlocksUSize >= 1 * 1024 * 1024 {
+        let num_blocks_usize = func.blocks().len();
+        if num_blocks_usize >= 1 * 1024 * 1024 {
             // 1 million blocks should be enough for anyone.  That will soak up 20
             // index bits, leaving a "safety margin" of 12 bits for indices for
             // induced structures (RangeFragIx, InstIx, VirtualRangeIx, RealRangeIx,
             // etc).
             return Err(AnalysisError::ImplementationLimitsExceeded);
         }
+
         // Similarly, limit the number of instructions to 16 million.  This allows
         // 16 insns per block with the worst-case number of blocks.  Because each
         // insn typically generates somewhat less than one new value, this check
@@ -659,13 +662,13 @@ impl CFGInfo {
         }
 
         // Now we know we're safe to narrow it to u32.
-        let nBlocks = func.blocks().len() as u32;
+        let num_blocks = num_blocks_usize as u32;
 
         // === BEGIN compute successor and predecessor maps ===
         //
-        let (pred_map, succ_map) = calc_preds_and_succs(func, nBlocks);
-        assert!(pred_map.len() == nBlocks);
-        assert!(succ_map.len() == nBlocks);
+        let (pred_map, succ_map) = calc_preds_and_succs(func, num_blocks);
+        assert!(pred_map.len() == num_blocks);
+        assert!(succ_map.len() == num_blocks);
         //
         // === END compute successor and predecessor maps ===
 
@@ -689,22 +692,27 @@ impl CFGInfo {
 
         // === BEGIN compute preord/postord sequences ===
         //
-        let mb_pre_ord_and_post_ord = calc_preord_and_postord(func, nBlocks, &succ_map);
+        let mb_pre_ord_and_post_ord = calc_preord_and_postord(func, num_blocks, &succ_map);
         if mb_pre_ord_and_post_ord.is_none() {
             return Err(AnalysisError::UnreachableBlocks);
         }
 
         let (pre_ord, post_ord) = mb_pre_ord_and_post_ord.unwrap();
-        assert!(pre_ord.len() == nBlocks as usize);
-        assert!(post_ord.len() == nBlocks as usize);
+        assert!(pre_ord.len() == num_blocks as usize);
+        assert!(post_ord.len() == num_blocks as usize);
         //
         // === END compute preord/postord sequences ===
 
         // === BEGIN compute loop depth of all Blocks
         //
-        let depth_map =
-            calc_loop_depths(nBlocks, &pred_map, &succ_map, &post_ord, func.entry_block());
-        debug_assert!(depth_map.len() == nBlocks);
+        let depth_map = calc_loop_depths(
+            num_blocks,
+            &pred_map,
+            &succ_map,
+            &post_ord,
+            func.entry_block(),
+        );
+        debug_assert!(depth_map.len() == num_blocks);
         //
         // === END compute loop depth of all Blocks
 
@@ -776,7 +784,7 @@ impl CFGInfo {
 // (2) any registers in the modified set are removed from the used and defined
 //     sets.  This enforces the invariant that
 //    `intersect(modified, union(used, defined))` is the empty set.  Live range
-//    fragment computation (get_RangeFrags_for_block) depends on this property.
+//    fragment computation (get_range_frags_for_block) depends on this property.
 //
 // (3) real registers unavailable to the allocator are removed, per the
 //     abovementioned sanitization rules.
@@ -1341,54 +1349,54 @@ fn calc_livein_and_liveout<F: Function>(
     TypedIxVec<BlockIx, SparseSet<Reg>>,
 ) {
     info!("    calc_livein_and_liveout: begin");
-    let nBlocks = func.blocks().len() as u32;
+    let num_blocks = func.blocks().len() as u32;
     let empty = SparseSet::<Reg>::empty();
 
-    let mut nEvals = 0;
+    let mut num_evals = 0;
     let mut liveouts = TypedIxVec::<BlockIx, SparseSet<Reg>>::new();
-    liveouts.resize(nBlocks, empty.clone());
+    liveouts.resize(num_blocks, empty.clone());
 
     // Initialise the work queue so as to do a reverse preorder traversal
     // through the graph, after which blocks are re-evaluated on demand.
-    let mut workQ = Queue::<BlockIx>::new();
-    for i in 0..nBlocks {
-        // bixI travels in "reverse preorder"
-        let bixI = cfg_info.pre_ord[(nBlocks - 1 - i) as usize];
-        workQ.push_back(bixI);
+    let mut work_queue = Queue::<BlockIx>::new();
+    for i in 0..num_blocks {
+        // block_ix travels in "reverse preorder"
+        let block_ix = cfg_info.pre_ord[(num_blocks - 1 - i) as usize];
+        work_queue.push_back(block_ix);
     }
 
-    // inQ is an optimisation -- this routine works fine without it.  inQ is
-    // used to avoid inserting duplicate work items in workQ.  This avoids some
+    // in_queue is an optimisation -- this routine works fine without it.  in_queue is
+    // used to avoid inserting duplicate work items in work_queue.  This avoids some
     // number of duplicate re-evaluations and gets us to a fixed point faster.
     // Very roughly, it reduces the number of evaluations per block from around
     // 3 to around 2.
-    let mut inQ = Vec::<bool>::new();
-    inQ.resize(nBlocks as usize, true);
+    let mut in_queue = Vec::<bool>::new();
+    in_queue.resize(num_blocks as usize, true);
 
-    while let Some(bixI) = workQ.pop_front() {
-        let i = bixI.get() as usize;
-        assert!(inQ[i]);
-        inQ[i] = false;
+    while let Some(block_ix) = work_queue.pop_front() {
+        let i = block_ix.get() as usize;
+        assert!(in_queue[i]);
+        in_queue[i] = false;
 
-        // Compute a new value for liveouts[bixI]
+        // Compute a new value for liveouts[block_ix]
         let mut set = SparseSet::<Reg>::empty();
-        for bixJ in cfg_info.succ_map[bixI].iter() {
-            let mut liveinJ = liveouts[*bixJ].clone();
-            liveinJ.remove(&def_sets_per_block[*bixJ]);
-            liveinJ.union(&use_sets_per_block[*bixJ]);
-            set.union(&liveinJ);
+        for block_j_ix in cfg_info.succ_map[block_ix].iter() {
+            let mut live_in_j = liveouts[*block_j_ix].clone();
+            live_in_j.remove(&def_sets_per_block[*block_j_ix]);
+            live_in_j.union(&use_sets_per_block[*block_j_ix]);
+            set.union(&live_in_j);
         }
-        nEvals += 1;
+        num_evals += 1;
 
-        if !set.equals(&liveouts[bixI]) {
-            liveouts[bixI] = set;
-            // Add `bixI`'s predecessors to the work queue, since their
+        if !set.equals(&liveouts[block_ix]) {
+            liveouts[block_ix] = set;
+            // Add `block_ix`'s predecessors to the work queue, since their
             // liveout values might be affected.
-            for bixJ in cfg_info.pred_map[bixI].iter() {
-                let j = bixJ.get() as usize;
-                if !inQ[j] {
-                    workQ.push_back(*bixJ);
-                    inQ[j] = true;
+            for block_j_ix in cfg_info.pred_map[block_ix].iter() {
+                let j = block_j_ix.get() as usize;
+                if !in_queue[j] {
+                    work_queue.push_back(*block_j_ix);
+                    in_queue[j] = true;
                 }
             }
         }
@@ -1397,31 +1405,31 @@ fn calc_livein_and_liveout<F: Function>(
     // The liveout values are done, but we need to compute the liveins
     // too.
     let mut liveins = TypedIxVec::<BlockIx, SparseSet<Reg>>::new();
-    liveins.resize(nBlocks, empty.clone());
-    for bixI in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
-        let mut liveinI = liveouts[bixI].clone();
-        liveinI.remove(&def_sets_per_block[bixI]);
-        liveinI.union(&use_sets_per_block[bixI]);
-        liveins[bixI] = liveinI;
+    liveins.resize(num_blocks, empty.clone());
+    for block_ix in BlockIx::new(0).dotdot(BlockIx::new(num_blocks)) {
+        let mut live_in = liveouts[block_ix].clone();
+        live_in.remove(&def_sets_per_block[block_ix]);
+        live_in.union(&use_sets_per_block[block_ix]);
+        liveins[block_ix] = live_in;
     }
 
     if false {
-        let mut sum_card_LI = 0;
-        let mut sum_card_LO = 0;
-        for bix in BlockIx::new(0).dotdot(BlockIx::new(nBlocks)) {
-            sum_card_LI += liveins[bix].card();
-            sum_card_LO += liveouts[bix].card();
+        let mut sum_card_live_in = 0;
+        let mut sum_card_live_out = 0;
+        for bix in BlockIx::new(0).dotdot(BlockIx::new(num_blocks)) {
+            sum_card_live_in += liveins[bix].card();
+            sum_card_live_out += liveouts[bix].card();
         }
         println!(
-            "QQQQ calc_LI/LO: nEvals {}, tot LI {}, tot LO {}",
-            nEvals, sum_card_LI, sum_card_LO
+            "QQQQ calc_LI/LO: num_evals {}, tot LI {}, tot LO {}",
+            num_evals, sum_card_live_in, sum_card_live_out
         );
     }
 
-    let ratio: f32 = (nEvals as f32) / ((if nBlocks == 0 { 1 } else { nBlocks }) as f32);
+    let ratio: f32 = (num_evals as f32) / ((if num_blocks == 0 { 1 } else { num_blocks }) as f32);
     info!(
         "    calc_livein_and_liveout:   {} blocks, {} evals ({:<.2} per block)",
-        nBlocks, nEvals, ratio
+        num_blocks, num_evals, ratio
     );
 
     if log_enabled!(Level::Debug) {
@@ -1467,19 +1475,19 @@ fn calc_livein_and_liveout<F: Function>(
 // handle (1) live-in and live-out Regs, (2) dead writes, and (3) instructions
 // that modify registers rather than merely reading or writing them.
 
-// Calculate all the RangeFrags for `bix`.  Add them to `outFEnv` and add to
-// `outMap`, the associated RangeFragIxs, segregated by Reg.  `bix`, `livein`,
+// Calculate all the RangeFrags for `bix`.  Add them to `out_frags` and add to
+// `out_map`, the associated RangeFragIxs, segregated by Reg.  `bix`, `livein`,
 // `liveout` and `rvb` are expected to be valid in the context of the Func `f`
 // (duh!)
 #[inline(never)]
-fn get_RangeFrags_for_block<F: Function>(
+fn get_range_frags_for_block<F: Function>(
     func: &F,
     bix: BlockIx,
     livein: &SparseSet<Reg>,
     liveout: &SparseSet<Reg>,
     rvb: &RegVecsAndBounds,
-    outMap: &mut Map<Reg, Vec<RangeFragIx>>,
-    outFEnv: &mut TypedIxVec<RangeFragIx, RangeFrag>,
+    out_map: &mut Map<Reg, Vec<RangeFragIx>>,
+    out_frags: &mut TypedIxVec<RangeFragIx, RangeFrag>,
 ) {
     //println!("QQQQ --- block {}", bix.show());
     // BEGIN ProtoRangeFrag
@@ -1545,7 +1553,7 @@ fn get_RangeFrags_for_block<F: Function>(
 
     // The generated RangeFrags are initially are dumped in here.  We
     // group them by Reg at the end of this function.
-    let mut tmpResultVec = SmallVec::<[(Reg, RangeFrag); 32]>::new();
+    let mut tmp_result_vec = SmallVec::<[(Reg, RangeFrag); 32]>::new();
 
     // First, set up `state` as if all of `livein` had been written just
     // prior to the block.
@@ -1577,7 +1585,7 @@ fn get_RangeFrags_for_block<F: Function>(
                 // `livein`, since otherwise `state` would have an entry
                 // for it.
                 None => {
-                    panic!("get_RangeFrags_for_block: fail #1");
+                    panic!("get_range_frags_for_block: fail #1");
                 }
                 // This the first or subsequent read after a write.  Note
                 // that the "write" can be either a real write, or due to
@@ -1609,7 +1617,7 @@ fn get_RangeFrags_for_block<F: Function>(
                 // modifies `r`), but it's not listed in `livein`, since
                 // otherwise `state` would have an entry for it.
                 None => {
-                    panic!("get_RangeFrags_for_block: fail #2");
+                    panic!("get_range_frags_for_block: fail #2");
                 }
                 // This the first or subsequent modify after a write.
                 Some(ProtoRangeFrag { uses, first, last }) => {
@@ -1627,7 +1635,7 @@ fn get_RangeFrags_for_block<F: Function>(
 
         // Examine writes (but not writes implied by modifies).  The
         // general idea is that a write causes us to terminate the
-        // existing ProtoRangeFrag, if any, add it to `tmpResultVec`,
+        // existing ProtoRangeFrag, if any, add it to `tmp_result_vec`,
         // and start a new frag.
         for i in bounds_for_iix.defs_start as usize
             ..bounds_for_iix.defs_start as usize + bounds_for_iix.defs_len as usize
@@ -1653,7 +1661,7 @@ fn get_RangeFrags_for_block<F: Function>(
                         debug_assert!(*uses == 1);
                     }
                     let frag = RangeFrag::new(func, bix, *first, *last, *uses);
-                    tmpResultVec.push((*r, frag));
+                    tmp_result_vec.push((*r, frag));
                     let new_pt = InstPoint::new_def(iix);
                     new_pf = ProtoRangeFrag {
                         uses: 1,
@@ -1681,7 +1689,7 @@ fn get_RangeFrags_for_block<F: Function>(
             // that it is neither defined in the block nor present in
             // `livein`.
             None => {
-                panic!("get_RangeFrags_for_block: fail #3");
+                panic!("get_range_frags_for_block: fail #3");
             }
             // `r` is written (or modified), either literally or by virtue
             // of being present in `livein`, and may or may not
@@ -1694,7 +1702,7 @@ fn get_RangeFrags_for_block<F: Function>(
                 last: _,
             }) => {
                 let frag = RangeFrag::new(func, bix, *first, last_pt_in_block, *uses);
-                tmpResultVec.push((*r, frag));
+                tmp_result_vec.push((*r, frag));
             }
         }
         // Remove the entry from `state` so that the following loop
@@ -1710,49 +1718,49 @@ fn get_RangeFrags_for_block<F: Function>(
         }
         let frag = RangeFrag::new(func, bix, pf.first, pf.last, pf.uses);
         //println!("QQQQ post: leftover: {}", (r,frag).show());
-        tmpResultVec.push((*r, frag));
+        tmp_result_vec.push((*r, frag));
     }
 
-    // Copy the entries in `tmpResultVec` into `outMap` and `outVec`.
+    // Copy the entries in `tmp_result_vec` into `out_map` and `outVec`.
     // TODO: do this as we go along, so as to avoid the use of a temporary
     // vector.
-    for (r, frag) in tmpResultVec {
+    for (r, frag) in tmp_result_vec {
         // Allocate a new RangeFragIx for `frag`, except, make some minimal effort
         // to avoid huge numbers of duplicates by inspecting the previous two
         // entries, and using them if possible.
-        let outFEnv_len = outFEnv.len();
+        let num_out_frags = out_frags.len();
         let new_fix: RangeFragIx;
-        if outFEnv_len >= 2 {
-            let back_0 = RangeFragIx::new(outFEnv_len - 1);
-            let back_1 = RangeFragIx::new(outFEnv_len - 2);
-            if outFEnv[back_0] == frag {
+        if num_out_frags >= 2 {
+            let back_0 = RangeFragIx::new(num_out_frags - 1);
+            let back_1 = RangeFragIx::new(num_out_frags - 2);
+            if out_frags[back_0] == frag {
                 new_fix = back_0;
-            } else if outFEnv[back_1] == frag {
+            } else if out_frags[back_1] == frag {
                 new_fix = back_1;
             } else {
                 // No match; create a new one.
-                outFEnv.push(frag);
-                new_fix = RangeFragIx::new(outFEnv.len() as u32 - 1);
+                out_frags.push(frag);
+                new_fix = RangeFragIx::new(out_frags.len() as u32 - 1);
             }
         } else {
             // We can't look back; create a new one.
-            outFEnv.push(frag);
-            new_fix = RangeFragIx::new(outFEnv.len() as u32 - 1);
+            out_frags.push(frag);
+            new_fix = RangeFragIx::new(out_frags.len() as u32 - 1);
         }
         // And use the new RangeFragIx.
-        match outMap.get_mut(&r) {
+        match out_map.get_mut(&r) {
             None => {
-                outMap.insert(r, vec![new_fix]);
+                out_map.insert(r, vec![new_fix]);
             }
-            Some(fragVec) => {
-                fragVec.push(new_fix);
+            Some(frag_vec) => {
+                frag_vec.push(new_fix);
             }
         }
     }
 }
 
 #[inline(never)]
-fn get_RangeFrags<F: Function>(
+fn get_range_frags<F: Function>(
     func: &F,
     livein_sets_per_block: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     liveout_sets_per_block: &TypedIxVec<BlockIx, SparseSet<Reg>>,
@@ -1762,38 +1770,38 @@ fn get_RangeFrags<F: Function>(
     Map<Reg, Vec<RangeFragIx>>,
     TypedIxVec<RangeFragIx, RangeFrag>,
 ) {
-    info!("    get_RangeFrags: begin");
+    info!("    get_range_frags: begin");
     assert!(livein_sets_per_block.len() == func.blocks().len() as u32);
     assert!(liveout_sets_per_block.len() == func.blocks().len() as u32);
     assert!(rvb.is_sanitized());
-    let mut resMap = Map::<Reg, Vec<RangeFragIx>>::default();
-    let mut resFEnv = TypedIxVec::<RangeFragIx, RangeFrag>::new();
+    let mut result_map = Map::<Reg, Vec<RangeFragIx>>::default();
+    let mut result_frags = TypedIxVec::<RangeFragIx, RangeFrag>::new();
     for bix in func.blocks() {
-        get_RangeFrags_for_block(
+        get_range_frags_for_block(
             func,
             bix,
             &livein_sets_per_block[bix],
             &liveout_sets_per_block[bix],
             &rvb,
-            &mut resMap,
-            &mut resFEnv,
+            &mut result_map,
+            &mut result_frags,
         );
     }
 
     debug!("");
     let mut n = 0;
-    for frag in resFEnv.iter() {
+    for frag in result_frags.iter() {
         debug!("{:<3?}   {:?}", RangeFragIx::new(n), frag);
         n += 1;
     }
 
     debug!("");
-    for (reg, frag_ixs) in resMap.iter() {
+    for (reg, frag_ixs) in result_map.iter() {
         debug!("frags for {}   {:?}", reg.show_with_rru(univ), frag_ixs);
     }
 
-    info!("    get_RangeFrags: end");
-    (resMap, resFEnv)
+    info!("    get_range_frags: end");
+    (result_map, result_frags)
 }
 
 //=============================================================================
@@ -1801,8 +1809,8 @@ fn get_RangeFrags<F: Function>(
 // (SLOW reference implementation)
 
 #[inline(never)]
-fn merge_RangeFrags_SLOW(
-    fragIx_vecs_per_reg: &Map<Reg, Vec<RangeFragIx>>,
+fn merge_range_frags_slow(
+    frag_ix_vec_per_reg: &Map<Reg, Vec<RangeFragIx>>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     cfg_info: &CFGInfo,
 ) -> (
@@ -1810,20 +1818,20 @@ fn merge_RangeFrags_SLOW(
     TypedIxVec<VirtualRangeIx, VirtualRange>,
 ) {
     let mut n_total_incoming_frags = 0;
-    for (_reg, all_frag_ixs_for_reg) in fragIx_vecs_per_reg.iter() {
+    for (_reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
         n_total_incoming_frags += all_frag_ixs_for_reg.len();
     }
-    info!("      merge_RangeFrags_SLOW: begin");
+    info!("      merge_range_frags_slow: begin");
     info!("        in: {} in frag_env", frag_env.len());
     info!(
         "        in: {} regs containing in total {} frags",
-        fragIx_vecs_per_reg.len(),
+        frag_ix_vec_per_reg.len(),
         n_total_incoming_frags
     );
 
-    let mut resR = TypedIxVec::<RealRangeIx, RealRange>::new();
-    let mut resV = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
-    for (reg, all_frag_ixs_for_reg) in fragIx_vecs_per_reg.iter() {
+    let mut result_real = TypedIxVec::<RealRangeIx, RealRange>::new();
+    let mut result_virtual = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
+    for (reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
         let n_for_this_reg = all_frag_ixs_for_reg.len();
         assert!(n_for_this_reg > 0);
 
@@ -1872,7 +1880,7 @@ fn merge_RangeFrags_SLOW(
                     }
                     //succs_of_live_out_blocks.union(frag_succ_bixes);
                 }
-                RangeFragKind::Multi => panic!("merge_RangeFrags_SLOW: unexpected Multi"),
+                RangeFragKind::Multi => panic!("merge_range_frags_slow: unexpected Multi"),
             }
 
             let valid = true;
@@ -1943,7 +1951,7 @@ fn merge_RangeFrags_SLOW(
             // Set zero spill cost for now.  We'll fill it in for real later.
             let spill_cost = SpillCost::zero();
             if reg.is_virtual() {
-                resV.push(VirtualRange {
+                result_virtual.push(VirtualRange {
                     vreg: reg.to_virtual_reg(),
                     rreg: None,
                     sorted_frags,
@@ -1951,7 +1959,7 @@ fn merge_RangeFrags_SLOW(
                     spill_cost,
                 });
             } else {
-                resR.push(RealRange {
+                result_real.push(RealRange {
                     rreg: reg.to_real_reg(),
                     sorted_frags,
                 });
@@ -1961,18 +1969,22 @@ fn merge_RangeFrags_SLOW(
         // END merge `all_frag_ixs_for_reg` entries as much as possible
     }
 
-    info!("        out: {} VLRs, {} RLRs", resV.len(), resR.len());
-    info!("      merge_RangeFrags_SLOW: end");
-    (resR, resV)
+    info!(
+        "        out: {} VLRs, {} RLRs",
+        result_virtual.len(),
+        result_real.len()
+    );
+    info!("      merge_range_frags_slow: end");
+    (result_real, result_virtual)
 }
 
 //=============================================================================
 // Merging of RangeFrags, producing the final LRs, minus metrics
 
 // HELPER FUNCTION
-fn create_and_add_Range(
-    resR: &mut TypedIxVec<RealRangeIx, RealRange>,
-    resV: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
+fn create_and_add_range(
+    result_real: &mut TypedIxVec<RealRangeIx, RealRange>,
+    result_virtual: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
     reg: Reg,
     sorted_frags: SortedRangeFragIxs,
 ) {
@@ -1980,7 +1992,7 @@ fn create_and_add_Range(
     // Set zero spill cost for now.  We'll fill it in for real later.
     let spill_cost = SpillCost::zero();
     if reg.is_virtual() {
-        resV.push(VirtualRange {
+        result_virtual.push(VirtualRange {
             vreg: reg.to_virtual_reg(),
             rreg: None,
             sorted_frags,
@@ -1988,7 +2000,7 @@ fn create_and_add_Range(
             spill_cost,
         });
     } else {
-        resR.push(RealRange {
+        result_real.push(RealRange {
             rreg: reg.to_real_reg(),
             sorted_frags,
         });
@@ -2022,8 +2034,8 @@ impl ToFromU32 for usize {
 }
 
 #[inline(never)]
-fn merge_RangeFrags(
-    fragIx_vecs_per_reg: &Map<Reg, Vec<RangeFragIx>>,
+fn merge_range_frags(
+    frag_ix_vec_per_reg: &Map<Reg, Vec<RangeFragIx>>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     cfg_info: &CFGInfo,
 ) -> (
@@ -2031,14 +2043,14 @@ fn merge_RangeFrags(
     TypedIxVec<VirtualRangeIx, VirtualRange>,
 ) {
     let mut n_total_incoming_frags = 0;
-    for (_reg, all_frag_ixs_for_reg) in fragIx_vecs_per_reg.iter() {
+    for (_reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
         n_total_incoming_frags += all_frag_ixs_for_reg.len();
     }
-    info!("    merge_RangeFrags: begin");
+    info!("    merge_range_frags: begin");
     info!("      in: {} in frag_env", frag_env.len());
     info!(
         "      in: {} regs containing in total {} frags",
-        fragIx_vecs_per_reg.len(),
+        frag_ix_vec_per_reg.len(),
         n_total_incoming_frags
     );
 
@@ -2050,20 +2062,20 @@ fn merge_RangeFrags(
     let mut sz_multi_grps_small = 0;
     let mut sz_multi_grps_large = 0;
 
-    let mut resR = TypedIxVec::<RealRangeIx, RealRange>::new();
-    let mut resV = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
+    let mut result_real = TypedIxVec::<RealRangeIx, RealRange>::new();
+    let mut result_virtual = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
 
     // BEGIN per_reg_loop
-    'per_reg_loop: for (reg, all_frag_ixs_for_reg) in fragIx_vecs_per_reg.iter() {
+    'per_reg_loop: for (reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
         let n_frags_for_this_reg = all_frag_ixs_for_reg.len();
         assert!(n_frags_for_this_reg > 0);
 
         // Do some shortcutting.  First off, if there's only one frag for this
         // reg, we can directly give it its own live range, and have done.
         if n_frags_for_this_reg == 1 {
-            create_and_add_Range(
-                &mut resR,
-                &mut resV,
+            create_and_add_range(
+                &mut result_real,
+                &mut result_virtual,
                 *reg,
                 SortedRangeFragIxs::unit(all_frag_ixs_for_reg[0], frag_env),
             );
@@ -2088,9 +2100,9 @@ fn merge_RangeFrags(
             // fragments it is presented with are all either LiveIn, LiveOut or
             // Thru.
             if frag.kind == RangeFragKind::Local {
-                create_and_add_Range(
-                    &mut resR,
-                    &mut resV,
+                create_and_add_range(
+                    &mut result_real,
+                    &mut result_virtual,
                     *reg,
                     SortedRangeFragIxs::unit(*fix, frag_env),
                 );
@@ -2172,17 +2184,16 @@ fn merge_RangeFrags(
                 // Deal with liveness flows outbound from `fix`.  Meaning, (1) above.
                 if *kind == RangeFragKind::LiveOut || *kind == RangeFragKind::Thru {
                     for b in cfg_info.succ_map[*bix].iter() {
-                        //println!("QQQ looking for {:?}", b);
                         // Visit all entries in `triples` that are for `b`.  Binary search
                         // `triples` to find the lowest-indexed entry for `b`.
-                        let mut ixL = 0;
-                        let mut ixR = triples_len;
-                        while ixL < ixR {
-                            let m = (ixL + ixR) >> 1;
+                        let mut ix_left = 0;
+                        let mut ix_right = triples_len;
+                        while ix_left < ix_right {
+                            let m = (ix_left + ix_right) >> 1;
                             if triples[m].2 < *b {
-                                ixL = m + 1;
+                                ix_left = m + 1;
                             } else {
-                                ixR = m;
+                                ix_right = m;
                             }
                         }
                         // It might be that there is no block for `b` in the sequence.
@@ -2190,25 +2201,25 @@ fn merge_RangeFrags(
                         // successor where the associated register isn't live-in/thru.  A
                         // failure to find `b` can be indicated one of two ways:
                         //
-                        // * ixL == triples_len
-                        // * ixL < triples_len and b < triples[ixL].b
+                        // * ix_left == triples_len
+                        // * ix_left < triples_len and b < triples[ix_left].b
                         //
                         // In both cases I *think* the 'loop_over_entries_for_b below will
                         // not do anything.  But this is all a bit hairy, so let's convert
                         // the second variant into the first, so as to make it obvious
                         // that the loop won't do anything.
 
-                        // ixL now holds the lowest index of any `triples` entry for block
+                        // ix_left now holds the lowest index of any `triples` entry for block
                         // `b`.  Assert this.
-                        if ixL < triples_len && *b < triples[ixL].2 {
-                            ixL = triples_len;
+                        if ix_left < triples_len && *b < triples[ix_left].2 {
+                            ix_left = triples_len;
                         }
-                        if ixL < triples_len {
-                            assert!(ixL == 0 || triples[ixL - 1].2 < *b);
+                        if ix_left < triples_len {
+                            assert!(ix_left == 0 || triples[ix_left - 1].2 < *b);
                         }
-                        // ix2 plays the same role as in the quadratic version.  ixL and
-                        // ixR are not used after this point.
-                        let mut ix2 = ixL;
+                        // ix2 plays the same role as in the quadratic version.  ix_left and
+                        // ix_right are not used after this point.
+                        let mut ix2 = ix_left;
                         'loop_over_entries_for_b: loop {
                             if ix2 >= triples_len {
                                 break;
@@ -2252,7 +2263,7 @@ fn merge_RangeFrags(
                 frag_ixs.push(triples[triple_ix].0 /*first field is frag ix*/);
             }
             let sorted_frags = SortedRangeFragIxs::new(frag_ixs, &frag_env);
-            create_and_add_Range(&mut resR, &mut resV, *reg, sorted_frags);
+            create_and_add_range(&mut result_real, &mut result_virtual, *reg, sorted_frags);
         }
         // END merge `all_frag_ixs_for_reg` entries as much as possible
     } // 'per_reg_loop
@@ -2268,45 +2279,56 @@ fn merge_RangeFrags(
         "      in: {} large multi groups, {} large multi group total size",
         n_multi_grps_large, sz_multi_grps_large
     );
-    info!("      out: {} VLRs, {} RLRs", resV.len(), resR.len());
-    info!("    merge_RangeFrags: end");
+    info!(
+        "      out: {} VLRs, {} RLRs",
+        result_virtual.len(),
+        result_real.len()
+    );
+    info!("    merge_range_frags: end");
 
     if CROSSCHECK_MERGE {
-        info!("    merge_RangeFrags: crosscheck: begin");
-        let (resRref, resVref) = merge_RangeFrags_SLOW(fragIx_vecs_per_reg, frag_env, cfg_info);
-        assert!(resR.len() == resRref.len());
-        assert!(resV.len() == resVref.len());
+        info!("    merge_range_frags: crosscheck: begin");
+        let (result_real_ref, result_virtual_ref) =
+            merge_range_frags_slow(frag_ix_vec_per_reg, frag_env, cfg_info);
+        assert!(result_real.len() == result_real_ref.len());
+        assert!(result_virtual.len() == result_virtual_ref.len());
 
-        // We need to check that resR comprises an identical set of RealRanges to
-        // resRref.  Problem is they are presented in some arbitrary order.  Hence
+        // We need to check that result_real comprises an identical set of RealRanges to
+        // result_real_ref.  Problem is they are presented in some arbitrary order.  Hence
         // we need to sort both, per some arbitrary total order, before comparing.
-        let mut resRc = resR.clone();
-        let mut resRrefc = resRref.clone();
-        resRc.sort_by(|x, y| RealRange::cmp_debug_only(x, y));
-        resRrefc.sort_by(|x, y| RealRange::cmp_debug_only(x, y));
-        for i in 0..resR.len() {
+        let mut result_real_clone = result_real.clone();
+        let mut result_real_ref_clone = result_real_ref.clone();
+        result_real_clone.sort_by(|x, y| RealRange::cmp_debug_only(x, y));
+        result_real_ref_clone.sort_by(|x, y| RealRange::cmp_debug_only(x, y));
+        for i in 0..result_real.len() {
             let rlrix = RealRangeIx::new(i);
-            assert!(resRc[rlrix].rreg == resRrefc[rlrix].rreg);
-            assert!(resRc[rlrix].sorted_frags.frag_ixs == resRrefc[rlrix].sorted_frags.frag_ixs);
+            assert!(result_real_clone[rlrix].rreg == result_real_ref_clone[rlrix].rreg);
+            assert!(
+                result_real_clone[rlrix].sorted_frags.frag_ixs
+                    == result_real_ref_clone[rlrix].sorted_frags.frag_ixs
+            );
         }
         // Same deal for the VirtualRanges.
-        let mut resVc = resV.clone();
-        let mut resVrefc = resVref.clone();
-        resVc.sort_by(|x, y| VirtualRange::cmp_debug_only(x, y));
-        resVrefc.sort_by(|x, y| VirtualRange::cmp_debug_only(x, y));
-        for i in 0..resV.len() {
+        let mut result_virtual_clone = result_virtual.clone();
+        let mut result_virtual_ref_clone = result_virtual_ref.clone();
+        result_virtual_clone.sort_by(|x, y| VirtualRange::cmp_debug_only(x, y));
+        result_virtual_ref_clone.sort_by(|x, y| VirtualRange::cmp_debug_only(x, y));
+        for i in 0..result_virtual.len() {
             let vlrix = VirtualRangeIx::new(i);
-            assert!(resVc[vlrix].vreg == resVrefc[vlrix].vreg);
-            assert!(resVc[vlrix].rreg == resVrefc[vlrix].rreg);
-            assert!(resVc[vlrix].sorted_frags.frag_ixs == resVrefc[vlrix].sorted_frags.frag_ixs);
-            assert!(resVc[vlrix].size == resVrefc[vlrix].size);
-            assert!(resVc[vlrix].spill_cost.is_zero());
-            assert!(resVrefc[vlrix].spill_cost.is_zero());
+            assert!(result_virtual_clone[vlrix].vreg == result_virtual_ref_clone[vlrix].vreg);
+            assert!(result_virtual_clone[vlrix].rreg == result_virtual_ref_clone[vlrix].rreg);
+            assert!(
+                result_virtual_clone[vlrix].sorted_frags.frag_ixs
+                    == result_virtual_ref_clone[vlrix].sorted_frags.frag_ixs
+            );
+            assert!(result_virtual_clone[vlrix].size == result_virtual_ref_clone[vlrix].size);
+            assert!(result_virtual_clone[vlrix].spill_cost.is_zero());
+            assert!(result_virtual_ref_clone[vlrix].spill_cost.is_zero());
         }
-        info!("    merge_RangeFrags: crosscheck: end");
+        info!("    merge_range_frags: crosscheck: end");
     }
 
-    (resR, resV)
+    (result_real, result_virtual)
 }
 
 //=============================================================================
@@ -2325,12 +2347,12 @@ fn merge_RangeFrags(
 //
 // all the while being very careful to avoid overflow.
 #[inline(never)]
-fn set_VirtualRange_metrics(
+fn set_virtual_range_metrics(
     vlrs: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
     fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
-    estFreq: &TypedIxVec<BlockIx, u32>,
+    estimated_frequency: &TypedIxVec<BlockIx, u32>,
 ) {
-    info!("    set_VirtualRange_metrics: begin");
+    info!("    set_virtual_range_metrics: begin");
     for vlr in vlrs.iter_mut() {
         debug_assert!(vlr.size == 0 && vlr.spill_cost.is_zero());
         debug_assert!(vlr.rreg.is_none());
@@ -2352,7 +2374,7 @@ fn set_VirtualRange_metrics(
             }
 
             // tot_cost is a float, so no such paranoia there.
-            tot_cost += frag.count as f32 * estFreq[frag.bix] as f32;
+            tot_cost += frag.count as f32 * estimated_frequency[frag.bix] as f32;
         }
 
         debug_assert!(tot_cost >= 0.0);
@@ -2366,7 +2388,7 @@ fn set_VirtualRange_metrics(
         tot_cost /= tot_size as f32;
         vlr.spill_cost = SpillCost::finite(tot_cost);
     }
-    info!("    set_VirtualRange_metrics: end");
+    info!("    set_virtual_range_metrics: end");
 }
 
 //=============================================================================
@@ -2406,18 +2428,18 @@ pub fn run_analysis<F: Function>(
     let cfg_info = CFGInfo::create(func)?;
 
     // Annotate each Block with its estimated execution frequency
-    let mut estFreqs = TypedIxVec::new();
+    let mut estimated_frequencies = TypedIxVec::new();
     for bix in func.blocks() {
-        let mut estFreq = 1;
+        let mut estimated_frequency = 1;
         let mut depth = cfg_info.depth_map[bix];
         if depth > 3 {
             depth = 3;
         }
         for _ in 0..depth {
-            estFreq *= 10;
+            estimated_frequency *= 10;
         }
-        assert!(bix == BlockIx::new(estFreqs.len()));
-        estFreqs.push(estFreq);
+        assert!(bix == BlockIx::new(estimated_frequencies.len()));
+        estimated_frequencies.push(estimated_frequency);
     }
 
     info!("  run_analysis: end control flow analysis");
@@ -2486,7 +2508,7 @@ pub fn run_analysis<F: Function>(
     // VirtualRanges and RealRanges.
     info!("  run_analysis: begin liveness analysis");
 
-    let (frag_ixs_per_reg, frag_env) = get_RangeFrags(
+    let (frag_ixs_per_reg, frag_env) = get_range_frags(
         func,
         &livein_sets_per_block,
         &liveout_sets_per_block,
@@ -2494,11 +2516,11 @@ pub fn run_analysis<F: Function>(
         &reg_universe,
     );
 
-    let (rlr_env, mut vlr_env) = merge_RangeFrags(&frag_ixs_per_reg, &frag_env, &cfg_info);
+    let (rlr_env, mut vlr_env) = merge_range_frags(&frag_ixs_per_reg, &frag_env, &cfg_info);
 
-    set_VirtualRange_metrics(&mut vlr_env, &frag_env, &estFreqs);
+    set_virtual_range_metrics(&mut vlr_env, &frag_env, &estimated_frequencies);
 
-    debug_assert!(liveout_sets_per_block.len() == estFreqs.len());
+    debug_assert!(liveout_sets_per_block.len() == estimated_frequencies.len());
 
     debug!("");
     let mut n = 0;
@@ -2527,6 +2549,6 @@ pub fn run_analysis<F: Function>(
         vlr_env,
         frag_env,
         liveout_sets_per_block,
-        estFreqs,
+        estimated_frequencies,
     ))
 }
