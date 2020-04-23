@@ -1722,14 +1722,14 @@ impl Func {
                 // Get the use, def and mod sets for `self.insns[iix]`.  This is a bit
                 // awkward since we don't have the library's internal convenience
                 // functions available here.
-                let mut ru_vecs = RegUsageCollector::get_empty_RegVecs_TEST_FRAMEWORK_ONLY(false);
+                let mut ru_vecs = RegUsageCollector::get_empty_reg_vecs_test_framework_only(false);
                 let mut ru_collector = RegUsageCollector::new(&mut ru_vecs);
 
                 self.insns[iix].get_reg_usage(&mut ru_collector);
                 assert!(!ru_collector.reg_vecs.is_sanitized());
 
                 let (used_vec, defined_vec, modified_vec) =
-                    ru_collector.get_use_def_mod_vecs_TEST_FRAMEWORK_ONLY();
+                    ru_collector.get_use_def_mod_vecs_test_framework_only();
                 let used = Set::from_vec(used_vec);
                 let defined = Set::from_vec(defined_vec);
                 let modified = Set::from_vec(modified_vec);
