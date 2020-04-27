@@ -266,10 +266,7 @@ impl<T: Copy + PartialOrd + PlusN> IntoIterator for Range<T> {
 impl<T: Copy + Eq + Ord + PlusN> Range<T> {
     /// Create a new range object.
     pub fn new(from: T, len: usize) -> Range<T> {
-        Range {
-            first: from,
-            len,
-        }
+        Range { first: from, len }
     }
 
     pub fn start(&self) -> T {
