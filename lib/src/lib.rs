@@ -29,6 +29,7 @@ mod sparse_set;
 mod union_find;
 
 use log::{info, log_enabled, Level};
+use std::default;
 use std::fmt;
 
 // Stuff that is defined by the library
@@ -348,11 +349,9 @@ pub struct RegAllocResult<F: Function> {
 
 /// A choice of register allocation algorithm to run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RegAllocAlgorithm {
+pub enum AlgorithmWithDefaults {
     Backtracking,
-    BacktrackingChecked,
     LinearScan,
-    LinearScanChecked,
 }
 
 pub use crate::analysis_main::AnalysisError;
@@ -374,43 +373,122 @@ impl fmt::Display for RegAllocError {
     }
 }
 
-/// Allocate registers for a function's code, given a universe of real
-/// registers that we are allowed to use.
+pub use crate::bt_main::BacktrackingOptions;
+pub use crate::linear_scan::LinearScanOptions;
+
+#[derive(Clone)]
+pub enum Algorithm {
+    LinearScan(LinearScanOptions),
+    Backtracking(BacktrackingOptions),
+}
+
+impl fmt::Debug for Algorithm {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Algorithm::LinearScan(opts) => write!(fmt, "{:?}", opts),
+            Algorithm::Backtracking(opts) => write!(fmt, "{:?}", opts),
+        }
+    }
+}
+
+/// Tweakable options shared by all the allocators.
+#[derive(Clone)]
+pub struct Options {
+    /// Should the register allocator check that its results are valid? This adds runtime to the
+    /// compiler, so this is disabled by default.
+    pub run_checker: bool,
+
+    /// Which algorithm should be used for register allocation? By default, selects backtracking,
+    /// which is slower to compile but creates code of better quality.
+    pub algorithm: Algorithm,
+}
+
+impl default::Default for Options {
+    fn default() -> Self {
+        Self {
+            run_checker: false,
+            algorithm: Algorithm::Backtracking(Default::default()),
+        }
+    }
+}
+
+impl fmt::Debug for Options {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "checker: {:?}, algorithm: {:?}",
+            self.run_checker, self.algorithm
+        )
+    }
+}
+
+/// Allocate registers for a function's code, given a universe of real registers that we are
+/// allowed to use.
 ///
-/// The control flow graph must not contain any critical edges, that is, any
-/// edge coming from a block with multiple successors must not flow into a block
-/// with multiple predecessors. The embedder must have split critical edges
-/// before handing over the function to this function. Otherwise, an error will
-/// be returned.
+/// The control flow graph must not contain any critical edges, that is, any edge coming from a
+/// block with multiple successors must not flow into a block with multiple predecessors. The
+/// embedder must have split critical edges before handing over the function to this function.
+/// Otherwise, an error will be returned.
 ///
-/// Allocate may succeed, returning a `RegAllocResult` with the new instruction
-/// sequence, or it may fail, returning an error.
+/// Allocate may succeed, returning a `RegAllocResult` with the new instruction sequence, or it may
+/// fail, returning an error.
+///
+/// Runtime options can be passed to the allocators, through the use of [Options] for options
+/// common to all the backends. The choice of algorithm is done by passing a given [Algorithm]
+/// instance, with options tailored for each algorithm.
 #[inline(never)]
-pub fn allocate_registers<F: Function>(
+pub fn allocate_registers_with_opts<F: Function>(
     func: &mut F,
-    algorithm: RegAllocAlgorithm,
     rreg_universe: &RealRegUniverse,
-    request_block_annotations: bool,
+    opts: Options,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     info!("");
     info!("================ regalloc.rs: BEGIN function ================");
     if log_enabled!(Level::Info) {
+        info!("with options: {:?}", opts);
         let strs = rreg_universe.show();
         info!("using RealRegUniverse:");
         for s in strs {
             info!("  {}", s);
         }
     }
-    let res = match algorithm {
-        RegAllocAlgorithm::Backtracking | RegAllocAlgorithm::BacktrackingChecked => {
-            let use_checker = algorithm == RegAllocAlgorithm::BacktrackingChecked;
-            bt_main::alloc_main(func, rreg_universe, use_checker, request_block_annotations)
+    let run_checker = opts.run_checker;
+    let res = match &opts.algorithm {
+        Algorithm::Backtracking(opts) => {
+            bt_main::alloc_main(func, rreg_universe, run_checker, opts)
         }
-        RegAllocAlgorithm::LinearScan | RegAllocAlgorithm::LinearScanChecked => {
-            let use_checker = algorithm == RegAllocAlgorithm::LinearScanChecked;
-            linear_scan::run(func, rreg_universe, use_checker)
-        }
+        Algorithm::LinearScan(opts) => linear_scan::run(func, rreg_universe, run_checker, opts),
     };
     info!("================ regalloc.rs: END function ================");
     res
+}
+
+/// Allocate registers for a function's code, given a universe of real registers that we are
+/// allowed to use.
+///
+/// The control flow graph must not contain any critical edges, that is, any edge coming from a
+/// block with multiple successors must not flow into a block with multiple predecessors. The
+/// embedder must have split critical edges before handing over the function to this function.
+/// Otherwise, an error will be returned.
+///
+/// Allocate may succeed, returning a `RegAllocResult` with the new instruction sequence, or it may
+/// fail, returning an error.
+///
+/// This is a convenient function that uses standard options for the allocator, according to the
+/// selected algorithm.
+#[inline(never)]
+pub fn allocate_registers<F: Function>(
+    func: &mut F,
+    rreg_universe: &RealRegUniverse,
+    algorithm: AlgorithmWithDefaults,
+) -> Result<RegAllocResult<F>, RegAllocError> {
+    let algorithm = match algorithm {
+        AlgorithmWithDefaults::Backtracking => Algorithm::Backtracking(Default::default()),
+        AlgorithmWithDefaults::LinearScan => Algorithm::LinearScan(Default::default()),
+    };
+    let opts = Options {
+        algorithm,
+        ..Default::default()
+    };
+    allocate_registers_with_opts(func, rreg_universe, opts)
 }

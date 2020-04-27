@@ -42,13 +42,14 @@ fuzz_target!(|func: ir::Func| {
 
     let func_backup = func.clone();
 
-    let ra_result = regalloc::allocate_registers(
-        &mut func,
+    let opts = regalloc::Options {
         //TODO reenable checking once #47 is fixed.
-        regalloc::RegAllocAlgorithm::Backtracking,
-        &reg_universe,
-        /*request_block_annotations=*/ false,
-    );
+        run_checker: false,
+
+        algorithm: regalloc::Algorithm::Backtracking(Default::default()),
+    };
+
+    let ra_result = regalloc::allocate_registers_with_opts(&mut func, &reg_universe, opts);
 
     match ra_result {
         Ok(result) => {

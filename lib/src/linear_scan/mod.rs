@@ -14,6 +14,7 @@ use log::{debug, info, log_enabled, trace, Level};
 use rustc_hash::FxHashMap as HashMap;
 use smallvec::{Array, SmallVec};
 
+use std::default;
 use std::fmt;
 
 use crate::analysis_data_flow::add_raw_reg_vecs_for_insn;
@@ -24,6 +25,21 @@ use crate::{Function, RegAllocError, RegAllocResult};
 
 mod assign_registers;
 mod resolve_moves;
+
+#[derive(Clone)]
+pub struct LinearScanOptions;
+
+impl default::Default for LinearScanOptions {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl fmt::Debug for LinearScanOptions {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "linear scan")
+    }
+}
 
 // Helpers for SmallVec
 fn smallvec_append<A: Array>(dst: &mut SmallVec<A>, src: &mut SmallVec<A>)
@@ -896,6 +912,7 @@ pub(crate) fn run<F: Function>(
     func: &mut F,
     reg_universe: &RealRegUniverse,
     use_checker: bool,
+    _opts: &LinearScanOptions,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     let (reg_uses, mut rlrs, mut vlrs, mut fragments, liveouts, _est_freqs, _inst_to_block_map) =
         run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
