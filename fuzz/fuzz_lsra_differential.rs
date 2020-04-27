@@ -28,9 +28,8 @@ fuzz_target!(|func: ir::Func| {
 
     let result = match regalloc::allocate_registers(
         &mut func,
-        regalloc::RegAllocAlgorithm::LinearScanChecked,
         &reg_universe,
-        /*request_block_annotations=*/ false,
+        regalloc::AlgorithmWithDefaults::LinearScan,
     ) {
         Ok(result) => result,
         Err(err) => {

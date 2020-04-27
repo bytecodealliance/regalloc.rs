@@ -16,13 +16,14 @@ fuzz_target!(|func: ir::Func| {
     func.render("before allocation", &mut rendered).unwrap();
     println!("{}", rendered);
 
-    let result = match regalloc::allocate_registers(
-        &mut func,
-        // TODO reenable checking once #47 is fixed.
-        regalloc::RegAllocAlgorithm::Backtracking,
-        &reg_universe,
-        /*request_block_annotations=*/ false,
-    ) {
+    let opts = regalloc::Options {
+        //TODO reenable checking once #47 is fixed.
+        run_checker: false,
+
+        algorithm: regalloc::Algorithm::Backtracking(Default::default()),
+    };
+
+    let result = match regalloc::allocate_registers_with_opts(&mut func, &reg_universe, opts) {
         Ok(result) => result,
         Err(err) => {
             if let regalloc::RegAllocError::RegChecker(_) = &err {

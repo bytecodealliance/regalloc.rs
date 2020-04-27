@@ -5,6 +5,7 @@
 
 use log::{debug, info, log_enabled, Level};
 use smallvec::SmallVec;
+use std::default;
 use std::fmt;
 
 use crate::analysis_control_flow::InstIxToBlockIxMap;
@@ -25,6 +26,30 @@ use crate::inst_stream::{edit_inst_stream, InstToInsert, InstToInsertAndPoint};
 use crate::sparse_set::{SparseSet, SparseSetU};
 use crate::union_find::UnionFindEquivClasses;
 use crate::{Function, RegAllocError, RegAllocResult};
+
+#[derive(Clone)]
+pub struct BacktrackingOptions {
+    /// Should the register allocator generate block annotations?
+    pub request_block_annotations: bool,
+}
+
+impl default::Default for BacktrackingOptions {
+    fn default() -> Self {
+        Self {
+            request_block_annotations: false,
+        }
+    }
+}
+
+impl fmt::Debug for BacktrackingOptions {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            fmt,
+            "backtracking (block annotations: {})",
+            self.request_block_annotations
+        )
+    }
+}
 
 //=============================================================================
 // The per-real-register state
@@ -790,7 +815,7 @@ pub fn alloc_main<F: Function>(
     func: &mut F,
     reg_universe: &RealRegUniverse,
     use_checker: bool,
-    request_block_annotations: bool,
+    opts: &BacktrackingOptions,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     // -------- Perform initial liveness analysis --------
     // Note that the analysis phase can fail; hence we propagate any error.
@@ -1817,7 +1842,7 @@ pub fn alloc_main<F: Function>(
 
     assert!(est_freqs.len() as usize == func.blocks().len());
     let mut block_annotations = None;
-    if request_block_annotations {
+    if opts.request_block_annotations {
         let mut anns = TypedIxVec::<BlockIx, Vec<String>>::new();
         for (estFreq, i) in est_freqs.iter().zip(0..) {
             let bix = BlockIx::new(i);

@@ -4,12 +4,12 @@ mod test_cases;
 mod test_framework;
 mod validator;
 
-use regalloc::{allocate_registers, RegAllocAlgorithm};
+use regalloc::{allocate_registers_with_opts, Algorithm, BacktrackingOptions, Options};
 use test_framework::{make_universe, run_func, RunStage};
 use validator::check_results;
 
 use clap;
-use log::{self, error, info};
+use log::{self, error};
 use pretty_env_logger;
 
 //=============================================================================
@@ -73,23 +73,18 @@ fn main() {
         }
     };
 
-    let reg_alloc_kind = match matches.value_of("algorithm").unwrap() {
-        "bt" => {
-            info!("Using the backtracking allocator");
-            RegAllocAlgorithm::Backtracking
-        }
-        "btc" => {
-            info!("Using the backtracking allocator, with checking");
-            RegAllocAlgorithm::BacktrackingChecked
-        }
-        "lsra" => {
-            info!("Using the linear scan allocator");
-            RegAllocAlgorithm::LinearScan
-        }
-        "lsrac" => {
-            info!("Using the linear scan allocator, with checking");
-            RegAllocAlgorithm::LinearScanChecked
-        }
+    let algorithm = matches.value_of("algorithm").unwrap();
+    let opts = match algorithm {
+        "bt" | "btc" => Options {
+            run_checker: algorithm == "btc",
+            algorithm: Algorithm::Backtracking(BacktrackingOptions {
+                request_block_annotations: true,
+            }),
+        },
+        "lsra" | "lsrac" => Options {
+            run_checker: algorithm == "lsrac",
+            algorithm: Algorithm::LinearScan(Default::default()),
+        },
         // Unreachable because of defined "possible_values".
         _ => unreachable!(),
     };
@@ -101,12 +96,7 @@ fn main() {
     // Just so we can run it later.  Not needed for actual allocation.
     let original_func = func.clone();
 
-    let result = match allocate_registers(
-        &mut func,
-        reg_alloc_kind,
-        &reg_universe,
-        /*request_block_annotations=*/ true,
-    ) {
+    let result = match allocate_registers_with_opts(&mut func, &reg_universe, opts) {
         Err(e) => {
             println!("allocation failed: {}", e);
             return;
@@ -147,7 +137,7 @@ fn main() {
 
 #[cfg(test)]
 mod test_utils {
-    use regalloc::{RegAllocError, RegAllocResult};
+    use regalloc::{allocate_registers, AlgorithmWithDefaults, RegAllocError, RegAllocResult};
 
     use super::*;
     use crate::test_framework::Func;
@@ -160,30 +150,29 @@ mod test_utils {
         check_bt_internal(func_name, num_gpr, num_fpu, /* use_checker = */ true);
     }
 
-    fn check_bt_internal(func_name: &str, num_gpr: usize, num_fpu: usize, use_checker: bool) {
+    fn check_bt_internal(func_name: &str, num_gpr: usize, num_fpu: usize, run_checker: bool) {
         let _ = pretty_env_logger::try_init();
         let mut func = test_cases::find_func(func_name).unwrap();
         let reg_universe = make_universe(num_gpr, num_fpu);
-        let algo = if use_checker {
-            RegAllocAlgorithm::BacktrackingChecked
-        } else {
-            RegAllocAlgorithm::Backtracking
+
+        let opts = Options {
+            run_checker,
+            algorithm: Algorithm::Backtracking(BacktrackingOptions {
+                request_block_annotations: false,
+            }),
         };
+
         let before_regalloc_result = run_func(
             &func,
             "Before allocation",
             &reg_universe,
             RunStage::BeforeRegalloc,
         );
-        let result = allocate_registers(
-            &mut func,
-            algo,
-            &reg_universe,
-            /*request_block_annotations=*/ false,
-        )
-        .unwrap_or_else(|err| {
-            panic!("allocation failed: {}", err);
-        });
+        let result =
+            allocate_registers_with_opts(&mut func, &reg_universe, opts).unwrap_or_else(|err| {
+                panic!("allocation failed: {}", err);
+            });
+
         func.update_from_alloc(result);
         let after_regalloc_result = run_func(
             &func,
@@ -203,12 +192,7 @@ mod test_utils {
         let _ = pretty_env_logger::try_init();
         let mut func = test_cases::find_func(func_name).unwrap();
         let reg_universe = make_universe(num_gpr, num_fpu);
-        allocate_registers(
-            &mut func,
-            RegAllocAlgorithm::LinearScan,
-            &reg_universe,
-            /*request_block_annotations=*/ false,
-        )
+        allocate_registers(&mut func, &reg_universe, AlgorithmWithDefaults::LinearScan)
     }
 
     // Note: num_gpr/num_fpu: must include the scratch register.
@@ -223,17 +207,18 @@ mod test_utils {
             RunStage::BeforeRegalloc,
         );
         func.print("BEFORE", &None);
-        let result = allocate_registers(
-            &mut func,
-            RegAllocAlgorithm::LinearScanChecked,
-            &reg_universe,
-            /*request_block_annotations=*/ false,
-        )
-        .unwrap_or_else(|err| {
-            panic!("allocation failed: {}", err);
-        });
+
+        let opts = Options {
+            run_checker: true,
+            algorithm: Algorithm::LinearScan(Default::default()),
+        };
+        let result =
+            allocate_registers_with_opts(&mut func, &reg_universe, opts).unwrap_or_else(|err| {
+                panic!("allocation failed: {}", err);
+            });
         func.update_from_alloc(result);
         func.print("AFTER", &None);
+
         let after_regalloc_result = run_func(
             &func,
             "After allocation",
@@ -258,19 +243,18 @@ mod test_utils {
         );
         func.print("BEFORE", &None);
 
+        let opts = Options {
+            run_checker: false,
+            algorithm: Algorithm::LinearScan(Default::default()),
+        };
         loop {
             println!("for num_gpr = {}", num_gpr);
 
             let mut func = func.clone();
             let reg_universe = make_universe(num_gpr, 0);
 
-            let result = allocate_registers(
-                &mut func,
-                RegAllocAlgorithm::LinearScan,
-                &reg_universe,
-                /*request_block_annotations=*/ false,
-            )
-            .expect("regalloc failure");
+            let result = allocate_registers_with_opts(&mut func, &reg_universe, opts.clone())
+                .expect("regalloc failure");
 
             func.update_from_alloc(result);
             func.print("AFTER", &None);
