@@ -7,6 +7,15 @@ on:
     branches: [ master ]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install rustfmt
+      run: rustup component add rustfmt
+    - name: Run rustfmt and check there's no difference
+      run: cargo fmt --all -- --check
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -15,7 +24,20 @@ jobs:
       run: cargo build
     - name: Run tests
       run: cargo test --all --verbose
-    - name: Install rustfmt
-      run: rustup component add rustfmt
-    - name: Run rustfmt and check there's no difference
-      run: cargo fmt --all -- --check
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install nightly
+      run: rustup toolchain install nightly
+    - name: Install cargo-fuzz
+      run: cargo +nightly install cargo-fuzz
+    - name: Test bt fuzzing target
+      run: cargo +nightly fuzz run bt ./fuzz/corpus_example.bin
+    - name: Test bt_differential fuzzing target
+      run: cargo +nightly fuzz run bt_differential ./fuzz/corpus_example.bin
+    - name: Test lsra_differential fuzzing target
+      run: cargo +nightly fuzz run lsra_differential ./fuzz/corpus_example.bin
+    - name: Test parser fuzzing target
+      run: cargo +nightly fuzz run parser ./fuzz/corpus_example.bin
