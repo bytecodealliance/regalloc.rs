@@ -4,7 +4,7 @@ use libfuzzer_sys::fuzz_target;
 use minira::{parser, test_framework as ir};
 
 fuzz_target!(|func: ir::Func| {
-    func.print("generated func");
+    func.print("generated func", &None);
 
     let mut printed = String::new();
     func.render("func", &mut printed)
