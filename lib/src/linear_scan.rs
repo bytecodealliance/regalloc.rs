@@ -46,7 +46,7 @@ where
         res.push(arr[i]);
     }
     arr.truncate(at);
-    assert!(arr.len() + res.len() == orig_size);
+    debug_assert!(arr.len() + res.len() == orig_size);
     res
 }
 
@@ -3240,7 +3240,7 @@ fn apply_registers<F: Function>(
 
     trace!("frag_map: {:?}", frag_map);
 
-    let final_insns_and_targetmap_or_err = edit_inst_stream(
+    let (final_insns, target_map, orig_insn_map) = edit_inst_stream(
         func,
         memory_moves,
         &vec![],
@@ -3249,12 +3249,7 @@ fn apply_registers<F: Function>(
         reg_universe,
         true, // multiple blocks per frag
         use_checker,
-    );
-
-    let (final_insns, target_map, orig_insn_map) = match final_insns_and_targetmap_or_err {
-        Err(e) => return Err(e),
-        Ok(pair) => pair,
-    };
+    )?;
 
     // Compute clobbered registers with one final, quick pass.
     //
@@ -3278,7 +3273,7 @@ fn apply_registers<F: Function>(
         add_raw_reg_vecs_for_insn::<F>(insn, &mut reg_vecs, &mut dummy_bounds);
     }
     for reg in reg_vecs.defs.iter().chain(reg_vecs.mods.iter()) {
-        assert!(reg.is_real());
+        debug_assert!(reg.is_real());
         clobbered_registers.insert(reg.to_real_reg());
     }
 
@@ -3292,14 +3287,12 @@ fn apply_registers<F: Function>(
         }
     });
 
-    let ra_res = RegAllocResult {
+    Ok(RegAllocResult {
         insns: final_insns,
         target_map,
         orig_insn_map,
         clobbered_registers,
         num_spill_slots,
         block_annotations: None,
-    };
-
-    Ok(ra_res)
+    })
 }
