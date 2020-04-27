@@ -1266,7 +1266,7 @@ fn ref_next_use(
         if frag.last < pos {
             continue;
         }
-        for inst_id in frag.first.iix.dotdot(frag.last.iix.plus_one()) {
+        for inst_id in frag.first.iix.dotdot(frag.last.iix.plus_n(1)) {
             if inst_id < pos.iix {
                 continue;
             }

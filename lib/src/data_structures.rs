@@ -242,22 +242,17 @@ pub trait Zero {
     fn zero() -> Self;
 }
 
-pub trait PlusOne {
-    fn plus_one(&self) -> Self;
-}
-
-pub trait PlusN: PlusOne {
+pub trait PlusN {
     fn plus_n(&self, n: usize) -> Self;
 }
 
 #[derive(Clone, Copy)]
 pub struct Range<T> {
     first: T,
-    last_plus1: T,
     len: usize,
 }
 
-impl<T: Copy + PartialOrd + PlusOne> IntoIterator for Range<T> {
+impl<T: Copy + PartialOrd + PlusN> IntoIterator for Range<T> {
     type Item = T;
     type IntoIter = MyIterator<T>;
     fn into_iter(self) -> Self::IntoIter {
@@ -268,12 +263,11 @@ impl<T: Copy + PartialOrd + PlusOne> IntoIterator for Range<T> {
     }
 }
 
-impl<T: Copy + Eq + Ord + PlusOne + PlusN> Range<T> {
+impl<T: Copy + Eq + Ord + PlusN> Range<T> {
     /// Create a new range object.
     pub fn new(from: T, len: usize) -> Range<T> {
         Range {
             first: from,
-            last_plus1: from.plus_n(len),
             len,
         }
     }
@@ -292,6 +286,10 @@ impl<T: Copy + Eq + Ord + PlusOne + PlusN> Range<T> {
         self.start().plus_n(self.len() - 1)
     }
 
+    pub fn last_plus1(&self) -> T {
+        self.start().plus_n(self.len())
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
@@ -305,14 +303,14 @@ pub struct MyIterator<T> {
     range: Range<T>,
     next: T,
 }
-impl<T: Copy + PartialOrd + PlusOne> Iterator for MyIterator<T> {
+impl<T: Copy + PartialOrd + PlusN> Iterator for MyIterator<T> {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.next >= self.range.last_plus1 {
+        if self.next >= self.range.first.plus_n(self.range.len) {
             None
         } else {
             let res = Some(self.next);
-            self.next = self.next.plus_one();
+            self.next = self.next.plus_n(1);
             res
         }
     }
@@ -330,7 +328,7 @@ pub struct TypedIxVec<TyIx, Ty> {
 impl<TyIx, Ty> TypedIxVec<TyIx, Ty>
 where
     Ty: Clone,
-    TyIx: Copy + Eq + Ord + Zero + PlusOne + PlusN + Into<u32>,
+    TyIx: Copy + Eq + Ord + Zero + PlusN + Into<u32>,
 {
     pub fn new() -> Self {
         Self {
@@ -495,13 +493,6 @@ macro_rules! generate_boilerplate {
                 } else {
                     write!(fmt, "{}{}", $PrintingPrefix, &self.get())
                 }
-            }
-        }
-        impl PlusOne for $TypeIx {
-            #[inline(always)]
-            fn plus_one(&self) -> Self {
-                debug_assert!(self.is_valid());
-                self.plus(1)
             }
         }
         impl PlusN for $TypeIx {
