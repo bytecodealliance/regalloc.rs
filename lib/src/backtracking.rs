@@ -567,16 +567,18 @@ fn do_coalescing_analysis<F: Function>(
                 None => {}
                 Some((wreg, reg)) => {
                     let iix_bounds = &reg_vecs_and_bounds.bounds[iix];
-                    // It might seem strange to assert that defs_len is <= 1 rather than
-                    // == 1.  But -- as fuzzing shows -- it might be that the
-                    // destination of a copy is a real reg that is one of the
-                    // RealRegUniverse `suggested_scratch` registers.  It is allowable
-                    // for such a register to be defined, but not used or modified.
-                    // However, sanitisation will ensure it is not present in any of the
-                    // three register sets.  Hence the assertions and the following
-                    // conditional block.  If any of the following five assertions fail,
-                    // the client's `is_move` is probably lying to us.
-                    assert!(iix_bounds.uses_len == 1);
+                    // It might seem strange to assert that `defs_len` and/or
+                    // `uses_len` is <= 1 rather than == 1.  The reason is
+                    // that either or even both registers might be ones which
+                    // are not available to the allocator.  Hence they will
+                    // have been removed by the sanitisation machinery before
+                    // we get to this point.  If either is missing, we
+                    // unfortunately can't coalesce the move away, and just
+                    // have to live with it.
+                    //
+                    // If any of the following five assertions fail, the
+                    // client's `is_move` is probably lying to us.
+                    assert!(iix_bounds.uses_len <= 1);
                     assert!(iix_bounds.defs_len <= 1);
                     assert!(iix_bounds.mods_len == 0);
                     if iix_bounds.uses_len == 1 && iix_bounds.defs_len == 1 {
