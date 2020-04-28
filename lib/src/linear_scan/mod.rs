@@ -1031,7 +1031,6 @@ fn apply_registers<F: Function>(
         frag_map,
         fragments,
         reg_universe,
-        true, // multiple blocks per frag
         use_checker,
     )?;
 

@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::mem;
 use std::ops::Index;
 use std::ops::IndexMut;
 use std::slice::{Iter, IterMut};
@@ -640,12 +641,14 @@ pub struct Reg {
     do_not_access_this_directly: u32,
 }
 
+static INVALID_REG: u32 = 0xffffffff;
+
 impl Reg {
     pub fn is_virtual(self) -> bool {
-        (self.do_not_access_this_directly & 0x8000_0000) != 0
+        self.is_valid() && (self.do_not_access_this_directly & 0x8000_0000) != 0
     }
     pub fn is_real(self) -> bool {
-        !self.is_virtual()
+        self.is_valid() && !self.is_virtual()
     }
     pub fn new_real(rc: RegClass, enc: u8, index: u8) -> Self {
         let n = (0 << 31) | (rc.rc_to_u32() << 28) | ((enc as u32) << 8) | ((index as u32) << 0);
@@ -662,10 +665,29 @@ impl Reg {
             do_not_access_this_directly: n,
         }
     }
+    pub fn invalid() -> Reg {
+        Reg {
+            do_not_access_this_directly: INVALID_REG,
+        }
+    }
+    pub fn is_invalid(self) -> bool {
+        self.do_not_access_this_directly == INVALID_REG
+    }
+    pub fn is_valid(self) -> bool {
+        !self.is_invalid()
+    }
+    pub fn is_virtual_or_invalid(self) -> bool {
+        self.is_virtual() || self.is_invalid()
+    }
+    pub fn is_real_or_invalid(self) -> bool {
+        self.is_real() || self.is_invalid()
+    }
     pub fn get_class(self) -> RegClass {
+        debug_assert!(self.is_valid());
         RegClass::rc_from_u32((self.do_not_access_this_directly >> 28) & 0x7)
     }
     pub fn get_index(self) -> usize {
+        debug_assert!(self.is_valid());
         // Return type is usize because typically we will want to use the
         // result for indexing into a Vec
         if self.is_virtual() {
@@ -675,6 +697,7 @@ impl Reg {
         }
     }
     pub fn get_hw_encoding(self) -> u8 {
+        debug_assert!(self.is_valid());
         if self.is_virtual() {
             panic!("Virtual register does not have a hardware encoding")
         } else {
@@ -682,14 +705,16 @@ impl Reg {
         }
     }
     pub fn as_virtual_reg(self) -> Option<VirtualReg> {
-        if self.is_virtual() {
+        // Allow invalid virtual regs as well.
+        if self.is_virtual_or_invalid() {
             Some(VirtualReg { reg: self })
         } else {
             None
         }
     }
     pub fn as_real_reg(self) -> Option<RealReg> {
-        if self.is_real() {
+        // Allow invalid real regs as well.
+        if self.is_real_or_invalid() {
             Some(RealReg { reg: self })
         } else {
             None
@@ -698,21 +723,27 @@ impl Reg {
     pub fn show_with_rru(self, univ: &RealRegUniverse) -> String {
         if self.is_real() && self.get_index() < univ.regs.len() {
             univ.regs[self.get_index()].1.clone()
-        } else {
+        } else if self.is_valid() {
             format!("{:?}", self)
+        } else {
+            "rINVALID".to_string()
         }
     }
 }
 
 impl fmt::Debug for Reg {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            fmt,
-            "{}{}{}",
-            if self.is_virtual() { "v" } else { "r" },
-            self.get_index(),
-            self.get_class().short_name(),
-        )
+        if self.is_valid() {
+            write!(
+                fmt,
+                "{}{}{}",
+                if self.is_virtual() { "v" } else { "r" },
+                self.get_index(),
+                self.get_class().short_name(),
+            )
+        } else {
+            write!(fmt, "rINVALID")
+        }
     }
 }
 
@@ -746,6 +777,24 @@ impl RealReg {
     pub fn to_reg(self) -> Reg {
         self.reg
     }
+    pub fn invalid() -> RealReg {
+        RealReg {
+            reg: Reg::invalid(),
+        }
+    }
+    pub fn is_valid(self) -> bool {
+        self.reg.is_valid()
+    }
+    pub fn is_invalid(self) -> bool {
+        self.reg.is_invalid()
+    }
+    pub fn maybe_valid(self) -> Option<RealReg> {
+        if self == RealReg::invalid() {
+            None
+        } else {
+            Some(self)
+        }
+    }
 }
 impl fmt::Debug for RealReg {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -776,6 +825,24 @@ impl VirtualReg {
     pub fn to_reg(self) -> Reg {
         self.reg
     }
+    pub fn invalid() -> VirtualReg {
+        VirtualReg {
+            reg: Reg::invalid(),
+        }
+    }
+    pub fn is_valid(self) -> bool {
+        self.reg.is_valid()
+    }
+    pub fn is_invalid(self) -> bool {
+        self.reg.is_invalid()
+    }
+    pub fn maybe_valid(self) -> Option<VirtualReg> {
+        if self == VirtualReg::invalid() {
+            None
+        } else {
+            Some(self)
+        }
+    }
 }
 impl fmt::Debug for VirtualReg {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -784,41 +851,31 @@ impl fmt::Debug for VirtualReg {
 }
 
 impl Reg {
-    // Apply a vreg-rreg mapping to a Reg.  This used for registers used in
-    // either a read- or a write-role.
-    pub fn apply_defs_or_uses(&mut self, map: &Map<VirtualReg, RealReg>) {
-        if let Some(vreg) = self.as_virtual_reg() {
-            if let Some(rreg) = map.get(&vreg) {
-                debug_assert!(rreg.get_class() == vreg.get_class());
-                *self = rreg.to_reg();
-            } else {
-                panic!("Reg::apply_defs_or_uses: no mapping for {:?}", self);
-            }
-        }
+    /// Apply a vreg-rreg mapping to a Reg.  This is used for registers used in
+    /// a read-role.
+    pub fn apply_uses(&mut self, mapper: &RegUsageMapper) {
+        self.apply(|vreg| mapper.get_use(vreg));
     }
-    // Apply a pair of vreg-rreg mappings to a Reg.  The mappings *must*
-    // agree!  This seems a bit strange at first.  It is used for registers
-    // used in a modify-role.
-    pub fn apply_mods(
-        &mut self,
-        map_defs: &Map<VirtualReg, RealReg>,
-        map_uses: &Map<VirtualReg, RealReg>,
-    ) {
+
+    /// Apply a vreg-rreg mapping to a Reg.  This is used for registers used in
+    /// a write-role.
+    pub fn apply_defs(&mut self, mapper: &RegUsageMapper) {
+        self.apply(|vreg| mapper.get_def(vreg));
+    }
+
+    /// Apply a vreg-rreg mapping to a Reg.  This is used for registers used in
+    /// a modify-role.
+    pub fn apply_mods(&mut self, mapper: &RegUsageMapper) {
+        self.apply(|vreg| mapper.get_mod(vreg));
+    }
+
+    fn apply<F: Fn(VirtualReg) -> Option<RealReg>>(&mut self, f: F) {
         if let Some(vreg) = self.as_virtual_reg() {
-            let mb_result_def = map_defs.get(&vreg);
-            let mb_result_use = map_uses.get(&vreg);
-            // Failure of this is serious and should be investigated.
-            if mb_result_def != mb_result_use {
-                panic!(
-                    "Reg::apply_mods: inconsistent mappings for {:?}: D={:?}, U={:?}",
-                    vreg, mb_result_def, mb_result_use
-                );
-            }
-            if let Some(rreg) = mb_result_def {
+            if let Some(rreg) = f(vreg) {
                 debug_assert!(rreg.get_class() == vreg.get_class());
                 *self = rreg.to_reg();
             } else {
-                panic!("Reg::apply: no mapping for {:?}", vreg);
+                panic!("Reg::apply: no mapping for {:?}", self);
             }
         }
     }
@@ -1085,6 +1142,170 @@ impl RegVecsAndBounds {
             regsets.mods.insert(self.vecs.mods[i]);
         }
         regsets
+    }
+}
+
+//=============================================================================
+// Register maps: virtual-to-real mapping.
+
+/// This data structure holds the mappings needed to map an instruction's uses,
+/// mods and defs from virtual to real registers.
+#[derive(Debug)]
+pub struct RegUsageMapper {
+    /// Dense vector-map indexed by virtual register number. This is consulted
+    /// directly for use-queries and augmented with the overlay for def-queries.
+    slots: Vec<RealReg>,
+
+    /// Overlay for def-queries. This is a set of updates that occurs "during"
+    /// the instruction in question, and will be applied to the slots array
+    /// once we are done processing this instruction (in preparation for
+    /// the next one).
+    overlay: SmallVec<[(VirtualReg, RealReg); 16]>,
+}
+
+impl RegUsageMapper {
+    /// Allocate a reg-usage mapper with the given predicted vreg capacity.
+    pub(crate) fn new(vreg_capacity: usize) -> RegUsageMapper {
+        RegUsageMapper {
+            slots: Vec::with_capacity(vreg_capacity),
+            overlay: SmallVec::new(),
+        }
+    }
+
+    /// Is the overlay past the sorted-size threshold?
+    fn is_overlay_large_enough_to_sort(&self) -> bool {
+        // Use the SmallVec spill-to-heap threshold as a threshold for "large
+        // enough to sort"; this has the effect of amortizing the cost of
+        // sorting along with the cost of copying out to heap memory, and also
+        // ensures that when we access heap (more likely to miss in cache), we
+        // do it with O(log N) accesses instead of O(N).
+        self.overlay.spilled()
+    }
+
+    /// Update the overlay.
+    pub(crate) fn set_overlay(&mut self, vreg: VirtualReg, rreg: Option<RealReg>) {
+        let rreg = rreg.unwrap_or(RealReg::invalid());
+        self.overlay.push((vreg, rreg));
+    }
+
+    /// Finish updates to the overlay, sorting if necessary.
+    pub(crate) fn finish_overlay(&mut self) {
+        if self.overlay.len() == 0 || !self.is_overlay_large_enough_to_sort() {
+            return;
+        }
+
+        // Sort stably, so that later updates continue to come after earlier
+        // ones.
+        self.overlay.sort_by_key(|pair| pair.0);
+        // Remove duplicates by collapsing runs of same-vreg pairs down to
+        // the last one.
+        let mut last_vreg = self.overlay[0].0;
+        let mut out = 0;
+        for i in 1..self.overlay.len() {
+            let this_vreg = self.overlay[i].0;
+            if this_vreg != last_vreg {
+                out += 1;
+            }
+            if i != out {
+                self.overlay[out] = self.overlay[i];
+            }
+            last_vreg = this_vreg;
+        }
+        let new_len = out + 1;
+        self.overlay.truncate(new_len);
+    }
+
+    /// Merge the overlay into the main map.
+    pub(crate) fn merge_overlay(&mut self) {
+        // Take the SmallVec and swap with empty to allow `&mut self` method
+        // call below.
+        let mappings = mem::replace(&mut self.overlay, SmallVec::new());
+        for (vreg, rreg) in mappings.into_iter() {
+            self.set_direct_internal(vreg, rreg);
+        }
+    }
+
+    /// Make a direct update to the mapping. Only usable when the overlay
+    /// is empty.
+    pub(crate) fn set_direct(&mut self, vreg: VirtualReg, rreg: Option<RealReg>) {
+        debug_assert!(self.overlay.is_empty());
+        let rreg = rreg.unwrap_or(RealReg::invalid());
+        self.set_direct_internal(vreg, rreg);
+    }
+
+    fn set_direct_internal(&mut self, vreg: VirtualReg, rreg: RealReg) {
+        let idx = vreg.get_index();
+        if idx >= self.slots.len() {
+            self.slots.resize(idx + 1, RealReg::invalid());
+        }
+        self.slots[idx] = rreg;
+    }
+
+    /// Perform a lookup directly in the main map. Returns `None` for
+    /// not-present.
+    fn lookup_direct(&self, vreg: VirtualReg) -> Option<RealReg> {
+        let idx = vreg.get_index();
+        if idx >= self.slots.len() {
+            None
+        } else {
+            Some(self.slots[idx])
+        }
+    }
+
+    /// Perform a lookup in the overlay. Returns `None` for not-present. No
+    /// fallback to main map (that happens in callers). Returns `Some` even
+    /// if mapped to `RealReg::invalid()`, because this is a tombstone
+    /// (represents deletion) in the overlay.
+    fn lookup_overlay(&self, vreg: VirtualReg) -> Option<RealReg> {
+        if self.is_overlay_large_enough_to_sort() {
+            // Do a binary search; we are guaranteed to have at most one
+            // matching because duplicates were collapsed after sorting.
+            if let Ok(idx) = self.overlay.binary_search_by_key(&vreg, |pair| pair.0) {
+                return Some(self.overlay[idx].1);
+            }
+        } else {
+            // Search in reverse order to find later updates first.
+            for &(this_vreg, this_rreg) in self.overlay.iter().rev() {
+                if this_vreg == vreg {
+                    return Some(this_rreg);
+                }
+            }
+        }
+        None
+    }
+
+    /// Sanity check: check that all slots are empty. Typically for use at the
+    /// end of processing as a debug-assert.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.overlay.iter().all(|pair| pair.1.is_invalid())
+            && self.slots.iter().all(|rreg| rreg.is_invalid())
+    }
+
+    // -- client-facing API: --
+
+    /// Return the `RealReg` if mapped, or `None`, for `vreg` occuring as a use
+    /// on the current instruction.
+    pub fn get_use(&self, vreg: VirtualReg) -> Option<RealReg> {
+        self.lookup_direct(vreg)
+            // Convert Some(RealReg::invalid()) to None.
+            .and_then(|reg| reg.maybe_valid())
+    }
+
+    /// Return the `RealReg` if mapped, or `None`, for `vreg` occuring as a def
+    /// on the current instruction.
+    pub fn get_def(&self, vreg: VirtualReg) -> Option<RealReg> {
+        self.lookup_overlay(vreg)
+            .or_else(|| self.lookup_direct(vreg))
+            // Convert Some(RealReg::invalid()) to None.
+            .and_then(|reg| reg.maybe_valid())
+    }
+
+    /// Return the `RealReg` if mapped, or `None`, for a `vreg` occuring as a
+    /// mod on the current instruction.
+    pub fn get_mod(&self, vreg: VirtualReg) -> Option<RealReg> {
+        let result = self.get_use(vreg);
+        debug_assert_eq!(result, self.get_def(vreg));
+        result
     }
 }
 
@@ -1934,6 +2155,125 @@ impl VirtualRange {
             },
             oth1 => oth1,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn vreg(idx: u32) -> VirtualReg {
+        Reg::new_virtual(RegClass::I64, idx).to_virtual_reg()
+    }
+    fn rreg(idx: u8) -> RealReg {
+        Reg::new_real(RegClass::I64, /* enc = */ 0, /* index = */ idx).to_real_reg()
+    }
+
+    #[test]
+    fn test_reg_use_mapper() {
+        let mut mapper = RegUsageMapper::new(/* estimated vregs = */ 16);
+        assert_eq!(None, mapper.get_use(vreg(0)));
+        assert_eq!(None, mapper.get_def(vreg(0)));
+        assert_eq!(None, mapper.get_mod(vreg(0)));
+
+        mapper.set_direct(vreg(0), Some(rreg(1)));
+        mapper.set_direct(vreg(1), Some(rreg(2)));
+
+        assert_eq!(Some(rreg(1)), mapper.get_use(vreg(0)));
+        assert_eq!(Some(rreg(1)), mapper.get_def(vreg(0)));
+        assert_eq!(Some(rreg(1)), mapper.get_mod(vreg(0)));
+        assert_eq!(Some(rreg(2)), mapper.get_use(vreg(1)));
+        assert_eq!(Some(rreg(2)), mapper.get_def(vreg(1)));
+        assert_eq!(Some(rreg(2)), mapper.get_mod(vreg(1)));
+
+        mapper.set_overlay(vreg(0), Some(rreg(3)));
+        mapper.set_overlay(vreg(2), Some(rreg(4)));
+        mapper.finish_overlay();
+
+        assert_eq!(Some(rreg(1)), mapper.get_use(vreg(0)));
+        assert_eq!(Some(rreg(3)), mapper.get_def(vreg(0)));
+        // vreg 0 not valid for mod (use and def differ).
+        assert_eq!(Some(rreg(2)), mapper.get_use(vreg(1)));
+        assert_eq!(Some(rreg(2)), mapper.get_def(vreg(1)));
+        assert_eq!(Some(rreg(2)), mapper.get_mod(vreg(1)));
+        assert_eq!(None, mapper.get_use(vreg(2)));
+        assert_eq!(Some(rreg(4)), mapper.get_def(vreg(2)));
+        // vreg 2 not valid for mod (use and def differ).
+
+        mapper.merge_overlay();
+        assert_eq!(Some(rreg(3)), mapper.get_use(vreg(0)));
+        assert_eq!(Some(rreg(2)), mapper.get_use(vreg(1)));
+        assert_eq!(Some(rreg(4)), mapper.get_use(vreg(2)));
+        assert_eq!(None, mapper.get_use(vreg(3)));
+
+        // Check tombstoning behavior.
+        mapper.set_overlay(vreg(0), None);
+        mapper.finish_overlay();
+        assert_eq!(Some(rreg(3)), mapper.get_use(vreg(0)));
+        assert_eq!(None, mapper.get_def(vreg(0)));
+        mapper.merge_overlay();
+
+        // Check large (sorted) overlay mode.
+        for i in (2..50).rev() {
+            mapper.set_overlay(vreg(i), Some(rreg((i + 100) as u8)));
+        }
+        mapper.finish_overlay();
+        assert_eq!(None, mapper.get_use(vreg(0)));
+        assert_eq!(Some(rreg(2)), mapper.get_use(vreg(1)));
+        assert_eq!(Some(rreg(4)), mapper.get_use(vreg(2)));
+        for i in 2..50 {
+            assert_eq!(Some(rreg((i + 100) as u8)), mapper.get_def(vreg(i)));
+        }
+        mapper.merge_overlay();
+
+        for i in (0..100).rev() {
+            mapper.set_overlay(vreg(i), None);
+        }
+        mapper.finish_overlay();
+        for i in 0..100 {
+            assert_eq!(None, mapper.get_def(vreg(i)));
+        }
+        assert_eq!(false, mapper.is_empty());
+        mapper.merge_overlay();
+        assert_eq!(true, mapper.is_empty());
+
+        // Check multiple-update behavior in small mode.
+        mapper.set_overlay(vreg(1), Some(rreg(1)));
+        mapper.set_overlay(vreg(1), Some(rreg(2)));
+        mapper.finish_overlay();
+        assert_eq!(Some(rreg(2)), mapper.get_def(vreg(1)));
+        mapper.merge_overlay();
+        assert_eq!(Some(rreg(2)), mapper.get_use(vreg(1)));
+
+        mapper.set_overlay(vreg(1), Some(rreg(2)));
+        mapper.set_overlay(vreg(1), None);
+        mapper.finish_overlay();
+        assert_eq!(None, mapper.get_def(vreg(1)));
+        mapper.merge_overlay();
+        assert_eq!(None, mapper.get_use(vreg(1)));
+
+        // Check multiple-update behavior in sorted mode.
+        for i in 0..100 {
+            mapper.set_overlay(vreg(2), Some(rreg(i)));
+        }
+        for i in 0..100 {
+            mapper.set_overlay(vreg(2), Some(rreg(2 * i)));
+        }
+        mapper.finish_overlay();
+        assert_eq!(Some(rreg(198)), mapper.get_def(vreg(2)));
+        mapper.merge_overlay();
+        assert_eq!(Some(rreg(198)), mapper.get_use(vreg(2)));
+
+        for i in 0..100 {
+            mapper.set_overlay(vreg(2), Some(rreg(i)));
+        }
+        for _ in 0..100 {
+            mapper.set_overlay(vreg(2), None);
+        }
+        mapper.finish_overlay();
+        assert_eq!(None, mapper.get_def(vreg(50)));
+        mapper.merge_overlay();
+        assert_eq!(None, mapper.get_use(vreg(50)));
     }
 }
 

@@ -147,6 +147,10 @@ pub use crate::data_structures::RegClassInfo;
 
 pub use crate::data_structures::RegUsageCollector;
 
+// A structure for providing mapping results for a given instruction.
+
+pub use crate::data_structures::RegUsageMapper;
+
 // TypedIxVector, so that the interface can speak about vectors of blocks and
 // instructions.
 
@@ -206,23 +210,25 @@ pub trait Function {
     fn get_regs(insn: &Self::Inst, collector: &mut RegUsageCollector);
 
     /// Map each register slot through a virtual-to-real mapping indexed
-    /// by virtual register. The two separate maps provide the
-    /// mapping to use for uses (which semantically occur just prior
-    /// to the instruction's effect) and defs (which semantically occur
-    /// just after the instruction's effect). Regs that were "modified"
-    /// can use either map; the vreg should be the same in both.
+    /// by virtual register. The two separate maps in `maps.pre` and
+    /// `maps.post` provide the mapping to use for uses (which semantically
+    /// occur just prior to the instruction's effect) and defs (which
+    /// semantically occur just after the instruction's effect). Regs that were
+    /// "modified" can use either map; the vreg should be the same in both.
     ///
     /// Note that this does not take a `self`, because we want to allow the
     /// regalloc to have a mutable borrow of an insn (which borrows the whole
     /// Function in turn) outstanding while calling this.
-    fn map_regs(
-        insn: &mut Self::Inst,
-        pre_map: &Map<VirtualReg, RealReg>,
-        post_map: &Map<VirtualReg, RealReg>,
-    );
+    fn map_regs(insn: &mut Self::Inst, maps: &RegUsageMapper);
 
     /// Allow the regalloc to query whether this is a move. Returns (dst, src).
     fn is_move(&self, insn: &Self::Inst) -> Option<(Writable<Reg>, Reg)>;
+
+    /// Get an estimate of how many `VirtualReg` indices are used, if available, to allow
+    /// preallocating data structures.
+    fn get_vreg_count_estimate(&self) -> Option<usize> {
+        None
+    }
 
     // --------------
     // Spills/reloads
