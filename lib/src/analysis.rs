@@ -1,11 +1,13 @@
 use log::{debug, info, log_enabled, Level};
 use smallvec::SmallVec;
+use std::cmp::Ordering;
 use std::fmt;
 
 use crate::data_structures::{
-    BlockIx, InstIx, InstPoint, Map, Queue, RangeFrag, RangeFragIx, RangeFragKind, RealRange,
-    RealRangeIx, RealReg, RealRegUniverse, Reg, RegSets, RegUsageCollector, RegVecBounds, RegVecs,
-    RegVecsAndBounds, Set, SortedRangeFragIxs, SpillCost, TypedIxVec, VirtualRange, VirtualRangeIx,
+    BlockIx, InstIx, InstPoint, Map, Queue, Range, RangeFrag, RangeFragIx, RangeFragKind,
+    RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, RegSets, RegUsageCollector,
+    RegVecBounds, RegVecs, RegVecsAndBounds, Set, SortedRangeFragIxs, SpillCost, TypedIxVec,
+    VirtualRange, VirtualRangeIx,
 };
 use crate::trees_maps_sets::{SparseSet, SparseSetU, ToFromU32, UnionFind};
 use crate::Function;
@@ -79,6 +81,79 @@ impl ToString for AnalysisError {
 // CONTROL FLOW ANALYSIS                                                     //
 //                                                                           //
 //===========================================================================//
+
+//=============================================================================
+// Control flow analysis: create the InstIx-to-BlockIx mapping
+
+// This is trivial, but it's sometimes useful to have.
+// Note: confusingly, the `Range` here is data_structures::Range, not
+// std::ops::Range.
+pub struct InstIxToBlockIxMap {
+    vek: TypedIxVec<BlockIx, Range<InstIx>>,
+}
+
+impl InstIxToBlockIxMap {
+    #[inline(never)]
+    fn new<F: Function>(func: &F) -> Self {
+        let mut vek = TypedIxVec::<BlockIx, Range<InstIx>>::new();
+        for bix in func.blocks() {
+            let r: Range<InstIx> = func.block_insns(bix);
+            assert!(r.start() <= r.last_plus1());
+            vek.push(r);
+        }
+
+        fn cmp_ranges(r1: &Range<InstIx>, r2: &Range<InstIx>) -> Ordering {
+            if r1.last_plus1() <= r2.first() {
+                return Ordering::Less;
+            }
+            if r2.last_plus1() <= r1.first() {
+                return Ordering::Greater;
+            }
+            if r1.first() == r2.first() && r1.last_plus1() == r2.last_plus1() {
+                return Ordering::Equal;
+            }
+            // If this happens, F::block_insns is telling us something that isn't right.
+            panic!("InstIxToBlockIxMap::cmp_ranges: overlapping InstIx ranges!");
+        }
+
+        vek.sort_unstable_by(|r1, r2| cmp_ranges(r1, r2));
+        // Sanity check: ascending, non-overlapping, no gaps.  We need this in
+        // order to ensure that binary searching in `map` works properly.
+        for i in 1..vek.len() {
+            let r_m1 = &vek[BlockIx::new(i - 1)];
+            let r_m0 = &vek[BlockIx::new(i - 0)];
+            assert!(r_m1.last_plus1() == r_m0.first());
+        }
+
+        Self { vek }
+    }
+
+    #[inline(never)]
+    pub fn map(&self, iix: InstIx) -> BlockIx {
+        if self.vek.len() > 0 {
+            let mut lo = 0isize;
+            let mut hi = self.vek.len() as isize - 1;
+            loop {
+                if lo > hi {
+                    break;
+                }
+                let mid = (lo + hi) / 2;
+                let midv = &self.vek[BlockIx::new(mid as u32)];
+                if iix < midv.start() {
+                    hi = mid - 1;
+                    continue;
+                }
+                if iix >= midv.last_plus1() {
+                    lo = mid + 1;
+                    continue;
+                }
+                assert!(midv.start() <= iix && iix < midv.last_plus1());
+                return BlockIx::new(mid as u32);
+            }
+        }
+        panic!("InstIxToBlockIxMap::map: can't map {:?}", iix);
+    }
+}
 
 //=============================================================================
 // Control flow analysis: calculation of block successor and predecessor maps
@@ -2412,6 +2487,8 @@ pub fn run_analysis<F: Function>(
         TypedIxVec<BlockIx, SparseSet<Reg>>,
         // Estimated execution frequency per block
         TypedIxVec<BlockIx, u32>,
+        // Maps InstIxs to BlockIxs
+        InstIxToBlockIxMap,
     ),
     AnalysisError,
 > {
@@ -2426,6 +2503,10 @@ pub fn run_analysis<F: Function>(
     // First do control flow analysis.  This is (relatively) simple.  Note that
     // this can fail, for various reasons; we propagate the failure if so.
     let cfg_info = CFGInfo::create(func)?;
+
+    // Create the InstIx-to-BlockIx map.  This isn't really control-flow
+    // analysis, but needs to be done at some point.
+    let inst_to_block_map = InstIxToBlockIxMap::new(func);
 
     // Annotate each Block with its estimated execution frequency
     let mut estimated_frequencies = TypedIxVec::new();
@@ -2550,5 +2631,6 @@ pub fn run_analysis<F: Function>(
         frag_env,
         liveout_sets_per_block,
         estimated_frequencies,
+        inst_to_block_map,
     ))
 }

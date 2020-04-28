@@ -9,7 +9,9 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
 
-use crate::analysis::{add_raw_reg_vecs_for_insn, does_inst_use_def_or_mod_reg, run_analysis};
+use crate::analysis::{
+    add_raw_reg_vecs_for_insn, does_inst_use_def_or_mod_reg, run_analysis, InstIxToBlockIxMap,
+};
 use crate::avl_tree::{AVLTag, AVLTree, AVL_NULL};
 use crate::data_structures::{
     cmp_range_frags, BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx, RangeFragKind,
@@ -18,7 +20,7 @@ use crate::data_structures::{
     VirtualReg, Writable,
 };
 use crate::inst_stream::{edit_inst_stream, InstToInsert, InstToInsertAndPoint};
-use crate::trees_maps_sets::{SparseSetU, ToFromU32, UnionFind, UnionFindEquivClasses};
+use crate::trees_maps_sets::{SparseSet, SparseSetU, ToFromU32, UnionFind, UnionFindEquivClasses};
 use crate::{Function, RegAllocError, RegAllocResult};
 
 //=============================================================================
@@ -418,6 +420,7 @@ fn do_coalescing_analysis<F: Function>(
     TypedIxVec<VirtualRangeIx, SmallVec<[Hint; 8]>>,
     UnionFindEquivClasses<VirtualRangeIx>,
     TypedIxVec<InstIx, bool>,
+    Vec</*vreg index,*/ SmallVec<[VirtualRangeIx; 3]>>,
 ) {
     info!("");
     info!("do_coalescing_analysis: begin");
@@ -686,7 +689,12 @@ fn do_coalescing_analysis<F: Function>(
     info!("do_coalescing_analysis: end");
     info!("");
 
-    (hints, vlrEquivClasses, is_vv_boundary_move)
+    (
+        hints,
+        vlrEquivClasses,
+        is_vv_boundary_move,
+        vreg_to_vlrs_map,
+    )
 }
 
 //=============================================================================
@@ -1927,8 +1935,17 @@ pub fn alloc_main<F: Function>(
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     // -------- Perform initial liveness analysis --------
     // Note that the analysis phase can fail; hence we propagate any error.
-    let (reg_vecs_and_bounds, rlr_env, mut vlr_env, mut frag_env, _liveouts, est_freqs) =
+    let analysis_info =
         run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
+
+    let reg_vecs_and_bounds: RegVecsAndBounds = analysis_info.0;
+    let rlr_env: TypedIxVec<RealRangeIx, RealRange> = analysis_info.1;
+    let mut vlr_env: TypedIxVec<VirtualRangeIx, VirtualRange> = analysis_info.2;
+    let mut frag_env: TypedIxVec<RangeFragIx, RangeFrag> = analysis_info.3;
+    let _liveouts: TypedIxVec<BlockIx, SparseSet<Reg>> = analysis_info.4;
+    let est_freqs: TypedIxVec<BlockIx, u32> = analysis_info.5;
+    let inst_to_block_map: InstIxToBlockIxMap = analysis_info.6;
+
     assert!(reg_vecs_and_bounds.is_sanitized());
 
     // Also perform analysis that finds all coalesing opportunities.
@@ -1941,10 +1958,11 @@ pub fn alloc_main<F: Function>(
         &est_freqs,
         &reg_universe,
     );
-    let hints: TypedIxVec<VirtualRangeIx, SmallVec<[Hint; 8]>> = coalescing_info.0;
+    let mut hints: TypedIxVec<VirtualRangeIx, SmallVec<[Hint; 8]>> = coalescing_info.0;
     let vlrEquivClasses: UnionFindEquivClasses<VirtualRangeIx> = coalescing_info.1;
     let is_vv_boundary_move: TypedIxVec<InstIx, bool> = coalescing_info.2;
-    debug_assert!(hints.len() == vlr_env.len());
+    let vreg_to_vlrs_map: Vec</*vreg index,*/ SmallVec<[VirtualRangeIx; 3]>> = coalescing_info.3;
+    assert!(hints.len() == vlr_env.len());
 
     // -------- Alloc main --------
 
@@ -1955,7 +1973,7 @@ pub fn alloc_main<F: Function>(
         func.insns().len(),
         func.blocks().len()
     );
-    let num_vlrs_initial = vlr_env.len(); // stats only
+    let num_vlrs_initial = vlr_env.len();
     info!(
         "alloc_main:   in: {} VLRs, {} RLRs",
         num_vlrs_initial,
@@ -2079,7 +2097,7 @@ pub fn alloc_main<F: Function>(
         // analysis phase has already sorted the hints for the VLR so as to
         // present the most favoured (weighty) first, so we merely need to retain
         // that ordering when copying into `hinted_regs`.
-        // FIXME (very) SmallVec
+        assert!(hints.len() == vlr_env.len());
         let mut hinted_regs = SmallVec::<[RealReg; 8]>::new();
         let mut mb_curr_vlr_eclass: Option<SparseSetU<[VirtualRangeIx; 16]>> = None;
 
@@ -2124,31 +2142,35 @@ pub fn alloc_main<F: Function>(
             let n_primary_cands = hinted_regs.len();
 
             // Find the equivalence class set for `curr_vlrix`.  We'll need it
-            // later.
-            let mut curr_vlr_eclass = SparseSetU::<[VirtualRangeIx; 16]>::empty();
-            for vlrix in vlrEquivClasses.equiv_class_elems_iter(curr_vlrix) {
-                curr_vlr_eclass.insert(vlrix);
-            }
-            assert!(curr_vlr_eclass.contains(curr_vlrix));
-            mb_curr_vlr_eclass = Some(curr_vlr_eclass);
+            // later.  Equivalence class info exists for only the "initial"
+            // VLRs, though.
+            if curr_vlrix.get() < num_vlrs_initial {
+                let mut curr_vlr_eclass = SparseSetU::<[VirtualRangeIx; 16]>::empty();
+                for vlrix in vlrEquivClasses.equiv_class_elems_iter(curr_vlrix) {
+                    curr_vlr_eclass.insert(vlrix);
+                }
+                assert!(curr_vlr_eclass.contains(curr_vlrix));
+                mb_curr_vlr_eclass = Some(curr_vlr_eclass);
 
-            // And work through it to pick up any rreg hints now.
-            for vlrix in vlrEquivClasses.equiv_class_elems_iter(curr_vlrix) {
-                if vlrix != curr_vlrix {
-                    if let Some(rreg) = vlr_env[vlrix].rreg {
-                        // Add `rreg` as a cand, if we don't already have it.
-                        if !hinted_regs.iter().any(|r| *r == rreg) {
-                            hinted_regs.push(rreg);
+                // And work through it to pick up any rreg hints now.
+                for vlrix in vlrEquivClasses.equiv_class_elems_iter(curr_vlrix) {
+                    if vlrix != curr_vlrix {
+                        if let Some(rreg) = vlr_env[vlrix].rreg {
+                            // Add `rreg` as a cand, if we don't already have it.
+                            if !hinted_regs.iter().any(|r| *r == rreg) {
+                                hinted_regs.push(rreg);
+                            }
                         }
                     }
                 }
-            }
 
-            // Sort the secondary cands, so as to try and impose more consistency
-            // across the group.  I don't know if this is worthwhile, but it seems
-            // sensible.
-            hinted_regs[n_primary_cands..]
-                .sort_by(|rreg1, rreg2| rreg1.get_index().partial_cmp(&rreg2.get_index()).unwrap());
+                // Sort the secondary cands, so as to try and impose more consistency
+                // across the group.  I don't know if this is worthwhile, but it seems
+                // sensible.
+                hinted_regs[n_primary_cands..].sort_by(|rreg1, rreg2| {
+                    rreg1.get_index().partial_cmp(&rreg2.get_index()).unwrap()
+                });
+            }
 
             if log_enabled!(Level::Debug) {
                 if !hinted_regs.is_empty() {
@@ -2420,8 +2442,9 @@ pub fn alloc_main<F: Function>(
                     debug_assert!(!iix_mods_curr_vlr_reg);
                     // Stash enough info that we can create a new VirtualRange
                     // and a new edit list entry for the reload.
+                    let bix = inst_to_block_map.map(iix);
                     let sri = SpillAndOrReloadInfo {
-                        bix: frag.bix,
+                        bix,
                         iix,
                         kind: BridgeKind::RtoU,
                     };
@@ -2439,8 +2462,9 @@ pub fn alloc_main<F: Function>(
                 {
                     debug_assert!(!iix_uses_curr_vlr_reg);
                     debug_assert!(!iix_defs_curr_vlr_reg);
+                    let bix = inst_to_block_map.map(iix);
                     let sri = SpillAndOrReloadInfo {
-                        bix: frag.bix,
+                        bix,
                         iix,
                         kind: BridgeKind::RtoS,
                     };
@@ -2449,8 +2473,9 @@ pub fn alloc_main<F: Function>(
                 // DEFS: Do we need to create a def-to-spill bridge?
                 if iix_defs_curr_vlr_reg && frag.contains(&InstPoint::new_def(iix)) {
                     debug_assert!(!iix_mods_curr_vlr_reg);
+                    let bix = inst_to_block_map.map(iix);
                     let sri = SpillAndOrReloadInfo {
-                        bix: frag.bix,
+                        bix,
                         iix,
                         kind: BridgeKind::DtoS,
                     };
@@ -2525,6 +2550,61 @@ pub fn alloc_main<F: Function>(
             vlr_env.push(new_vlr);
             prioQ.add_VirtualRange(&vlr_env, new_vlrix);
 
+            // BEGIN (optimisation only) see if we can create any coalescing hints
+            // for this new VLR.
+            let mut new_vlr_hint = SmallVec::<[Hint; 8]>::new();
+            if is_vv_boundary_move[sri.iix] {
+                // Collect the src and dst regs for the move.  It must be a
+                // move because `is_vv_boundary_move` claims that to be true.
+                let im = func.is_move(&func.get_insn(sri.iix));
+                assert!(im.is_some());
+                let (wdst_reg, src_reg): (Writable<Reg>, Reg) = im.unwrap();
+                let dst_reg: Reg = wdst_reg.to_reg();
+                assert!(src_reg.is_virtual() && dst_reg.is_virtual());
+                let dst_vreg: VirtualReg = dst_reg.to_virtual_reg();
+                let src_vreg: VirtualReg = src_reg.to_virtual_reg();
+                let bridge_eef = est_freqs[sri.bix];
+                match sri.kind {
+                    BridgeKind::RtoU => {
+                        // Reload-to-Use bridge.  Hint that we want to be
+                        // allocated to the same reg as the destination of the
+                        // move.  That means we have to find the VLR that owns
+                        // the destination vreg.
+                        for vlrix in &vreg_to_vlrs_map[dst_vreg.get_index()] {
+                            if vlr_env[*vlrix].vreg == dst_vreg {
+                                new_vlr_hint.push(Hint::SameAs(*vlrix, bridge_eef));
+                                break;
+                            }
+                        }
+                    }
+                    BridgeKind::DtoS => {
+                        // Def-to-Spill bridge.  Hint that we want to be
+                        // allocated to the same reg as the source of the
+                        // move.
+                        for vlrix in &vreg_to_vlrs_map[src_vreg.get_index()] {
+                            if vlr_env[*vlrix].vreg == src_vreg {
+                                new_vlr_hint.push(Hint::SameAs(*vlrix, bridge_eef));
+                                break;
+                            }
+                        }
+                    }
+                    BridgeKind::RtoS => {
+                        // A Reload-to-Spill bridge.  This can't happen.  It
+                        // implies that the instruction modifies (both reads
+                        // and writes) one of its operands, but the client's
+                        // `is_move` function claims this instruction is a
+                        // plain "move" (reads source, writes dest).  These
+                        // claims are mutually contradictory.
+                        panic!("RtoS bridge for v-v boundary move");
+                    }
+                }
+            }
+            hints.push(new_vlr_hint);
+            // END see if we can create any coalescing hints for this new VLR.
+
+            // Finally, create a new EditListItem.  This holds enough
+            // information that a suitable spill or reload instruction can
+            // later be created.
             let new_eli = EditListItem {
                 slot: spill_slot_to_use,
                 vlrix: new_vlrix,

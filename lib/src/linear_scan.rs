@@ -2250,7 +2250,7 @@ pub fn run<F: Function>(
     reg_universe: &RealRegUniverse,
     use_checker: bool,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
-    let (reg_uses, mut rlrs, mut vlrs, mut fragments, liveouts, _est_freqs) =
+    let (reg_uses, mut rlrs, mut vlrs, mut fragments, liveouts, _est_freqs, _inst_to_block_map) =
         run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
 
     let scratches_by_rc = {

@@ -378,6 +378,9 @@ where
     pub fn sort_by<F: FnMut(&Ty, &Ty) -> Ordering>(&mut self, compare: F) {
         self.vek.sort_by(compare)
     }
+    pub fn sort_unstable_by<F: FnMut(&Ty, &Ty) -> Ordering>(&mut self, compare: F) {
+        self.vek.sort_unstable_by(compare)
+    }
     pub fn clear(&mut self) {
         self.vek.clear();
     }
