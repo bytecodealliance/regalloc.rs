@@ -1880,8 +1880,9 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
         vreg,
         rreg: None,
         sorted_frags: child_sorted_frags,
-        // These two fields are not used by linear scan.
+        // These three fields are not used by linear scan.
         size: 0,
+        total_cost: 0xFFFF_FFFFu32, // Our best approximation to "infinity".
         spill_cost: SpillCost::infinite(),
     };
 

@@ -407,12 +407,15 @@ impl ToFromU32 for VirtualRangeIx {
     }
 }
 
+// This performs coalescing analysis and returns info as a 4-tuple.  Note that
+// it also may change the spill costs for some of the VLRs in `vlr_env` to
+// better reflect the spill cost situation in the presence of coalescing.
 #[inline(never)]
 fn do_coalescing_analysis<F: Function>(
     func: &F,
     reg_vecs_and_bounds: &RegVecsAndBounds,
     rlr_env: &TypedIxVec<RealRangeIx, RealRange>,
-    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
+    vlr_env: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     est_freqs: &TypedIxVec<BlockIx, u32>,
     univ: &RealRegUniverse,
@@ -549,7 +552,8 @@ fn do_coalescing_analysis<F: Function>(
 
     // Make up a vector of registers that are connected by moves:
     //
-    //    (dstReg, srcReg, transferring insn, estimated execution count)
+    //    (dstReg, srcReg, transferring insn, estimated execution count of the
+    //                                        containing block)
     //
     // This can contain real-to-real moves, which we obviously can't do anything
     // about.  We'll remove them in the next pass.
@@ -586,7 +590,6 @@ fn do_coalescing_analysis<F: Function>(
         }
     }
 
-    // FIXME SmallVec!
     // XX these sub-vectors could contain duplicates, I suppose, for example if
     // there are two identical copy insns at different points on the "boundary"
     // for some VLR.  I don't think it matters though since we're going to rank
@@ -597,10 +600,21 @@ fn do_coalescing_analysis<F: Function>(
     let mut is_vv_boundary_move = TypedIxVec::<InstIx, bool>::new();
     is_vv_boundary_move.resize(func.insns().len() as u32, false);
 
+    // The virtual-to-virtual equivalence classes we're collecting.
     let mut vlrEquivClassesUF = UnionFind::<VirtualRangeIx>::new(vlr_env.len() as usize);
 
-    for (rDst, rSrc, iix, eef) in connectedByMoves {
-        //println!("QQQQ at {:?} {:?} <- {:?} (eef {})", iix, rDst, rSrc, eef);
+    // A list of `VirtualRange`s for which the `total_cost` (hence also their
+    // `spill_cost`) should be adjusted downwards by the supplied `u32`.  We
+    // can't do this directly in the loop below due to borrowing constraints,
+    // hence we collect the required info in this vector and do it in a second
+    // loop.
+    let mut decVLRcosts = Vec::<(VirtualRangeIx, VirtualRangeIx, u32)>::new();
+
+    for (rDst, rSrc, iix, block_eef) in connectedByMoves {
+        debug!(
+            "QQQQ connectedByMoves {:?} {:?} <- {:?} (block_eef {})",
+            iix, rDst, rSrc, block_eef
+        );
         match (rDst.is_virtual(), rSrc.is_virtual()) {
             (true, true) => {
                 // Check for a V <- V hint.
@@ -608,16 +622,23 @@ fn do_coalescing_analysis<F: Function>(
                 let rDstV = rDst.to_virtual_reg();
                 let mb_vlrSrc = doesVRegHaveXXat(/*xxIsLastUse=*/ true, rSrcV, iix);
                 let mb_vlrDst = doesVRegHaveXXat(/*xxIsLastUse=*/ false, rDstV, iix);
+                debug!("QQQQ mb_vlrSrc {:?} mb_vlrDst {:?}", mb_vlrSrc, mb_vlrDst);
                 if mb_vlrSrc.is_some() && mb_vlrDst.is_some() {
                     let vlrSrc = mb_vlrSrc.unwrap();
                     let vlrDst = mb_vlrDst.unwrap();
                     // Add hints for both VLRs, since we don't know which one will
                     // assign first.  Indeed, a VLR may be assigned and un-assigned
                     // arbitrarily many times.
-                    hints[vlrSrc].push(Hint::SameAs(vlrDst, eef));
-                    hints[vlrDst].push(Hint::SameAs(vlrSrc, eef));
+                    hints[vlrSrc].push(Hint::SameAs(vlrDst, block_eef));
+                    hints[vlrDst].push(Hint::SameAs(vlrSrc, block_eef));
                     vlrEquivClassesUF.union(vlrDst, vlrSrc);
                     is_vv_boundary_move[iix] = true;
+                    // Reduce the total cost, and hence the spill cost, of
+                    // both `vlrSrc` and `vlrDst`.  This is so as to reduce to
+                    // zero, the cost of a VLR whose only instructions are its
+                    // v-v boundary copies.
+                    debug!("QQQQ reduce cost of {:?} and {:?}", vlrSrc, vlrDst);
+                    decVLRcosts.push((vlrSrc, vlrDst, 1 * block_eef));
                 }
             }
             (true, false) => {
@@ -628,7 +649,7 @@ fn do_coalescing_analysis<F: Function>(
                 let mb_vlrDst = doesVRegHaveXXat(/*xxIsLastUse=*/ false, rDstV, iix);
                 if mb_rlrSrc.is_some() && mb_vlrDst.is_some() {
                     let vlrDst = mb_vlrDst.unwrap();
-                    hints[vlrDst].push(Hint::Exactly(rSrcR, eef));
+                    hints[vlrDst].push(Hint::Exactly(rSrcR, block_eef));
                 }
             }
             (false, true) => {
@@ -639,13 +660,39 @@ fn do_coalescing_analysis<F: Function>(
                 let mb_rlrDst = doesRRegHaveXXat(/*xxIsLastUse=*/ false, rDstR, iix);
                 if mb_vlrSrc.is_some() && mb_rlrDst.is_some() {
                     let vlrSrc = mb_vlrSrc.unwrap();
-                    hints[vlrSrc].push(Hint::Exactly(rDstR, eef));
+                    hints[vlrSrc].push(Hint::Exactly(rDstR, block_eef));
                 }
             }
             (false, false) => {
                 // This is a real-to-real move.  There's nothing we can do.  Ignore it.
             }
         }
+    }
+
+    // Now decrease the `total_cost` and `spill_cost` fields of selected
+    // `VirtualRange`s, as detected by the previous loop.  Don't decrease the
+    // `spill_cost` literally to zero; doing that causes various assertion
+    // failures and boundary problems later on, in the `CommitmentMap`s.  In
+    // such a case, make the `spill_cost` be tiny but nonzero.
+    fn decrease_vlr_total_cost_by(vlr: &mut VirtualRange, decrease_total_cost_by: u32) {
+        // Adjust `total_cost`.
+        if vlr.total_cost < decrease_total_cost_by {
+            vlr.total_cost = 0;
+        } else {
+            vlr.total_cost -= decrease_total_cost_by;
+        }
+        // And recompute `spill_cost` accordingly.
+        if vlr.total_cost == 0 {
+            vlr.spill_cost = SpillCost::finite(1.0e-6);
+        } else {
+            assert!(vlr.size > 0);
+            vlr.spill_cost = SpillCost::finite(vlr.total_cost as f32 / vlr.size as f32);
+        }
+    }
+
+    for (vlrix1, vlrix2, decrease_total_cost_by) in decVLRcosts {
+        decrease_vlr_total_cost_by(&mut vlr_env[vlrix1], decrease_total_cost_by);
+        decrease_vlr_total_cost_by(&mut vlr_env[vlrix2], decrease_total_cost_by);
     }
 
     // For the convenience of the allocator core, sort the hints for each VLR so
@@ -658,8 +705,15 @@ fn do_coalescing_analysis<F: Function>(
         vlrEquivClassesUF.get_equiv_classes();
 
     if log_enabled!(Level::Debug) {
-        debug!("Coalescing hints:");
+        debug!("Revised VLRs:");
         let mut n = 0;
+        for vlr in vlr_env.iter() {
+            debug!("{:<4?}   {:?}", VirtualRangeIx::new(n), vlr);
+            n += 1;
+        }
+
+        debug!("Coalescing hints:");
+        n = 0;
         for hints_for_one_vlr in hints.iter() {
             let mut s = "".to_string();
             for hint in hints_for_one_vlr {
@@ -1953,7 +2007,7 @@ pub fn alloc_main<F: Function>(
         func,
         &reg_vecs_and_bounds,
         &rlr_env,
-        &vlr_env,
+        &mut vlr_env,
         &frag_env,
         &est_freqs,
         &reg_universe,
@@ -2540,6 +2594,8 @@ pub fn alloc_main<F: Function>(
                 rreg: None,
                 sorted_frags: new_vlr_sfixs,
                 size: 1,
+                // Effectively infinite.  We'll never look at this again anyway.
+                total_cost: 0xFFFF_FFFFu32,
                 spill_cost: SpillCost::infinite(),
             };
             let new_vlrix = VirtualRangeIx::new(vlr_env.len() as u32);

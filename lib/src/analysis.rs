@@ -2022,8 +2022,10 @@ fn merge_range_frags_slow(
                 frag_ixs_sv.push(*fix);
             }
             let sorted_frags = SortedRangeFragIxs::new(frag_ixs_sv, &frag_env);
+            // Set all metrics to zero for now.  We'll fill them in later, in
+            // set_virtual_range_metrics.
             let size = 0;
-            // Set zero spill cost for now.  We'll fill it in for real later.
+            let total_cost = 0;
             let spill_cost = SpillCost::zero();
             if reg.is_virtual() {
                 result_virtual.push(VirtualRange {
@@ -2031,6 +2033,7 @@ fn merge_range_frags_slow(
                     rreg: None,
                     sorted_frags,
                     size,
+                    total_cost,
                     spill_cost,
                 });
             } else {
@@ -2063,8 +2066,10 @@ fn create_and_add_range(
     reg: Reg,
     sorted_frags: SortedRangeFragIxs,
 ) {
+    // Set all metrics to zero for now.  We'll fill them in later, in
+    // set_virtual_range_metrics.
     let size = 0;
-    // Set zero spill cost for now.  We'll fill it in for real later.
+    let total_cost = 0;
     let spill_cost = SpillCost::zero();
     if reg.is_virtual() {
         result_virtual.push(VirtualRange {
@@ -2072,6 +2077,7 @@ fn create_and_add_range(
             rreg: None,
             sorted_frags,
             size,
+            total_cost,
             spill_cost,
         });
     } else {
@@ -2429,10 +2435,10 @@ fn set_virtual_range_metrics(
 ) {
     info!("    set_virtual_range_metrics: begin");
     for vlr in vlrs.iter_mut() {
-        debug_assert!(vlr.size == 0 && vlr.spill_cost.is_zero());
+        debug_assert!(vlr.size == 0 && vlr.total_cost == 0 && vlr.spill_cost.is_zero());
         debug_assert!(vlr.rreg.is_none());
         let mut tot_size: u32 = 0;
-        let mut tot_cost: f32 = 0.0;
+        let mut tot_cost: u32 = 0;
 
         for fix in &vlr.sorted_frags.frag_ixs {
             let frag = &fenv[*fix];
@@ -2448,20 +2454,28 @@ fn set_virtual_range_metrics(
                 tot_size = 0xFFFF;
             }
 
-            // tot_cost is a float, so no such paranoia there.
-            tot_cost += frag.count as f32 * estimated_frequency[frag.bix] as f32;
+            // Here, tot_size <= 0xFFFF.  frag.count is u16.  estFreq[] is u32.
+            // We must be careful not to overflow tot_cost, which is u32.
+            let mut new_tot_cost: u64 = frag.count as u64; // at max 16 bits
+            new_tot_cost *= estimated_frequency[frag.bix] as u64; // at max 48 bits
+            new_tot_cost += tot_cost as u64; // at max 48 bits + epsilon
+            if new_tot_cost > 0xFFFF_FFFF {
+                new_tot_cost = 0xFFFF_FFFF;
+            }
+            // Hence this is safe.
+            tot_cost = new_tot_cost as u32;
         }
 
-        debug_assert!(tot_cost >= 0.0);
-        debug_assert!(tot_size >= 1 && tot_size <= 0xFFFF);
+        debug_assert!(tot_size <= 0xFFFF);
         vlr.size = tot_size as u16;
+        vlr.total_cost = tot_cost;
 
         // Divide tot_cost by the total length, so as to increase the apparent
         // spill cost of short LRs.  This is so as to give the advantage to
         // short LRs in competition for registers.  This seems a bit of a hack
         // to me, but hey ..
-        tot_cost /= tot_size as f32;
-        vlr.spill_cost = SpillCost::finite(tot_cost);
+        debug_assert!(tot_size >= 1);
+        vlr.spill_cost = SpillCost::finite(tot_cost as f32 / tot_size as f32);
     }
     info!("    set_virtual_range_metrics: end");
 }

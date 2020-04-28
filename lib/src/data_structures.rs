@@ -1739,8 +1739,8 @@ pub enum SpillCost {
 impl fmt::Debug for SpillCost {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            SpillCost::Infinite => write!(fmt, "INFIN"),
-            SpillCost::Finite(c) => write!(fmt, "{:<.2}", c),
+            SpillCost::Infinite => write!(fmt, "INFINITY"),
+            SpillCost::Finite(c) => write!(fmt, "{:<.3}", c),
         }
     }
 }
@@ -1898,7 +1898,8 @@ pub struct VirtualRange {
     pub rreg: Option<RealReg>,
     pub sorted_frags: SortedRangeFragIxs,
     pub size: u16,
-    pub spill_cost: SpillCost,
+    pub total_cost: u32,
+    pub spill_cost: SpillCost, // == total_cost / size
 }
 
 impl fmt::Debug for VirtualRange {
@@ -1909,8 +1910,8 @@ impl fmt::Debug for VirtualRange {
         }
         write!(
             fmt,
-            " s={}, c={:?}, {:?})",
-            self.size, self.spill_cost, self.sorted_frags
+            " sz={}, tc={}, sc={:?}, {:?})",
+            self.size, self.total_cost, self.spill_cost, self.sorted_frags
         )
     }
 }
