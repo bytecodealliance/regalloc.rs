@@ -1734,7 +1734,6 @@ pub fn alloc_main<F: Function>(
         frag_map,
         &frag_env,
         &reg_universe,
-        false, // multiple blocks per frag
         use_checker,
     );
 

@@ -1,8 +1,8 @@
 use crate::checker::Inst as CheckerInst;
 use crate::checker::{CheckerContext, CheckerErrors};
 use crate::data_structures::{
-    BlockIx, InstIx, InstPoint, Map, RangeFrag, RangeFragIx, RealReg, RealRegUniverse, SpillSlot,
-    TypedIxVec, VirtualReg, Writable,
+    BlockIx, InstIx, InstPoint, RangeFrag, RangeFragIx, RealReg, RealRegUniverse, RegUsageMapper,
+    SpillSlot, TypedIxVec, VirtualReg, Writable,
 };
 use crate::{Function, RegAllocError};
 use log::trace;
@@ -100,7 +100,6 @@ fn map_vregs_to_rregs<F: Function>(
     insts_to_add: &Vec<InstToInsertAndPoint>,
     iixs_to_nop_out: &Vec<InstIx>,
     reg_universe: &RealRegUniverse,
-    has_multiple_blocks_per_frag: bool,
     use_checker: bool,
 ) -> Result<(), CheckerErrors> {
     // Set up checker state, if indicated by our configuration.
@@ -148,7 +147,12 @@ fn map_vregs_to_rregs<F: Function>(
     let mut cursor_ends = 0;
     let mut cursor_nop = 0;
 
-    let mut map = Map::<VirtualReg, RealReg>::default();
+    // Determine how many vregs to expect, for preallocation.
+    let vreg_estimate = func.get_vreg_count_estimate().unwrap_or(16);
+
+    // Allocate the "mapper" data structure that we update incrementally and
+    // pass to instruction reg-mapping routines to query.
+    let mut mapper = RegUsageMapper::new(vreg_estimate);
 
     fn is_sane(frag: &RangeFrag) -> bool {
         // "Normal" frag (unrelated to spilling).  No normal frag may start or
@@ -243,7 +247,7 @@ fn map_vregs_to_rregs<F: Function>(
             debug_assert!(is_sane(frag));
         }
 
-        // Here's the plan, in summary:
+        // Here's the plan, conceptually (we don't actually clone the map):
         // Update map for I.r:
         //   add frags starting at I.r
         //   no frags should end at I.r (it's a reload insn)
@@ -260,7 +264,21 @@ fn map_vregs_to_rregs<F: Function>(
         //   remove frags ending at I.s
         // apply map_uses/map_defs to I
 
-        trace!("current map {:?}", map);
+        // To update the running mapper, we:
+        // - call `mapper.set_direct(vreg, Some(rreg))` with pre-insn starts.
+        // ("use"-map snapshot conceptually happens here)
+        // - call `mapper.set_overlay(vreg, None)` with pre-insn, post-reload ends.
+        // - call `mapper.set_overlay(vreg, Some(rreg))` with post-insn, pre-spill starts.
+        // ("post"-map snapshot conceptually happens here)
+        // - call `mapper.finish_overlay()`.
+        //
+        // - Use the map. `pre` and `post` are correct wrt the instruction.
+        //
+        // - call `mapper.merge_overlay()` to merge post-updates to main map.
+        // - call `mapper.set_direct(vreg, None)` with post-insn, post-spill
+        //   ends.
+
+        trace!("current mapper {:?}", mapper);
 
         // Update map for I.r:
         //   add frags starting at I.r
@@ -269,7 +287,7 @@ fn map_vregs_to_rregs<F: Function>(
             let frag = &frag_env[frag_maps_by_start[j].0];
             if frag.first.pt.is_reload() {
                 //////// STARTS at I.r
-                map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
+                mapper.set_direct(frag_maps_by_start[j].1, Some(frag_maps_by_start[j].2));
             }
         }
 
@@ -281,20 +299,18 @@ fn map_vregs_to_rregs<F: Function>(
             let frag = &frag_env[frag_maps_by_start[j].0];
             if frag.first.pt.is_use() {
                 //////// STARTS at I.u
-                map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
+                mapper.set_direct(frag_maps_by_start[j].1, Some(frag_maps_by_start[j].2));
             }
         }
-        let map_uses = map.clone();
         for j in cursor_ends..cursor_ends + num_ends {
             let frag = &frag_env[frag_maps_by_end[j].0];
             if frag.last.pt.is_use() {
                 //////// ENDS at I.U
-                map.remove(&frag_maps_by_end[j].1);
+                mapper.set_overlay(frag_maps_by_end[j].1, None);
             }
         }
 
-        trace!("use map {:?}", map_uses);
-        trace!("map after I.u {:?}", map);
+        trace!("maps after I.u {:?}", mapper);
 
         // Update map for I.d:
         //   add frags starting at I.d
@@ -304,43 +320,21 @@ fn map_vregs_to_rregs<F: Function>(
             let frag = &frag_env[frag_maps_by_start[j].0];
             if frag.first.pt.is_def() {
                 //////// STARTS at I.d
-                map.insert(frag_maps_by_start[j].1, frag_maps_by_start[j].2);
-            }
-        }
-        let map_defs = map.clone();
-        for j in cursor_ends..cursor_ends + num_ends {
-            let frag = &frag_env[frag_maps_by_end[j].0];
-            if frag.last.pt.is_def() {
-                //////// ENDS at I.d
-                map.remove(&frag_maps_by_end[j].1);
+                mapper.set_overlay(frag_maps_by_start[j].1, Some(frag_maps_by_start[j].2));
             }
         }
 
-        trace!("map defs {:?}", map_defs);
-        trace!("map after I.d {:?}", map);
+        mapper.finish_overlay();
 
-        // Update map for I.s:
-        //   no frags should start at I.s (it's a spill insn)
-        //   remove frags ending at I.s
-        for j in cursor_ends..cursor_ends + num_ends {
-            let frag = &frag_env[frag_maps_by_end[j].0];
-            if frag.last.pt.is_spill() {
-                //////// ENDS at I.s
-                map.remove(&frag_maps_by_end[j].1);
-            }
-        }
+        trace!("maps after I.d {:?}", mapper);
 
         // If we have a checker, update it with spills, reloads, moves, and this
         // instruction, while we have `map_uses` and `map_defs` available.
         if let &mut Some(ref mut checker) = &mut checker {
             let block_ix = insn_blocks[insn_ix.get() as usize];
-            checker.handle_insn(reg_universe, func, block_ix, insn_ix, &map_uses, &map_defs)?;
-
-            // We only build the insn->block index when the checker is enabled, so
-            // we can only perform this debug-assert here.
-            if func.block_insns(block_ix).last() == insn_ix {
-                debug_assert!(has_multiple_blocks_per_frag || map.is_empty());
-            }
+            checker
+                .handle_insn(reg_universe, func, block_ix, insn_ix, &mapper)
+                .unwrap();
         }
 
         // Finally, we have map_uses/map_defs set correctly for this instruction.
@@ -348,7 +342,7 @@ fn map_vregs_to_rregs<F: Function>(
         if !nop_this_insn {
             trace!("map_regs for {:?}", insn_ix);
             let mut insn = func.get_insn_mut(insn_ix);
-            F::map_regs(&mut insn, &map_uses, &map_defs);
+            F::map_regs(&mut insn, &mapper);
             trace!("mapped instruction: {:?}", insn);
         } else {
             // N.B. We nop out instructions as requested only *here*, after the
@@ -361,12 +355,32 @@ fn map_vregs_to_rregs<F: Function>(
             *insn = nop;
         }
 
+        mapper.merge_overlay();
+        for j in cursor_ends..cursor_ends + num_ends {
+            let frag = &frag_env[frag_maps_by_end[j].0];
+            if frag.last.pt.is_def() {
+                //////// ENDS at I.d
+                mapper.set_direct(frag_maps_by_end[j].1, None);
+            }
+        }
+
+        // Update map for I.s:
+        //   no frags should start at I.s (it's a spill insn)
+        //   remove frags ending at I.s
+        for j in cursor_ends..cursor_ends + num_ends {
+            let frag = &frag_env[frag_maps_by_end[j].0];
+            if frag.last.pt.is_spill() {
+                //////// ENDS at I.s
+                mapper.set_direct(frag_maps_by_end[j].1, None);
+            }
+        }
+
         // Update cursorStarts and cursorEnds for the next iteration
         cursor_starts += num_starts;
         cursor_ends += num_ends;
     }
 
-    debug_assert!(map.is_empty());
+    debug_assert!(mapper.is_empty());
 
     if use_checker {
         checker.unwrap().run()
@@ -467,7 +481,6 @@ pub(crate) fn edit_inst_stream<F: Function>(
     frag_map: Vec<(RangeFragIx, VirtualReg, RealReg)>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     reg_universe: &RealRegUniverse,
-    has_multiple_blocks_per_frag: bool,
     use_checker: bool,
 ) -> Result<
     (
@@ -484,7 +497,6 @@ pub(crate) fn edit_inst_stream<F: Function>(
         &insts_to_add,
         iixs_to_nop_out,
         reg_universe,
-        has_multiple_blocks_per_frag,
         use_checker,
     )
     .map_err(|e| RegAllocError::RegChecker(e))?;

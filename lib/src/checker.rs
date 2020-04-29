@@ -57,8 +57,8 @@
 
 use crate::analysis_data_flow::get_san_reg_sets_for_insn;
 use crate::data_structures::{
-    BlockIx, InstIx, InstPoint, Map, Point, RealReg, RealRegUniverse, Reg, RegSets, SpillSlot,
-    VirtualReg, Writable,
+    BlockIx, InstIx, InstPoint, Map, Point, RealReg, RealRegUniverse, Reg, RegSets, RegUsageMapper,
+    SpillSlot, VirtualReg, Writable,
 };
 use crate::inst_stream::InstToInsertAndPoint;
 use crate::Function;
@@ -307,17 +307,17 @@ pub(crate) struct Checker {
     bb_insts: Map<BlockIx, Vec<Inst>>,
 }
 
-fn map_regs(
+fn map_regs<F: Fn(VirtualReg) -> Option<RealReg>>(
     inst: InstIx,
-    map: &Map<VirtualReg, RealReg>,
     regs: &[Reg],
+    f: &F,
 ) -> Result<Vec<RealReg>, CheckerErrors> {
     let mut errors = Vec::new();
     let real_regs = regs
         .iter()
         .map(|r| {
             if r.is_virtual() {
-                map.get(&r.to_virtual_reg()).cloned().unwrap_or_else(|| {
+                f(r.to_virtual_reg()).unwrap_or_else(|| {
                     errors.push(CheckerError::MissingAllocationForReg {
                         reg: r.to_virtual_reg(),
                         inst,
@@ -371,17 +371,16 @@ impl Checker {
         insts.push(inst);
     }
 
-    /// Add a "normal" instruction that uses, modifies, and/or defines certain registers. The
-    /// `SanitizedInstRegUses` must be the pre-allocation state; the `pre_map` and `post_map` must be
-    /// provided to give the virtual -> real mappings at the program points immediately before and
-    /// after this instruction.
+    /// Add a "normal" instruction that uses, modifies, and/or defines certain
+    /// registers. The `SanitizedInstRegUses` must be the pre-allocation state;
+    /// the `mapper` must be provided to give the virtual -> real mappings at
+    /// the program points immediately before and after this instruction.
     pub(crate) fn add_op(
         &mut self,
         block: BlockIx,
         inst_ix: InstIx,
         regsets: &RegSets,
-        pre_map: &Map<VirtualReg, RealReg>,
-        post_map: &Map<VirtualReg, RealReg>,
+        mapper: &RegUsageMapper,
     ) -> Result<(), CheckerErrors> {
         debug!(
             "add_op: block {} inst {} regsets {:?}",
@@ -400,8 +399,8 @@ impl Checker {
 
         let uses_orig = uses_set.to_vec();
         let defs_orig = defs_set.to_vec();
-        let uses = map_regs(inst_ix, pre_map, &uses_orig[..])?;
-        let defs = map_regs(inst_ix, post_map, &defs_orig[..])?;
+        let uses = map_regs(inst_ix, &uses_orig[..], &|vreg| mapper.get_use(vreg))?;
+        let defs = map_regs(inst_ix, &defs_orig[..], &|vreg| mapper.get_def(vreg))?;
         let insts = self.bb_insts.get_mut(&block).unwrap();
         let op = Inst::Op {
             inst_ix,
@@ -519,8 +518,7 @@ impl CheckerContext {
         func: &F,
         bix: BlockIx,
         iix: InstIx,
-        pre_map: &Map<VirtualReg, RealReg>,
-        post_map: &Map<VirtualReg, RealReg>,
+        mapper: &RegUsageMapper,
     ) -> Result<(), CheckerErrors> {
         let empty = vec![];
         let pre_point = InstPoint {
@@ -542,10 +540,10 @@ impl CheckerContext {
         assert!(regsets.is_sanitized());
 
         debug!(
-            "at inst {:?}: regsets {:?} use-map {:?} def-map {:?}",
-            iix, regsets, pre_map, post_map
+            "at inst {:?}: regsets {:?} mapper {:?}",
+            iix, regsets, mapper
         );
-        self.checker.add_op(bix, iix, &regsets, pre_map, post_map)?;
+        self.checker.add_op(bix, iix, &regsets, mapper)?;
 
         for checker_inst in self.checker_inst_map.get(&post_point).unwrap_or(&empty) {
             debug!("at inst {:?}: post checker_inst: {:?}", iix, checker_inst);

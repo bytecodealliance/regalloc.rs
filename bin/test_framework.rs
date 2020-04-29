@@ -82,10 +82,10 @@ impl RI {
             RI::Imm { .. } => {}
         }
     }
-    fn apply_defs_or_uses(&mut self, map: &Map<VirtualReg, RealReg>) {
+    fn apply_uses(&mut self, mapper: &RegUsageMapper) {
         match self {
             RI::Reg { ref mut reg } => {
-                reg.apply_defs_or_uses(map);
+                reg.apply_uses(mapper);
             }
             RI::Imm { .. } => {}
         }
@@ -143,17 +143,17 @@ impl AM {
         }
     }
 
-    fn apply_defs_or_uses(&mut self, map: &Map<VirtualReg, RealReg>) {
+    fn apply_uses(&mut self, mapper: &RegUsageMapper) {
         match self {
             AM::RI { ref mut base, .. } => {
-                base.apply_defs_or_uses(map);
+                base.apply_uses(mapper);
             }
             AM::RR {
                 ref mut base,
                 ref mut offset,
             } => {
-                base.apply_defs_or_uses(map);
-                offset.apply_defs_or_uses(map);
+                base.apply_uses(mapper);
+                offset.apply_uses(mapper);
             }
         }
     }
@@ -948,31 +948,22 @@ impl Inst {
     }
 
     /// Apply the specified VirtualReg->RealReg mappings to the instruction,
-    /// thusly:
-    /// * For registers mentioned in a read role, apply map_uses.
-    /// * For registers mentioned in a write role, apply map_defs.
-    /// * For registers mentioned in a modify role, map_uses and map_defs *must* agree
-    ///   (if not, our caller is buggy).  So apply either map to that register.
-    pub fn map_regs_d_u(
-        &mut self,
-        map_defs: &Map<VirtualReg, RealReg>,
-        map_uses: &Map<VirtualReg, RealReg>,
-    ) {
+    pub fn map_regs(&mut self, mapper: &RegUsageMapper) {
         match self {
             Inst::NopZ {} => {}
             Inst::Imm { dst, imm: _ } => {
-                dst.apply_defs_or_uses(map_defs);
+                dst.apply_defs(mapper);
             }
             Inst::ImmF { dst, imm: _ } => {
-                dst.apply_defs_or_uses(map_defs);
+                dst.apply_defs(mapper);
             }
             Inst::Copy { dst, src } => {
-                dst.apply_defs_or_uses(map_defs);
-                src.apply_defs_or_uses(map_uses);
+                dst.apply_defs(mapper);
+                src.apply_uses(mapper);
             }
             Inst::CopyF { dst, src } => {
-                dst.apply_defs_or_uses(map_defs);
-                src.apply_defs_or_uses(map_uses);
+                dst.apply_defs(mapper);
+                src.apply_uses(mapper);
             }
             Inst::BinOp {
                 op: _,
@@ -980,17 +971,17 @@ impl Inst {
                 src_left,
                 src_right,
             } => {
-                dst.apply_defs_or_uses(map_defs);
-                src_left.apply_defs_or_uses(map_uses);
-                src_right.apply_defs_or_uses(map_uses);
+                dst.apply_defs(mapper);
+                src_left.apply_uses(mapper);
+                src_right.apply_uses(mapper);
             }
             Inst::BinOpM {
                 op: _,
                 dst,
                 src_right,
             } => {
-                dst.apply_mods(map_defs, map_uses);
-                src_right.apply_defs_or_uses(map_uses);
+                dst.apply_mods(mapper);
+                src_right.apply_uses(mapper);
             }
             Inst::BinOpF {
                 op: _,
@@ -998,25 +989,25 @@ impl Inst {
                 src_left,
                 src_right,
             } => {
-                dst.apply_defs_or_uses(map_defs);
-                src_left.apply_defs_or_uses(map_uses);
-                src_right.apply_defs_or_uses(map_uses);
+                dst.apply_defs(mapper);
+                src_left.apply_uses(mapper);
+                src_right.apply_uses(mapper);
             }
             Inst::Store { addr, src } => {
-                addr.apply_defs_or_uses(map_uses);
-                src.apply_defs_or_uses(map_uses);
+                addr.apply_uses(mapper);
+                src.apply_uses(mapper);
             }
             Inst::StoreF { addr, src } => {
-                addr.apply_defs_or_uses(map_uses);
-                src.apply_defs_or_uses(map_uses);
+                addr.apply_uses(mapper);
+                src.apply_uses(mapper);
             }
             Inst::Load { dst, addr } => {
-                dst.apply_defs_or_uses(map_defs);
-                addr.apply_defs_or_uses(map_uses);
+                dst.apply_defs(mapper);
+                addr.apply_uses(mapper);
             }
             Inst::LoadF { dst, addr } => {
-                dst.apply_defs_or_uses(map_defs);
-                addr.apply_defs_or_uses(map_uses);
+                dst.apply_defs(mapper);
+                addr.apply_uses(mapper);
             }
             Inst::Goto { .. } => {}
             Inst::GotoCTF {
@@ -1024,18 +1015,18 @@ impl Inst {
                 target_true: _,
                 target_false: _,
             } => {
-                cond.apply_defs_or_uses(map_uses);
+                cond.apply_uses(mapper);
             }
             Inst::PrintS { .. } => {}
             Inst::PrintI { reg } => {
-                reg.apply_defs_or_uses(map_uses);
+                reg.apply_uses(mapper);
             }
             Inst::PrintF { reg } => {
-                reg.apply_defs_or_uses(map_uses);
+                reg.apply_uses(mapper);
             }
             Inst::Finish { reg } => {
                 if let Some(reg) = reg {
-                    reg.apply_defs_or_uses(map_uses);
+                    reg.apply_uses(mapper);
                 }
             }
             Inst::Spill { .. }
@@ -2210,14 +2201,8 @@ impl regalloc::Function for Func {
     /// to the instruction's effect) and defs (which semantically occur
     /// just after the instruction's effect). Regs that were "modified"
     /// can use either map; the vreg should be the same in both.
-    fn map_regs(
-        insn: &mut Self::Inst,
-        pre_map: &Map<VirtualReg, RealReg>,
-        post_map: &Map<VirtualReg, RealReg>,
-    ) {
-        insn.map_regs_d_u(
-            /* define-map = */ post_map, /* use-map = */ pre_map,
-        );
+    fn map_regs(insn: &mut Self::Inst, maps: &RegUsageMapper) {
+        insn.map_regs(maps);
     }
 
     /// Allow the regalloc to query whether this is a move.
@@ -2226,6 +2211,10 @@ impl regalloc::Function for Func {
             &Inst::Copy { dst, src } => Some((Writable::from_reg(dst), src)),
             _ => None,
         }
+    }
+
+    fn get_vreg_count_estimate(&self) -> Option<usize> {
+        Some(self.num_virtual_regs as usize)
     }
 
     /// How many logical spill slots does the given regclass require?  E.g., on a
