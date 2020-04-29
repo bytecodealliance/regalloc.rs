@@ -55,7 +55,7 @@
 
 #![allow(dead_code)]
 
-use crate::analysis::get_san_reg_sets_for_insn;
+use crate::analysis_data_flow::get_san_reg_sets_for_insn;
 use crate::data_structures::{
     BlockIx, InstIx, InstPoint, Map, Point, RealReg, RealRegUniverse, Reg, RegSets, SpillSlot,
     VirtualReg, Writable,

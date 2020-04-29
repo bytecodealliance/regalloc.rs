@@ -177,7 +177,7 @@ pub fn validate(func: &Func, real_reg_universe: &RealRegUniverse) -> Result<(), 
         }
     }
 
-    if let Err(err) = regalloc::analysis::run_analysis(func, real_reg_universe) {
+    if let Err(err) = regalloc::analysis_main::run_analysis(func, real_reg_universe) {
         return Err(err.to_string());
     }
 

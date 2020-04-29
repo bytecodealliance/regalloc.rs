@@ -19,11 +19,12 @@ use std::env;
 use std::fmt;
 use std::mem;
 
-use crate::analysis::{add_raw_reg_vecs_for_insn, run_analysis};
+use crate::analysis_data_flow::add_raw_reg_vecs_for_insn;
+use crate::analysis_main::run_analysis;
 use crate::avl_tree::{AVLTree, AVL_NULL};
 use crate::data_structures::*;
 use crate::inst_stream::{edit_inst_stream, InstToInsert, InstToInsertAndPoint};
-use crate::trees_maps_sets::SparseSet;
+use crate::sparse_set::SparseSet;
 use crate::{Function, RegAllocError, RegAllocResult};
 
 // Helpers for SmallVec

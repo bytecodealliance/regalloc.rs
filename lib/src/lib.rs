@@ -9,17 +9,24 @@
 
 // Make the analysis module public for fuzzing.
 #[cfg(feature = "fuzzing")]
-pub mod analysis;
+pub mod analysis_main;
 #[cfg(not(feature = "fuzzing"))]
-mod analysis;
+mod analysis_main;
 
+mod analysis_control_flow;
+mod analysis_data_flow;
 mod avl_tree;
-mod backtracking;
+mod bt_coalescing_analysis;
+mod bt_commitment_map;
+mod bt_main;
+mod bt_spillslot_allocator;
+mod bt_vlr_priority_queue;
 mod checker;
 mod data_structures;
 mod inst_stream;
 mod linear_scan;
-mod trees_maps_sets;
+mod sparse_set;
+mod union_find;
 
 use log::{info, log_enabled, Level};
 use std::fmt;
@@ -348,7 +355,7 @@ pub enum RegAllocAlgorithm {
     LinearScanChecked,
 }
 
-pub use crate::analysis::AnalysisError;
+pub use crate::analysis_main::AnalysisError;
 pub use crate::checker::{CheckerError, CheckerErrors};
 
 /// An error from the register allocator.
@@ -397,7 +404,7 @@ pub fn allocate_registers<F: Function>(
     let res = match algorithm {
         RegAllocAlgorithm::Backtracking | RegAllocAlgorithm::BacktrackingChecked => {
             let use_checker = algorithm == RegAllocAlgorithm::BacktrackingChecked;
-            backtracking::alloc_main(func, rreg_universe, use_checker, request_block_annotations)
+            bt_main::alloc_main(func, rreg_universe, use_checker, request_block_annotations)
         }
         RegAllocAlgorithm::LinearScan | RegAllocAlgorithm::LinearScanChecked => {
             let use_checker = algorithm == RegAllocAlgorithm::LinearScanChecked;
