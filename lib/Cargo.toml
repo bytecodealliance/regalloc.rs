@@ -1,6 +1,6 @@
 [package]
 name = "regalloc"
-version = "0.0.19"
+version = "0.0.20"
 authors = ["The Regalloc.rs Developers"]
 edition = "2018"
 license = "Apache-2.0 WITH LLVM-exception"
