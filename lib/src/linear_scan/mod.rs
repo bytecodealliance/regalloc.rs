@@ -790,17 +790,8 @@ fn ref_last_use(
     None
 }
 
-fn try_compress_ranges<F: Function>(
-    func: &F,
-    rlrs: &mut RealRanges,
-    vlrs: &mut VirtualRanges,
-    fragments: &mut Fragments,
-) {
-    fn compress<F: Function>(
-        func: &F,
-        frag_ixs: &mut SmallVec<[RangeFragIx; 4]>,
-        fragments: &mut Fragments,
-    ) {
+fn try_compress_ranges(rlrs: &mut RealRanges, vlrs: &mut VirtualRanges, fragments: &mut Fragments) {
+    fn compress(frag_ixs: &mut SmallVec<[RangeFragIx; 4]>, fragments: &mut Fragments) {
         if frag_ixs.len() == 1 {
             return;
         }
@@ -808,8 +799,7 @@ fn try_compress_ranges<F: Function>(
         let last_frag_end = fragments[*frag_ixs.last().unwrap()].last;
         let first_frag = &mut fragments[frag_ixs[0]];
 
-        let new_range =
-            RangeFrag::new_multi_block(func, first_frag.bix, first_frag.first, last_frag_end, 1);
+        let new_range = RangeFrag::new(first_frag.first, last_frag_end);
 
         let new_range_ix = RangeFragIx::new(fragments.len());
         fragments.push(new_range);
@@ -825,7 +815,7 @@ fn try_compress_ranges<F: Function>(
         //&& prev_frag.last.pt == Point::Def
         //&& cur_frag.first.pt == Point::Use
         //{
-        //let new_range = RangeFrag::new_multi_block(
+        //let (new_range, new_range_metrics) = RangeFrag::new_multi_block(
         //func,
         //prev_frag.bix,
         //prev_frag.first,
@@ -866,7 +856,7 @@ fn try_compress_ranges<F: Function>(
             }
         } else {
             // First time we see this vreg, compress and insert it.
-            compress(func, &mut vlr.sorted_frags.frag_ixs, fragments);
+            compress(&mut vlr.sorted_frags.frag_ixs, fragments);
             // TODO try to avoid the clone?
             by_vreg.insert(vlr.vreg, vlr.clone());
         }
@@ -914,8 +904,16 @@ pub(crate) fn run<F: Function>(
     use_checker: bool,
     _opts: &LinearScanOptions,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
-    let (reg_uses, mut rlrs, mut vlrs, mut fragments, liveouts, _est_freqs, _inst_to_block_map) =
-        run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
+    let (
+        reg_uses,
+        mut rlrs,
+        mut vlrs,
+        mut fragments,
+        _fragment_metrics,
+        liveouts,
+        _est_freqs,
+        _inst_to_block_map,
+    ) = run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
 
     let scratches_by_rc = {
         let mut scratches_by_rc = vec![None; NUM_REG_CLASSES];
@@ -939,7 +937,7 @@ pub(crate) fn run<F: Function>(
         scratches_by_rc
     };
 
-    try_compress_ranges(func, &mut rlrs, &mut vlrs, &mut fragments);
+    try_compress_ranges(&mut rlrs, &mut vlrs, &mut fragments);
 
     let intervals = Intervals::new(rlrs, vlrs, &fragments);
 

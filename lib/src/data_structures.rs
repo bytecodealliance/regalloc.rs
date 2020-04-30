@@ -1698,56 +1698,8 @@ impl fmt::Debug for InstPoint {
     }
 }
 
-// A handy summary hint for a RangeFrag.
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RangeFragKind {
-    Local,   // Fragment exists entirely inside one block
-    LiveIn,  // Fragment is live in to a block, but ends inside it
-    LiveOut, // Fragment is live out of a block, but starts inside it
-    Thru,    // Fragment is live through the block (starts and ends outside it)
-    // Multi is a hack that is required by BT's experimental RangeFrag
-    // compression.  I hope to be able to get rid of it in subsequent work to
-    // clean up and improve the compression.
-    Multi, // Fragment spans multiple blocks ("is compressed")
-}
-
-impl fmt::Debug for RangeFragKind {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            RangeFragKind::Local => write!(fmt, "Local"),
-            RangeFragKind::LiveIn => write!(fmt, "LiveIn"),
-            RangeFragKind::LiveOut => write!(fmt, "LiveOut"),
-            RangeFragKind::Thru => write!(fmt, "Thru"),
-            // Hack, per comment above
-            RangeFragKind::Multi => write!(fmt, "Multi"),
-        }
-    }
-}
-
 //=============================================================================
-// Metrics.  Meaning, estimated hotness, etc, numbers, which don't have any
-// effect on the correctness of the resulting allocation, but which are
-// important for getting a good allocation, basically by giving preference for
-// the hottest values getting a register.
-
-/* Required metrics:
-   Block (a basic block):
-   - Estimated relative execution frequency ("EEF")
-     Calculated from loop nesting depth, depth inside an if-tree, etc
-     Suggested: u16
-
-   RangeFrag (Live Range Fragment):
-   - Length (in instructions).  Can be calculated, = end - start + 1.
-   - Number of uses (of the associated Reg)
-     Suggested: u16
-
-   LR (Live Range, = a set of Live Range Fragments):
-   - spill cost (can be calculated)
-     = sum, for each frag:
-            frag.#uses / frag.len * frag.block.estFreq
-       with the proviso that spill/reload LRs must have spill cost of infinity
-     Do this with a f32 so we don't have to worry about scaling/overflow.
-*/
+// Live Range Fragments, and their metrics
 
 // A Live Range Fragment (RangeFrag) describes a consecutive sequence of one or
 // more instructions, in which a Reg is "live".  The sequence must exist
@@ -1773,43 +1725,34 @@ impl fmt::Debug for RangeFragKind {
 // that InstPoint values have a total ordering, at least within a single basic
 // block: the insn number is used as the primary key, and the Point part is
 // the secondary key, with Reload < Use < Def < Spill.
-//
-// Finally, a RangeFrag has a `count` field, which is a u16 indicating how often
-// the associated storage unit (Reg) is mentioned inside the RangeFrag.  It is
-// assumed that the RangeFrag is associated with some Reg.  If not, the `count`
-// field is meaningless.
-//
-// The `bix` field is actually redundant, since the containing `Block` can be
-// inferred, laboriously, from `first` and `last`, providing you have a
-// `Block` table to hand.  It is included here for convenience.
-
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RangeFrag {
-    pub bix: BlockIx,
-    pub kind: RangeFragKind,
     pub first: InstPoint,
     pub last: InstPoint,
-    pub count: u16,
 }
 
 impl fmt::Debug for RangeFrag {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            fmt,
-            "(RF: {:?}, count={}, {:?}, {:?}-{:?})",
-            self.bix, self.count, self.kind, self.first, self.last
-        )
+        write!(fmt, "(RF: {:?}-{:?})", self.first, self.last)
     }
 }
 
 impl RangeFrag {
-    pub fn new_multi_block<F: Function>(
+    pub fn new(first: InstPoint, last: InstPoint) -> Self {
+        debug_assert!(first <= last);
+        RangeFrag { first, last }
+    }
+
+    pub fn new_with_metrics<F: Function>(
         f: &F,
         bix: BlockIx,
         first: InstPoint,
         last: InstPoint,
         count: u16,
-    ) -> Self {
+    ) -> (Self, RangeFragMetrics) {
+        debug_assert!(f.block_insns(bix).len() >= 1);
+        debug_assert!(f.block_insns(bix).contains(first.iix));
+        debug_assert!(f.block_insns(bix).contains(last.iix));
         debug_assert!(first <= last);
         if first == last {
             debug_assert!(count == 1);
@@ -1824,26 +1767,10 @@ impl RangeFrag {
             (true, false) => RangeFragKind::LiveIn,
             (true, true) => RangeFragKind::Thru,
         };
-        RangeFrag {
-            bix,
-            kind,
-            first,
-            last,
-            count,
-        }
-    }
-
-    pub fn new<F: Function>(
-        f: &F,
-        bix: BlockIx,
-        first: InstPoint,
-        last: InstPoint,
-        count: u16,
-    ) -> Self {
-        debug_assert!(f.block_insns(bix).len() >= 1);
-        debug_assert!(f.block_insns(bix).contains(first.iix));
-        debug_assert!(f.block_insns(bix).contains(last.iix));
-        RangeFrag::new_multi_block(f, bix, first, last, count)
+        (
+            RangeFrag { first, last },
+            RangeFragMetrics { bix, kind, count },
+        )
     }
 }
 
@@ -1868,15 +1795,80 @@ impl RangeFrag {
     }
 }
 
+// A handy summary hint for a RangeFrag.  Note that none of these are correct
+// if the RangeFrag has been extended so as to cover multiple basic blocks.
+// But that ("RangeFrag compression") is something done locally within each
+// algorithm (BT and LSRA).  The analysis-phase output will not include any
+// such compressed RangeFrags.
+#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RangeFragKind {
+    Local,   // Fragment exists entirely inside one block
+    LiveIn,  // Fragment is live in to a block, but ends inside it
+    LiveOut, // Fragment is live out of a block, but starts inside it
+    Thru,    // Fragment is live through the block (starts and ends outside it)
+}
+
+impl fmt::Debug for RangeFragKind {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RangeFragKind::Local => write!(fmt, "Local"),
+            RangeFragKind::LiveIn => write!(fmt, "LiveIn"),
+            RangeFragKind::LiveOut => write!(fmt, "LiveOut"),
+            RangeFragKind::Thru => write!(fmt, "Thru"),
+        }
+    }
+}
+
+// `RangeFrags` resulting from the initial analysis phase (analysis_data_flow.rs)
+// exist only within single basic blocks, and therefore have some associated
+// metrics, held by `RangeFragMetrics`:
+//
+// * a `count` field, which is a u16 indicating how often the associated storage
+//   unit (Reg) is mentioned inside the RangeFrag.  It is assumed that the RangeFrag
+//   is associated with some Reg.  If not, the `count` field is meaningless.  This
+//   field has no effect on the correctness of the resulting allocation.  It is used
+//   however in the estimation of `VirtualRange` spill costs, which are important
+//   for prioritising which `VirtualRange`s get assigned a register vs which have
+//   to be spilled.
+//
+// * `bix` field, which indicates which `Block` the fragment exists in.  This
+//   field is actually redundant, since the containing `Block` can be inferred,
+//   laboriously, from the associated `RangeFrag`s `first` and `last` fields,
+//   providing you have an `InstIxToBlockIx` mapping table to hand.  It is included
+//   here for convenience.
+//
+// * `kind` is another convenience field, indicating how the range is included
+//   within its owning block.
+//
+// The core allocation algorithsm (BT and LSRA) compress ranges (independently) and
+// as a result break the invariant that a `RangeFrag` exists only within a single `Block`.
+// For a `RangeFrag` spanning multiple `Block`s, all three `RangeFragMetric` fields are
+// meaningless.  This is the reason for separating `RangeFrag` and `RangeFragMetrics`
+// -- so that it is possible to merge `RangeFrag`s without being forced to create fake
+// values for the metrics fields.
+#[derive(Clone, PartialEq)]
+pub struct RangeFragMetrics {
+    pub bix: BlockIx,
+    pub kind: RangeFragKind,
+    pub count: u16,
+}
+
+impl fmt::Debug for RangeFragMetrics {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            fmt,
+            "(RFM: {:?}, count={}, {:?})",
+            self.kind, self.count, self.bix
+        )
+    }
+}
+
 //=============================================================================
 // Vectors of RangeFragIxs, sorted so that the associated RangeFrags are in
 // ascending order (per their InstPoint fields).
 //
-// The "fragment environment" (sometimes called 'fenv' or 'frag_env') to which
-// the RangeFragIxs refer, is not stored here.
-
-// Helper for SmallVec
-//fn smallVec_from_TypedIxVec(src: &TypedIxVec<A, B>) -> SmallVec<C> // hmm
+// The "fragment environment" (usually called "frag_env"), to which the
+// RangeFragIxs refer, is not stored here.
 
 #[derive(Clone)]
 pub struct SortedRangeFragIxs {

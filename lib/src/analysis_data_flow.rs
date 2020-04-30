@@ -6,9 +6,10 @@ use std::fmt;
 
 use crate::analysis_control_flow::CFGInfo;
 use crate::data_structures::{
-    BlockIx, InstIx, InstPoint, Map, Queue, RangeFrag, RangeFragIx, RangeFragKind, RealRange,
-    RealRangeIx, RealReg, RealRegUniverse, Reg, RegSets, RegUsageCollector, RegVecBounds, RegVecs,
-    RegVecsAndBounds, Set, SortedRangeFragIxs, SpillCost, TypedIxVec, VirtualRange, VirtualRangeIx,
+    BlockIx, InstIx, InstPoint, Map, Queue, RangeFrag, RangeFragIx, RangeFragKind,
+    RangeFragMetrics, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, RegSets,
+    RegUsageCollector, RegVecBounds, RegVecs, RegVecsAndBounds, Set, SortedRangeFragIxs, SpillCost,
+    TypedIxVec, VirtualRange, VirtualRangeIx,
 };
 use crate::sparse_set::SparseSet;
 use crate::union_find::{ToFromU32, UnionFind};
@@ -781,6 +782,7 @@ fn get_range_frags_for_block<F: Function>(
     rvb: &RegVecsAndBounds,
     out_map: &mut Map<Reg, Vec<RangeFragIx>>,
     out_frags: &mut TypedIxVec<RangeFragIx, RangeFrag>,
+    out_frag_metrics: &mut TypedIxVec<RangeFragIx, RangeFragMetrics>,
 ) {
     //println!("QQQQ --- block {}", bix.show());
     // BEGIN ProtoRangeFrag
@@ -846,7 +848,7 @@ fn get_range_frags_for_block<F: Function>(
 
     // The generated RangeFrags are initially are dumped in here.  We
     // group them by Reg at the end of this function.
-    let mut tmp_result_vec = SmallVec::<[(Reg, RangeFrag); 32]>::new();
+    let mut tmp_result_vec = SmallVec::<[(Reg, RangeFrag, RangeFragMetrics); 32]>::new();
 
     // First, set up `state` as if all of `livein` had been written just
     // prior to the block.
@@ -953,8 +955,9 @@ fn get_range_frags_for_block<F: Function>(
                     if first == last {
                         debug_assert!(*uses == 1);
                     }
-                    let frag = RangeFrag::new(func, bix, *first, *last, *uses);
-                    tmp_result_vec.push((*r, frag));
+                    let (frag, frag_metrics) =
+                        RangeFrag::new_with_metrics(func, bix, *first, *last, *uses);
+                    tmp_result_vec.push((*r, frag, frag_metrics));
                     let new_pt = InstPoint::new_def(iix);
                     new_pf = ProtoRangeFrag {
                         uses: 1,
@@ -994,8 +997,9 @@ fn get_range_frags_for_block<F: Function>(
                 first,
                 last: _,
             }) => {
-                let frag = RangeFrag::new(func, bix, *first, last_pt_in_block, *uses);
-                tmp_result_vec.push((*r, frag));
+                let (frag, frag_metrics) =
+                    RangeFrag::new_with_metrics(func, bix, *first, last_pt_in_block, *uses);
+                tmp_result_vec.push((*r, frag, frag_metrics));
             }
         }
         // Remove the entry from `state` so that the following loop
@@ -1009,15 +1013,17 @@ fn get_range_frags_for_block<F: Function>(
         if pf.first == pf.last {
             debug_assert!(pf.uses == 1);
         }
-        let frag = RangeFrag::new(func, bix, pf.first, pf.last, pf.uses);
+        let (frag, frag_metrics) =
+            RangeFrag::new_with_metrics(func, bix, pf.first, pf.last, pf.uses);
         //println!("QQQQ post: leftover: {}", (r,frag).show());
-        tmp_result_vec.push((*r, frag));
+        tmp_result_vec.push((*r, frag, frag_metrics));
     }
 
     // Copy the entries in `tmp_result_vec` into `out_map` and `outVec`.
     // TODO: do this as we go along, so as to avoid the use of a temporary
     // vector.
-    for (r, frag) in tmp_result_vec {
+    assert!(out_frags.len() == out_frag_metrics.len());
+    for (r, frag, frag_metrics) in tmp_result_vec {
         // Allocate a new RangeFragIx for `frag`, except, make some minimal effort
         // to avoid huge numbers of duplicates by inspecting the previous two
         // entries, and using them if possible.
@@ -1026,18 +1032,20 @@ fn get_range_frags_for_block<F: Function>(
         if num_out_frags >= 2 {
             let back_0 = RangeFragIx::new(num_out_frags - 1);
             let back_1 = RangeFragIx::new(num_out_frags - 2);
-            if out_frags[back_0] == frag {
+            if out_frags[back_0] == frag && out_frag_metrics[back_0] == frag_metrics {
                 new_fix = back_0;
-            } else if out_frags[back_1] == frag {
+            } else if out_frags[back_1] == frag && out_frag_metrics[back_1] == frag_metrics {
                 new_fix = back_1;
             } else {
                 // No match; create a new one.
                 out_frags.push(frag);
+                out_frag_metrics.push(frag_metrics);
                 new_fix = RangeFragIx::new(out_frags.len() as u32 - 1);
             }
         } else {
             // We can't look back; create a new one.
             out_frags.push(frag);
+            out_frag_metrics.push(frag_metrics);
             new_fix = RangeFragIx::new(out_frags.len() as u32 - 1);
         }
         // And use the new RangeFragIx.
@@ -1062,6 +1070,7 @@ pub fn get_range_frags<F: Function>(
 ) -> (
     Map<Reg, Vec<RangeFragIx>>,
     TypedIxVec<RangeFragIx, RangeFrag>,
+    TypedIxVec<RangeFragIx, RangeFragMetrics>,
 ) {
     info!("    get_range_frags: begin");
     assert!(livein_sets_per_block.len() == func.blocks().len() as u32);
@@ -1069,6 +1078,7 @@ pub fn get_range_frags<F: Function>(
     assert!(rvb.is_sanitized());
     let mut result_map = Map::<Reg, Vec<RangeFragIx>>::default();
     let mut result_frags = TypedIxVec::<RangeFragIx, RangeFrag>::new();
+    let mut result_frag_metrics = TypedIxVec::<RangeFragIx, RangeFragMetrics>::new();
     for bix in func.blocks() {
         get_range_frags_for_block(
             func,
@@ -1078,6 +1088,7 @@ pub fn get_range_frags<F: Function>(
             &rvb,
             &mut result_map,
             &mut result_frags,
+            &mut result_frag_metrics,
         );
     }
 
@@ -1094,7 +1105,8 @@ pub fn get_range_frags<F: Function>(
     }
 
     info!("    get_range_frags: end");
-    (result_map, result_frags)
+    assert!(result_frags.len() == result_frag_metrics.len());
+    (result_map, result_frags, result_frag_metrics)
 }
 
 //=============================================================================
@@ -1105,11 +1117,13 @@ pub fn get_range_frags<F: Function>(
 fn merge_range_frags_slow(
     frag_ix_vec_per_reg: &Map<Reg, Vec<RangeFragIx>>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+    frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
     cfg_info: &CFGInfo,
 ) -> (
     TypedIxVec<RealRangeIx, RealRange>,
     TypedIxVec<VirtualRangeIx, VirtualRange>,
 ) {
+    assert!(frag_env.len() == frag_metrics_env.len());
     let mut n_total_incoming_frags = 0;
     for (_reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
         n_total_incoming_frags += all_frag_ixs_for_reg.len();
@@ -1152,10 +1166,10 @@ fn merge_range_frags_slow(
         for fix in all_frag_ixs_for_reg {
             let mut live_in_blocks = Set::<BlockIx>::empty();
             let mut succs_of_live_out_blocks = Set::<BlockIx>::empty();
-            let frag = &frag_env[*fix];
-            let frag_bix = frag.bix;
+            let frag_metrics = &frag_metrics_env[*fix];
+            let frag_bix = frag_metrics.bix;
             let frag_succ_bixes = &cfg_info.succ_map[frag_bix];
-            match frag.kind {
+            match frag_metrics.kind {
                 RangeFragKind::Local => {}
                 RangeFragKind::LiveIn => {
                     live_in_blocks.insert(frag_bix);
@@ -1173,7 +1187,6 @@ fn merge_range_frags_slow(
                     }
                     //succs_of_live_out_blocks.union(frag_succ_bixes);
                 }
-                RangeFragKind::Multi => panic!("merge_range_frags_slow: unexpected Multi"),
             }
 
             let valid = true;
@@ -1336,11 +1349,13 @@ impl ToFromU32 for usize {
 pub fn merge_range_frags(
     frag_ix_vec_per_reg: &Map<Reg, Vec<RangeFragIx>>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+    frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
     cfg_info: &CFGInfo,
 ) -> (
     TypedIxVec<RealRangeIx, RealRange>,
     TypedIxVec<VirtualRangeIx, VirtualRange>,
 ) {
+    assert!(frag_env.len() == frag_metrics_env.len());
     let mut n_total_incoming_frags = 0;
     for (_reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
         n_total_incoming_frags += all_frag_ixs_for_reg.len();
@@ -1392,13 +1407,13 @@ pub fn merge_range_frags(
         // Create `triples`.  We will use it to guide the merging phase, but it is
         // immutable there.
         'per_frag_loop: for fix in all_frag_ixs_for_reg {
-            let frag = &frag_env[*fix];
+            let frag_metrics = &frag_metrics_env[*fix];
             // This frag is Local (standalone).  Give it its own Range and move on.
             // This is an optimisation, but it's also necessary: the main
             // fragment-merging logic below relies on the fact that the
             // fragments it is presented with are all either LiveIn, LiveOut or
             // Thru.
-            if frag.kind == RangeFragKind::Local {
+            if frag_metrics.kind == RangeFragKind::Local {
                 create_and_add_range(
                     &mut result_real,
                     &mut result_virtual,
@@ -1408,9 +1423,9 @@ pub fn merge_range_frags(
                 n_local_frags += 1;
                 continue 'per_frag_loop;
             }
-            // This frag isn't Local (standalone) so we have process it the slow way.
-            assert!(frag.kind != RangeFragKind::Local);
-            triples.push((*fix, frag.kind, frag.bix));
+            // This frag isn't Local (standalone) so we have to process it the slow way.
+            assert!(frag_metrics.kind != RangeFragKind::Local);
+            triples.push((*fix, frag_metrics.kind, frag_metrics.bix));
         }
 
         let triples_len = triples.len();
@@ -1588,7 +1603,7 @@ pub fn merge_range_frags(
     if CROSSCHECK_MERGE {
         info!("    merge_range_frags: crosscheck: begin");
         let (result_real_ref, result_virtual_ref) =
-            merge_range_frags_slow(frag_ix_vec_per_reg, frag_env, cfg_info);
+            merge_range_frags_slow(frag_ix_vec_per_reg, frag_env, frag_metrics_env, cfg_info);
         assert!(result_real.len() == result_real_ref.len());
         assert!(result_virtual.len() == result_virtual_ref.len());
 
@@ -1648,10 +1663,12 @@ pub fn merge_range_frags(
 #[inline(never)]
 pub fn set_virtual_range_metrics(
     vlrs: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
-    fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+    frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
     estimated_frequency: &TypedIxVec<BlockIx, u32>,
 ) {
     info!("    set_virtual_range_metrics: begin");
+    assert!(frag_env.len() == frag_metrics_env.len());
     for vlr in vlrs.iter_mut() {
         debug_assert!(vlr.size == 0 && vlr.total_cost == 0 && vlr.spill_cost.is_zero());
         debug_assert!(vlr.rreg.is_none());
@@ -1659,7 +1676,8 @@ pub fn set_virtual_range_metrics(
         let mut tot_cost: u32 = 0;
 
         for fix in &vlr.sorted_frags.frag_ixs {
-            let frag = &fenv[*fix];
+            let frag = &frag_env[*fix];
+            let frag_metrics = &frag_metrics_env[*fix];
 
             // Add on the size of this fragment, but make sure we can't
             // overflow a u32 no matter how many fragments there are.
@@ -1674,8 +1692,8 @@ pub fn set_virtual_range_metrics(
 
             // Here, tot_size <= 0xFFFF.  frag.count is u16.  estFreq[] is u32.
             // We must be careful not to overflow tot_cost, which is u32.
-            let mut new_tot_cost: u64 = frag.count as u64; // at max 16 bits
-            new_tot_cost *= estimated_frequency[frag.bix] as u64; // at max 48 bits
+            let mut new_tot_cost: u64 = frag_metrics.count as u64; // at max 16 bits
+            new_tot_cost *= estimated_frequency[frag_metrics.bix] as u64; // at max 48 bits
             new_tot_cost += tot_cost as u64; // at max 48 bits + epsilon
             if new_tot_cost > 0xFFFF_FFFF {
                 new_tot_cost = 0xFFFF_FFFF;

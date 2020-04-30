@@ -1325,19 +1325,13 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
             debug_assert!(parent_last <= child_first);
             debug_assert!(child_first <= child_last);
 
-            let bix = frag.bix;
-
             // Parent range.
-            let count = 1; // unused by LSRA.
-            let parent_frag =
-                RangeFrag::new_multi_block(state.func, bix, parent_first, parent_last, count);
-
+            let parent_frag = RangeFrag::new(parent_first, parent_last);
             let parent_frag_ix = RangeFragIx::new(state.fragments.len());
             state.fragments.push(parent_frag);
 
             // Child range.
-            let child_frag =
-                RangeFrag::new_multi_block(state.func, bix, child_first, child_last, count);
+            let child_frag = RangeFrag::new(child_first, child_last);
             let child_frag_ix = RangeFragIx::new(state.fragments.len());
             state.fragments.push(child_frag);
 
@@ -1356,10 +1350,7 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
             "no fragments in the parent interval"
         );
 
-        let frag = &state.fragments[child_frag_ixs[0]];
-        let parent_frag =
-            RangeFrag::new_multi_block(state.func, frag.bix, at_pos, at_pos, /* count */ 1);
-
+        let parent_frag = RangeFrag::new(at_pos, at_pos);
         let parent_frag_ix = RangeFragIx::new(state.fragments.len());
         state.fragments.push(parent_frag);
 
