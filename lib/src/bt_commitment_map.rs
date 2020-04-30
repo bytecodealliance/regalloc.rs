@@ -87,11 +87,7 @@ impl fmt::Debug for CommitmentMap {
     }
 }
 impl CommitmentMap {
-    pub fn show_with_fenv(&self, _fenv: &TypedIxVec<RangeFragIx, RangeFrag>) -> String {
-        //let mut frags = TypedIxVec::<RangeFragIx, RangeFrag>::new();
-        //for fix in &self.frag_ixs {
-        //  frags.push(fenv[*fix]);
-        //}
+    pub fn show_with_frag_env(&self, _frag_env: &TypedIxVec<RangeFragIx, RangeFrag>) -> String {
         format!("(CommitmentMap {:?})", &self.pairs)
     }
 }
@@ -103,7 +99,7 @@ impl CommitmentMap {
 
     fn check(
         &self,
-        fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+        frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     ) {
         let mut ok = true;
@@ -112,8 +108,8 @@ impl CommitmentMap {
             let this_pair = &self.pairs[i - 0];
             let prev_fix = prev_pair.fix;
             let this_fix = this_pair.fix;
-            let prev_frag = &fenv[prev_fix];
-            let this_frag = &fenv[this_fix];
+            let prev_frag = &frag_env[prev_fix];
+            let this_frag = &frag_env[this_fix];
             // Check in-orderness
             if cmp_range_frags(prev_frag, this_frag) != Some(Ordering::Less) {
                 ok = false;
@@ -155,19 +151,19 @@ impl CommitmentMap {
         &mut self,
         to_add_frags: &SortedRangeFragIxs,
         to_add_mb_vlrix: Option<VirtualRangeIx>,
-        fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+        frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     ) {
-        self.check(fenv, vlr_env);
-        to_add_frags.check(fenv);
+        self.check(frag_env, vlr_env);
+        to_add_frags.check(frag_env);
         let pairs_x = &self;
         let frags_y = &to_add_frags;
         let mut ix = 0;
         let mut iy = 0;
         let mut res = Vec::<FIxAndVLRIx>::new();
         while ix < pairs_x.pairs.len() && iy < frags_y.frag_ixs.len() {
-            let fx = fenv[pairs_x.pairs[ix].fix];
-            let fy = fenv[frags_y.frag_ixs[iy]];
+            let fx = frag_env[pairs_x.pairs[ix].fix];
+            let fy = frag_env[frags_y.frag_ixs[iy]];
             match cmp_range_frags(&fx, &fy) {
                 Some(Ordering::Less) => {
                     res.push(pairs_x.pairs[ix]);
@@ -193,25 +189,25 @@ impl CommitmentMap {
             iy += 1;
         }
         self.pairs = res;
-        self.check(fenv, vlr_env);
+        self.check(frag_env, vlr_env);
     }
 
     pub fn del(
         &mut self,
         to_del_frags: &SortedRangeFragIxs,
-        fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+        frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     ) {
-        self.check(fenv, vlr_env);
-        to_del_frags.check(fenv);
+        self.check(frag_env, vlr_env);
+        to_del_frags.check(frag_env);
         let pairs_x = &self;
         let frags_y = &to_del_frags;
         let mut ix = 0;
         let mut iy = 0;
         let mut res = Vec::<FIxAndVLRIx>::new();
         while ix < pairs_x.pairs.len() && iy < frags_y.frag_ixs.len() {
-            let fx = fenv[pairs_x.pairs[ix].fix];
-            let fy = fenv[frags_y.frag_ixs[iy]];
+            let fx = frag_env[pairs_x.pairs[ix].fix];
+            let fy = frag_env[frags_y.frag_ixs[iy]];
             match cmp_range_frags(&fx, &fy) {
                 Some(Ordering::Less) => {
                     res.push(pairs_x.pairs[ix]);
@@ -234,7 +230,7 @@ impl CommitmentMap {
             ix += 1;
         }
         self.pairs = res;
-        self.check(fenv, vlr_env);
+        self.check(frag_env, vlr_env);
     }
 }
 
@@ -286,14 +282,16 @@ impl CommitmentMapFAST {
         &mut self,
         to_add_frags: &SortedRangeFragIxs,
         to_add_mb_vlrix: Option<VirtualRangeIx>,
-        fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+        frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
         _vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     ) {
         for fix in &to_add_frags.frag_ixs {
             let to_add = FIxAndVLRIx::new(*fix, to_add_mb_vlrix);
             let added = self.tree.insert(
                 to_add,
-                Some(&|pair1, pair2| cmp_tree_entries_for_CommitmentMapFAST(pair1, pair2, fenv)),
+                Some(&|pair1, pair2| {
+                    cmp_tree_entries_for_CommitmentMapFAST(pair1, pair2, frag_env)
+                }),
             );
             // If this fails, it means the fragment overlaps one that has already
             // been committed to.  That's a serious error.
@@ -304,7 +302,7 @@ impl CommitmentMapFAST {
     pub fn del(
         &mut self,
         to_del_frags: &SortedRangeFragIxs,
-        fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+        frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
         _vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     ) {
         for fix in &to_del_frags.frag_ixs {
@@ -313,7 +311,9 @@ impl CommitmentMapFAST {
             let to_del = FIxAndVLRIx::new(*fix, None);
             let deleted = self.tree.delete(
                 to_del,
-                Some(&|pair1, pair2| cmp_tree_entries_for_CommitmentMapFAST(pair1, pair2, fenv)),
+                Some(&|pair1, pair2| {
+                    cmp_tree_entries_for_CommitmentMapFAST(pair1, pair2, frag_env)
+                }),
             );
             // If this fails, it means the fragment wasn't already committed to.
             // That's also a serious error.

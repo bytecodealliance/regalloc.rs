@@ -8,8 +8,8 @@ use crate::analysis_data_flow::{
     merge_range_frags, set_virtual_range_metrics,
 };
 use crate::data_structures::{
-    BlockIx, RangeFrag, RangeFragIx, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg,
-    RegVecsAndBounds, TypedIxVec, VirtualRange, VirtualRangeIx,
+    BlockIx, RangeFrag, RangeFragIx, RangeFragMetrics, RealRange, RealRangeIx, RealReg,
+    RealRegUniverse, Reg, RegVecsAndBounds, TypedIxVec, VirtualRange, VirtualRangeIx,
 };
 use crate::sparse_set::SparseSet;
 use crate::Function;
@@ -86,6 +86,8 @@ pub fn run_analysis<F: Function>(
         TypedIxVec<VirtualRangeIx, VirtualRange>,
         // The fragment table
         TypedIxVec<RangeFragIx, RangeFrag>,
+        // The fragment metrics table
+        TypedIxVec<RangeFragIx, RangeFragMetrics>,
         // Liveouts per block
         TypedIxVec<BlockIx, SparseSet<Reg>>,
         // Estimated execution frequency per block
@@ -192,7 +194,7 @@ pub fn run_analysis<F: Function>(
     // VirtualRanges and RealRanges.
     info!("  run_analysis: begin liveness analysis");
 
-    let (frag_ixs_per_reg, frag_env) = get_range_frags(
+    let (frag_ixs_per_reg, frag_env, frag_metrics_env) = get_range_frags(
         func,
         &livein_sets_per_block,
         &liveout_sets_per_block,
@@ -200,9 +202,15 @@ pub fn run_analysis<F: Function>(
         &reg_universe,
     );
 
-    let (rlr_env, mut vlr_env) = merge_range_frags(&frag_ixs_per_reg, &frag_env, &cfg_info);
+    let (rlr_env, mut vlr_env) =
+        merge_range_frags(&frag_ixs_per_reg, &frag_env, &frag_metrics_env, &cfg_info);
 
-    set_virtual_range_metrics(&mut vlr_env, &frag_env, &estimated_frequencies);
+    set_virtual_range_metrics(
+        &mut vlr_env,
+        &frag_env,
+        &frag_metrics_env,
+        &estimated_frequencies,
+    );
 
     debug_assert!(liveout_sets_per_block.len() == estimated_frequencies.len());
 
@@ -232,6 +240,7 @@ pub fn run_analysis<F: Function>(
         rlr_env,
         vlr_env,
         frag_env,
+        frag_metrics_env,
         liveout_sets_per_block,
         estimated_frequencies,
         inst_to_block_map,

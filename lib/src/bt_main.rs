@@ -16,10 +16,10 @@ use crate::bt_commitment_map::{CommitmentMap, CommitmentMapFAST, FIxAndVLRIx, CR
 use crate::bt_spillslot_allocator::SpillSlotAllocator;
 use crate::bt_vlr_priority_queue::VirtualRangePrioQ;
 use crate::data_structures::{
-    BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx, RangeFragKind, RealRange,
-    RealRangeIx, RealReg, RealRegUniverse, Reg, RegVecBounds, RegVecs, RegVecsAndBounds, Set,
-    SortedRangeFragIxs, SpillCost, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx, VirtualReg,
-    Writable,
+    BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx, RangeFragKind, RangeFragMetrics,
+    RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, RegVecBounds, RegVecs, RegVecsAndBounds,
+    Set, SortedRangeFragIxs, SpillCost, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx,
+    VirtualReg, Writable,
 };
 use crate::inst_stream::{edit_inst_stream, InstToInsert, InstToInsertAndPoint};
 use crate::sparse_set::{SparseSet, SparseSetU};
@@ -57,17 +57,17 @@ impl PerRealReg {
     fn add_RealRange(
         &mut self,
         to_add: &RealRange,
-        fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+        frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     ) {
         // Commit this register to `to_add`, irrevocably.  Don't add it to
         // `vlrixs_assigned` since we will never want to later evict the
         // assignment.
         self.committedFAST
-            .add(&to_add.sorted_frags, None, fenv, vlr_env);
+            .add(&to_add.sorted_frags, None, frag_env, vlr_env);
         if CROSSCHECK_CM {
             self.committed
-                .add(&to_add.sorted_frags, None, fenv, vlr_env);
+                .add(&to_add.sorted_frags, None, frag_env, vlr_env);
         }
     }
 
@@ -75,15 +75,23 @@ impl PerRealReg {
     fn add_VirtualRange(
         &mut self,
         to_add_vlrix: VirtualRangeIx,
-        fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+        frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     ) {
         let to_add_vlr = &vlr_env[to_add_vlrix];
-        self.committedFAST
-            .add(&to_add_vlr.sorted_frags, Some(to_add_vlrix), fenv, vlr_env);
+        self.committedFAST.add(
+            &to_add_vlr.sorted_frags,
+            Some(to_add_vlrix),
+            frag_env,
+            vlr_env,
+        );
         if CROSSCHECK_CM {
-            self.committed
-                .add(&to_add_vlr.sorted_frags, Some(to_add_vlrix), fenv, vlr_env);
+            self.committed.add(
+                &to_add_vlr.sorted_frags,
+                Some(to_add_vlrix),
+                frag_env,
+                vlr_env,
+            );
         }
         assert!(!self.vlrixs_assigned.contains(to_add_vlrix));
         self.vlrixs_assigned.insert(to_add_vlrix);
@@ -93,7 +101,7 @@ impl PerRealReg {
     fn del_VirtualRange(
         &mut self,
         to_del_vlrix: VirtualRangeIx,
-        fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+        frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
     ) {
         // Remove it from `vlrixs_assigned`
@@ -105,9 +113,10 @@ impl PerRealReg {
         // Remove it from `committed`
         let to_del_vlr = &vlr_env[to_del_vlrix];
         self.committedFAST
-            .del(&to_del_vlr.sorted_frags, fenv, vlr_env);
+            .del(&to_del_vlr.sorted_frags, frag_env, vlr_env);
         if CROSSCHECK_CM {
-            self.committed.del(&to_del_vlr.sorted_frags, fenv, vlr_env);
+            self.committed
+                .del(&to_del_vlr.sorted_frags, frag_env, vlr_env);
         }
     }
 }
@@ -521,11 +530,11 @@ impl PerRealReg {
     }
 
     #[inline(never)]
-    fn show1_with_envs(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) -> String {
-        "in_use:   ".to_string() + &self.committed.show_with_fenv(&fenv)
+    fn show1_with_envs(&self, frag_env: &TypedIxVec<RangeFragIx, RangeFrag>) -> String {
+        "in_use:   ".to_string() + &self.committed.show_with_frag_env(&frag_env)
     }
     #[inline(never)]
-    fn show2_with_envs(&self, _fenv: &TypedIxVec<RangeFragIx, RangeFrag>) -> String {
+    fn show2_with_envs(&self, _frag_env: &TypedIxVec<RangeFragIx, RangeFrag>) -> String {
         "assigned: ".to_string() + &format!("{:?}", &self.vlrixs_assigned)
     }
 }
@@ -578,19 +587,28 @@ fn print_RA_state(
 // Does `frag1` describe some range of instructions that is followed
 // immediately by `frag2` ?  Note that this assumes (and checks) that there
 // are no spill or reload ranges in play at this point; there should not be.
-fn frags_are_mergeable(frag1: &RangeFrag, frag2: &RangeFrag) -> bool {
+fn frags_are_mergeable(
+    frag1: &RangeFrag,
+    frag1metrics: &RangeFragMetrics,
+    frag2: &RangeFrag,
+    frag2metrics: &RangeFragMetrics,
+) -> bool {
     assert!(frag1.first.pt.is_use_or_def());
     assert!(frag1.last.pt.is_use_or_def());
     assert!(frag2.first.pt.is_use_or_def());
     assert!(frag2.last.pt.is_use_or_def());
 
-    if frag1.bix != frag2.bix
+    if frag1metrics.bix != frag2metrics.bix
         && frag1.last.iix.plus(1) == frag2.first.iix
         && frag1.last.pt == Point::Def
         && frag2.first.pt == Point::Use
     {
-        assert!(frag1.kind == RangeFragKind::LiveOut || frag1.kind == RangeFragKind::Thru);
-        assert!(frag2.kind == RangeFragKind::LiveIn || frag2.kind == RangeFragKind::Thru);
+        assert!(
+            frag1metrics.kind == RangeFragKind::LiveOut || frag1metrics.kind == RangeFragKind::Thru
+        );
+        assert!(
+            frag2metrics.kind == RangeFragKind::LiveIn || frag2metrics.kind == RangeFragKind::Thru
+        );
         return true;
     }
 
@@ -598,27 +616,33 @@ fn frags_are_mergeable(frag1: &RangeFrag, frag2: &RangeFrag) -> bool {
         && frag1.last.pt == Point::Use
         && frag2.first.pt == Point::Def
     {
-        assert!(frag1.kind == RangeFragKind::LiveIn || frag1.kind == RangeFragKind::Local);
-        assert!(frag2.kind == RangeFragKind::Local || frag2.kind == RangeFragKind::LiveOut);
+        assert!(
+            frag1metrics.kind == RangeFragKind::LiveIn || frag1metrics.kind == RangeFragKind::Local
+        );
+        assert!(
+            frag2metrics.kind == RangeFragKind::Local
+                || frag2metrics.kind == RangeFragKind::LiveOut
+        );
         return true;
     }
 
     false
 }
 
-const Z_INVALID_BLOCKIX: BlockIx = BlockIx::invalid_value();
-const Z_INVALID_COUNT: u16 = 0xFFFF;
-
 // Try and compress the fragments for each virtual range in `vlr_env`, adding
-// new ones to `frag_env` as we go.  Note this is a big kludge, in the sense
-// that the new `RangeFrags` have bogus `bix`, `kind` and `count` fields, and
-// we rely on the fact that the backtracking core algorithm won't look at them
-// after this point.  This should be fixed cleanly.
+// new ones to `frag_env` as we go.  See comment above the single call point
+// of this (below) for details of the changes it makes.
 #[inline(never)]
 fn do_vlr_frag_compression(
     vlr_env: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
     frag_env: &mut TypedIxVec<RangeFragIx, RangeFrag>,
+    frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
 ) {
+    // Note that this assertion won't hold after this function completes,
+    // because the whole point is to merge frags in the `vlr_env` entries,
+    // creating new, merged frags, which don't have any corresponding metrics.
+    assert!(frag_env.len() == frag_metrics_env.len());
+
     let mut fragsIN = 0;
     let mut fragsOUT = 0;
     for vlr in vlr_env.iter_mut() {
@@ -643,7 +667,12 @@ fn do_vlr_frag_compression(
                 break;
             }
             while e + 1 < num_frags
-                && frags_are_mergeable(&frag_env[frag_ixs[e]], &frag_env[frag_ixs[e + 1]])
+                && frags_are_mergeable(
+                    &frag_env[frag_ixs[e]],
+                    &frag_metrics_env[frag_ixs[e]],
+                    &frag_env[frag_ixs[e + 1]],
+                    &frag_metrics_env[frag_ixs[e + 1]],
+                )
             {
                 e += 1;
             }
@@ -653,15 +682,9 @@ fn do_vlr_frag_compression(
                 // Can't compress this one
                 frag_ixs[w] = frag_ixs[s];
             } else {
-                // Hack, kludge, hack, semantic muddyness, oh la la.  Let's hope
-                // nobody looks at these kludged-out fields (bix, kind, count) after
-                // this point.
                 let zFrag = RangeFrag {
-                    bix: Z_INVALID_BLOCKIX,
-                    kind: RangeFragKind::Multi,
                     first: frag_env[frag_ixs[s]].first,
                     last: frag_env[frag_ixs[e]].last,
-                    count: Z_INVALID_COUNT,
                 };
                 //print!("Compressed ");
                 //for i in s ..= e {
@@ -801,9 +824,10 @@ pub fn alloc_main<F: Function>(
     let rlr_env: TypedIxVec<RealRangeIx, RealRange> = analysis_info.1;
     let mut vlr_env: TypedIxVec<VirtualRangeIx, VirtualRange> = analysis_info.2;
     let mut frag_env: TypedIxVec<RangeFragIx, RangeFrag> = analysis_info.3;
-    let _liveouts: TypedIxVec<BlockIx, SparseSet<Reg>> = analysis_info.4;
-    let est_freqs: TypedIxVec<BlockIx, u32> = analysis_info.5;
-    let inst_to_block_map: InstIxToBlockIxMap = analysis_info.6;
+    let frag_metrics_env: TypedIxVec<RangeFragIx, RangeFragMetrics> = analysis_info.4;
+    let _liveouts: TypedIxVec<BlockIx, SparseSet<Reg>> = analysis_info.5;
+    let est_freqs: TypedIxVec<BlockIx, u32> = analysis_info.6;
+    let inst_to_block_map: InstIxToBlockIxMap = analysis_info.7;
 
     assert!(reg_vecs_and_bounds.is_sanitized());
 
@@ -861,8 +885,32 @@ pub fn alloc_main<F: Function>(
         per_real_reg[rregIndex].add_RealRange(&rlr, &frag_env, &vlr_env);
     }
 
-    // Do RangeFrag compression.
-    do_vlr_frag_compression(&mut vlr_env, &mut frag_env);
+    // Do RangeFrag compression.  This is an optimisation that speeds up the
+    // allocator (a lot) by reducing the overall cost and memory use of
+    // interference detection.  It does not change the resulting allocation.
+    // Up to this point, the following are true:
+    //
+    // * All the entries in `frag_env` exist within a single basic block.
+    //   That is, each one can be classified as one of `RangeFragKind::{Local,
+    //   LiveIn, LiveOut, Thru}`.
+    //
+    // * `frag_env` and `frag_metrics_env` have a 1:1 correspondence: that is,
+    //   the `i`th entry in `frag_metrics_env` contains the metrics for the `i`th
+    //   entry in `frag_env`.
+    //
+    // After this call, neither of those things are true.  Instead:
+    //
+    // * The entries in `frag_env` that existed before the call are unchanged.
+    //
+    // * `frag_env` will have been extended, by adding new merged `RangeFrag`s
+    //    that may well span multiple blocks, and hence cannot be described by
+    //    `RangeFragKind`.
+    //
+    // * `frag_metrics_env` is (obviously) unchanged.  Hence the new `frag_env`
+    //   entries have no corresponding metrics.
+    assert!(frag_env.len() == frag_metrics_env.len());
+    do_vlr_frag_compression(&mut vlr_env, &mut frag_env, &frag_metrics_env);
+    // Per the comment above, the same assertion doesn't hold after the call.
 
     let mut edit_list_move = Vec::<EditListItem>::new();
     let mut edit_list_other = Vec::<EditListItem>::new();
@@ -1370,22 +1418,14 @@ pub fn alloc_main<F: Function>(
         let spill_slot_to_use = vlr_slot_env[curr_vlrix].unwrap();
 
         for sri in sri_vec {
-            // For a spill for a MOD use, the new value will be referenced
-            // three times.  For DEF and USE uses, it'll only be ref'd twice.
-            // (I think we don't care about metrics for the new RangeFrags,
-            // though)
-            let new_vlr_count = if sri.kind == BridgeKind::RtoS { 3 } else { 2 };
             let (new_vlr_first_pt, new_vlr_last_pt) = match sri.kind {
                 BridgeKind::RtoU => (Point::Reload, Point::Use),
                 BridgeKind::RtoS => (Point::Reload, Point::Spill),
                 BridgeKind::DtoS => (Point::Def, Point::Spill),
             };
             let new_vlr_frag = RangeFrag {
-                bix: sri.bix,
-                kind: RangeFragKind::Local,
                 first: InstPoint::new(sri.iix, new_vlr_first_pt),
                 last: InstPoint::new(sri.iix, new_vlr_last_pt),
-                count: new_vlr_count,
             };
             let new_vlr_fix = RangeFragIx::new(frag_env.len() as u32);
             frag_env.push(new_vlr_frag);
