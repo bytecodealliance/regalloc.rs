@@ -46,8 +46,15 @@ fn main() {
                 .required(true)
                 .possible_values(&["bt", "lsra", "btc", "lsrac"])
                 .help("algorithm name"),
-        );
+        )
+        .arg(
+            clap::Arg::with_name("quiet")
+            .short("q")
+            .takes_value(false)
+            .help("whether to run in quiet mode (i.e. not print the function's body before and after regalloc)")
+    );
     let matches = app.get_matches();
+    let quiet = matches.is_present("quiet");
 
     let func_name = matches.value_of("test").unwrap();
     let mut func = match crate::test_cases::find_func(func_name) {
@@ -91,7 +98,9 @@ fn main() {
 
     let reg_universe = make_universe(num_regs_i32, num_regs_f32);
 
-    func.print("before allocation", &None);
+    if !quiet {
+        func.print("before allocation", &None);
+    }
 
     // Just so we can run it later.  Not needed for actual allocation.
     let original_func = func.clone();
@@ -110,7 +119,10 @@ fn main() {
     // interface to our specific test ISA.
     let mb_block_anns = result.block_annotations.clone();
     func.update_from_alloc(result);
-    func.print("after allocation", &mb_block_anns);
+
+    if !quiet {
+        func.print("after allocation", &mb_block_anns);
+    }
 
     let before_regalloc_result = run_func(
         &original_func,
