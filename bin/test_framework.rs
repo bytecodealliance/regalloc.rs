@@ -5,7 +5,7 @@ use arbitrary::Arbitrary;
 use regalloc::*;
 use std::collections::HashSet;
 
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 use crate::validator::{validate, Context as ValidatorContext, RegRef};
 
@@ -2178,9 +2178,9 @@ impl regalloc::Function for Func {
     }
 
     /// Get CFG successors: indexed by block, provide a list of successor blocks.
-    fn block_succs(&self, block: BlockIx) -> Vec<BlockIx> {
+    fn block_succs(&self, block: BlockIx) -> Cow<[BlockIx]> {
         let last_insn = self.blocks[block].start.plus(self.blocks[block].len - 1);
-        self.insns[last_insn].get_targets()
+        Cow::Owned(self.insns[last_insn].get_targets())
     }
 
     fn is_ret(&self, insn: InstIx) -> bool {
