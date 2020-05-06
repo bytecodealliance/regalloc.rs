@@ -226,7 +226,7 @@ pub(crate) fn run<F: Function>(
         // have at most one predecessor.
         let cur_has_one_succ = successors.len() == 1;
 
-        for succ in successors {
+        for &succ in successors.iter() {
             if !seen_successors.insert(succ) {
                 continue;
             }

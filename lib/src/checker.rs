@@ -348,7 +348,7 @@ impl Checker {
 
         for block in f.blocks() {
             bb_in.insert(block, Default::default());
-            bb_succs.insert(block, f.block_succs(block));
+            bb_succs.insert(block, f.block_succs(block).to_vec());
             bb_insts.insert(block, vec![]);
         }
 

@@ -30,7 +30,7 @@ mod union_find;
 
 use log::{info, log_enabled, Level};
 use std::default;
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 // Stuff that is defined by the library
 
@@ -197,7 +197,7 @@ pub trait Function {
     fn block_insns(&self, block: BlockIx) -> Range<InstIx>;
 
     /// Get CFG successors for a given block.
-    fn block_succs(&self, block: BlockIx) -> Vec<BlockIx>;
+    fn block_succs(&self, block: BlockIx) -> Cow<[BlockIx]>;
 
     /// Determine whether an instruction is a return instruction.
     fn is_ret(&self, insn: InstIx) -> bool;
