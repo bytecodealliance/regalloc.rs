@@ -435,7 +435,7 @@ pub fn get_sanitized_reg_uses_for_func<F: Function>(
 // convenience interface
 
 // ==== EXPORTED ====
-#[inline(never)]
+#[inline(always)]
 pub fn does_inst_use_def_or_mod_reg(
     rvb: &RegVecsAndBounds,
     iix: InstIx,
