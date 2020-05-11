@@ -1,0 +1,21 @@
+v0I = i32
+v1I = i32
+
+r0I = real i32 0
+r2I = real i32 2
+
+b0:
+    imm     v1I, 327679
+    imm     r2I, 42
+    imm     r0I, 42
+    copy    v0I, r2I
+    goto b2
+
+b2:
+    copy    r0I, r0I
+    imm     r0I, 959657776
+    cmp_eq  r0I, v1I, v1I
+    goto    b1
+
+b1:
+    finish  v1I

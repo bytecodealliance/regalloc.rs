@@ -84,7 +84,7 @@ pub struct AnalysisInfo {
     /// The fragment metrics table
     pub(crate) range_metrics: TypedIxVec<RangeFragIx, RangeFragMetrics>,
     /// Liveins per block
-    pub(crate) _liveins: TypedIxVec<BlockIx, SparseSet<Reg>>,
+    pub(crate) liveins: TypedIxVec<BlockIx, SparseSet<Reg>>,
     /// Liveouts per block
     pub(crate) liveouts: TypedIxVec<BlockIx, SparseSet<Reg>>,
     /// Estimated execution frequency per block
@@ -240,7 +240,7 @@ pub fn run_analysis<F: Function>(
         virtual_ranges: vlr_env,
         range_frags: frag_env,
         range_metrics: frag_metrics_env,
-        _liveins: livein_sets_per_block,
+        liveins: livein_sets_per_block,
         liveouts: liveout_sets_per_block,
         estimated_frequencies,
         inst_to_block_map,
