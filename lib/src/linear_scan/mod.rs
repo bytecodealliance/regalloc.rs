@@ -4,73 +4,102 @@
 //!   Optimized Interval Splitting in a Linear Scan Register Allocator,
 //!     by Wimmer et al., 2005
 
-// TODO brain dump:
-// - (perf) in try_allocate_reg, try to implement the fixed blocked heuristics, and see
-// if it improves perf.
-// - (perf) try to handle different register classes in different passes.
-// - (correctness) use sanitized reg uses in lieu of reg uses.
-
 use log::{debug, info, log_enabled, trace, Level};
-use rustc_hash::FxHashMap as HashMap;
-use smallvec::{Array, SmallVec};
 
 use std::default;
+use std::env;
 use std::fmt;
 
-use crate::analysis_data_flow::add_raw_reg_vecs_for_insn;
 use crate::analysis_main::{run_analysis, AnalysisInfo};
 use crate::data_structures::*;
-use crate::inst_stream::{edit_inst_stream, InstToInsertAndPoint};
-use crate::{Function, RegAllocError, RegAllocResult};
+use crate::inst_stream::{add_spills_reloads_and_moves, InstToInsertAndPoint};
+use crate::{
+    checker::CheckerContext, reg_maps::MentionRegUsageMapper, Function, RegAllocError,
+    RegAllocResult,
+};
 
 mod assign_registers;
 mod resolve_moves;
 
+#[derive(Default)]
+pub(crate) struct Statistics {
+    num_fixed: usize,
+    num_vregs: usize,
+    num_virtual_ranges: usize,
+
+    peak_active: usize,
+    peak_inactive: usize,
+
+    num_try_allocate_reg: usize,
+    num_try_allocate_reg_partial: usize,
+    num_try_allocate_reg_success: usize,
+}
+
+impl Drop for Statistics {
+    fn drop(&mut self) {
+        println!(
+            "stats: {} fixed / {} vreg / {} vranges, peak active {} / inactive {}, 1st try alloc: {}+{}/{}",
+            self.num_fixed,
+            self.num_vregs,
+            self.num_virtual_ranges,
+            self.peak_active,
+            self.peak_inactive,
+            self.num_try_allocate_reg_success,
+            self.num_try_allocate_reg_partial,
+            self.num_try_allocate_reg
+        );
+    }
+}
+
+/// Which strategy should we use when trying to find the best split position?
+/// TODO Consider loop depth to avoid splitting in the middle of a loop
+/// whenever possible.
+#[derive(Copy, Clone, Debug)]
+enum OptimalSplitStrategy {
+    From,
+    To,
+    NextFrom,
+    NextNextFrom,
+    PrevTo,
+    PrevPrevTo,
+    Mid,
+}
+
 #[derive(Clone)]
-pub struct LinearScanOptions;
+pub struct LinearScanOptions {
+    split_strategy: OptimalSplitStrategy,
+    stats: bool,
+}
 
 impl default::Default for LinearScanOptions {
     fn default() -> Self {
-        Self
+        // Useful for debugging.
+        let optimal_split_strategy = match env::var("SPLIT") {
+            Ok(s) => match s.as_str() {
+                "t" | "to" => OptimalSplitStrategy::To,
+                "n" => OptimalSplitStrategy::NextFrom,
+                "nn" => OptimalSplitStrategy::NextNextFrom,
+                "p" => OptimalSplitStrategy::PrevTo,
+                "pp" => OptimalSplitStrategy::PrevPrevTo,
+                "m" | "mid" => OptimalSplitStrategy::Mid,
+                _ => OptimalSplitStrategy::From,
+            },
+            Err(_) => OptimalSplitStrategy::From,
+        };
+
+        let stats = env::var("STATS").is_ok();
+
+        Self {
+            split_strategy: optimal_split_strategy,
+            stats,
+        }
     }
 }
 
 impl fmt::Debug for LinearScanOptions {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "linear scan")
-    }
-}
-
-// Helpers for SmallVec
-fn smallvec_append<A: Array>(dst: &mut SmallVec<A>, src: &mut SmallVec<A>)
-where
-    A::Item: Copy,
-{
-    for e in src.iter() {
-        dst.push(*e);
-    }
-    src.clear();
-}
-
-// A temporary "impedance matching" structure that is necessary because
-// VirtualRange currently contains RangeFrags whilst RealRange still contains
-// RangeFragIxs.  Hopefully this can be removed once RealRange is converted to
-// use RangeFrags, or some better representation.
-#[derive(Clone)]
-pub struct RealRangeUNBOXED {
-    pub rreg: RealReg,
-    pub sorted_frags: SortedRangeFrags,
-}
-impl RealRangeUNBOXED {
-    fn new(rlr: &RealRange, fragments: &Fragments) -> Self {
-        let mut frags = SortedRangeFrags::empty();
-        for fix in &rlr.sorted_frags.frag_ixs {
-            frags.frags.push(fragments[*fix]);
-        }
-        Self {
-            rreg: rlr.rreg,
-            sorted_frags: frags,
-        }
+        writeln!(fmt, "linear scan")?;
+        write!(fmt, "  split: {:?}", self.split_strategy)
     }
 }
 
@@ -78,7 +107,6 @@ impl RealRangeUNBOXED {
 type Fragments = TypedIxVec<RangeFragIx, RangeFrag>;
 type VirtualRanges = TypedIxVec<VirtualRangeIx, VirtualRange>;
 type RealRanges = TypedIxVec<RealRangeIx, RealRange>;
-type RealRangesUNBOXED = TypedIxVec<RealRangeIx, RealRangeUNBOXED>;
 type RegUses = RegVecsAndBounds;
 
 /// A unique identifier for an interval.
@@ -91,21 +119,26 @@ impl fmt::Debug for IntId {
     }
 }
 
-enum LiveIntervalKind {
-    Fixed(RealRangeIx),
-    Virtual(VirtualRangeIx),
+#[derive(Clone)]
+struct FixedInterval {
+    reg: RealReg,
+    frags: Vec<RangeFrag>,
 }
 
-impl fmt::Debug for LiveIntervalKind {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            LiveIntervalKind::Fixed(range) => write!(fmt, "fixed({:?})", range),
-            LiveIntervalKind::Virtual(range) => write!(fmt, "virtual({:?})", range),
+impl fmt::Display for FixedInterval {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "fixed {:?} [", self.reg)?;
+        for (i, frag) in self.frags.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "({:?}, {:?})", frag.first, frag.last)?;
         }
+        write!(f, "]")
     }
 }
 
-#[derive(Clone, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
 pub(crate) struct Mention(u8);
 
 impl fmt::Debug for Mention {
@@ -133,26 +166,37 @@ impl fmt::Debug for Mention {
 }
 
 impl Mention {
-    // Setters.
     fn new() -> Self {
         Self(0)
     }
-    fn add_def(&mut self) {
-        self.0 |= 1 << 2;
+
+    // Setters.
+    fn add_use(&mut self) {
+        self.0 |= 1 << 0;
     }
     fn add_mod(&mut self) {
         self.0 |= 1 << 1;
     }
-    fn add_use(&mut self) {
-        self.0 |= 1 << 0;
+    fn add_def(&mut self) {
+        self.0 |= 1 << 2;
+    }
+
+    fn remove_use(&mut self) {
+        self.0 &= !(1 << 0);
     }
 
     // Getters.
     fn is_use(&self) -> bool {
-        (self.0 & 0b1) != 0
+        (self.0 & 0b001) != 0
+    }
+    fn is_mod(&self) -> bool {
+        (self.0 & 0b010) != 0
+    }
+    fn is_def(&self) -> bool {
+        (self.0 & 0b100) != 0
     }
     fn is_use_or_mod(&self) -> bool {
-        (self.0 & 0b11) != 0
+        (self.0 & 0b011) != 0
     }
     fn is_mod_or_def(&self) -> bool {
         (self.0 & 0b110) != 0
@@ -173,12 +217,6 @@ impl Location {
         match self {
             Location::Reg(reg) => Some(*reg),
             _ => None,
-        }
-    }
-    fn unwrap_reg(&self) -> RealReg {
-        match self {
-            Location::Reg(reg) => *reg,
-            _ => panic!("unwrap_reg called on non-reg location"),
         }
     }
     fn spill(&self) -> Option<SpillSlot> {
@@ -205,298 +243,192 @@ impl fmt::Display for Location {
     }
 }
 
-struct LiveInterval {
-    /// A unique identifier in the live interval graph.
+#[derive(Clone)]
+pub(crate) struct VirtualInterval {
     id: IntId,
-    /// Is it fixed or virtual?
-    kind: LiveIntervalKind,
+    vix: VirtualRangeIx,
+    vreg: VirtualReg,
+
     /// Parent interval in the split tree.
     parent: Option<IntId>,
     child: Option<IntId>,
+
     /// Location assigned to this live interval.
     location: Location,
 
-    // Cached fields
-    reg_class: RegClass,
+    mentions: MentionMap,
     start: InstPoint,
     end: InstPoint,
-    last_frag: usize,
 }
 
-impl LiveInterval {
-    fn is_fixed(&self) -> bool {
-        match &self.kind {
-            LiveIntervalKind::Fixed(_) => true,
-            LiveIntervalKind::Virtual(_) => false,
+impl fmt::Display for VirtualInterval {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(fmt, "virtual {:?}", self.id)?;
+        if let Some(ref p) = self.parent {
+            write!(fmt, " (parent={:?})", p)?;
         }
+        write!(
+            fmt,
+            ": {:?} {} [{:?}; {:?}]",
+            self.vreg, self.location, self.start, self.end
+        )
     }
-    fn unwrap_virtual(&self) -> VirtualRangeIx {
-        if let LiveIntervalKind::Virtual(r) = &self.kind {
-            *r
-        } else {
-            unreachable!();
-        }
+}
+
+impl VirtualInterval {
+    fn virtual_range_ix(&self) -> VirtualRangeIx {
+        self.vix
+    }
+    fn mentions(&self) -> &MentionMap {
+        &self.mentions
+    }
+    fn covers(&self, pos: InstPoint) -> bool {
+        self.start <= pos && pos <= self.end
     }
 }
 
 /// A group of live intervals.
 pub(crate) struct Intervals {
-    real_ranges: RealRangesUNBOXED,
-    virtual_ranges: VirtualRanges,
-    data: Vec<LiveInterval>,
+    virtuals: Vec<VirtualInterval>,
+    fixeds: Vec<FixedInterval>,
 }
 
 impl Intervals {
-    fn new(real_ranges: RealRanges, virtual_ranges: VirtualRanges, fragments: &Fragments) -> Self {
-        let mut data =
-            Vec::with_capacity(real_ranges.len() as usize + virtual_ranges.len() as usize);
+    fn new(
+        reg_universe: &RealRegUniverse,
+        reg_uses: &RegUses,
+        real_ranges: &RealRanges,
+        virtual_ranges: VirtualRanges,
+        fragments: &Fragments,
+        stats: &mut Option<Statistics>,
+    ) -> Self {
+        let mut virtual_ints = Vec::with_capacity(virtual_ranges.len() as usize);
+        let mut fixed_ints = Vec::with_capacity(reg_universe.regs.len() as usize);
 
-        for rlr in 0..real_ranges.len() {
-            data.push(LiveIntervalKind::Fixed(RealRangeIx::new(rlr)));
+        // Create fixed intervals first.
+        for rreg in reg_universe.regs.iter() {
+            stats.as_mut().map(|stats| stats.num_fixed += 1);
+            fixed_ints.push(FixedInterval {
+                reg: rreg.0,
+                frags: Vec::new(),
+            });
         }
-        for vlr in 0..virtual_ranges.len() {
-            data.push(LiveIntervalKind::Virtual(VirtualRangeIx::new(vlr)));
-        }
 
-        let data = data
-            .into_iter()
-            .enumerate()
-            .map(|(index, kind)| {
-                let (location, start, end, reg_class) = match kind {
-                    LiveIntervalKind::Fixed(ix) => {
-                        let range = &real_ranges[ix];
-                        let start = fragments[range.sorted_frags.frag_ixs[0]].first;
-                        let end = fragments[*range.sorted_frags.frag_ixs.last().unwrap()].last;
-                        let reg_class = range.rreg.get_class();
-                        let location = Location::Reg(range.rreg);
-                        (location, start, end, reg_class)
-                    }
-                    LiveIntervalKind::Virtual(ix) => {
-                        let range = &virtual_ranges[ix];
-                        let start = range.sorted_frags.frags[0].first;
-                        let end = range.sorted_frags.frags.last().unwrap().last;
-                        let reg_class = range.vreg.get_class();
-                        let location = Location::None;
-                        (location, start, end, reg_class)
-                    }
-                };
-
-                LiveInterval {
-                    id: IntId(index),
-                    kind,
-                    parent: None,
-                    child: None,
-                    location,
-                    reg_class,
-                    start,
-                    end,
-                    last_frag: 0,
-                }
-            })
-            .collect();
-
-        let mut real_ranges_unboxed = RealRangesUNBOXED::new();
         for rlr in real_ranges.iter() {
-            let rlr_unboxed = RealRangeUNBOXED::new(rlr, fragments);
-            real_ranges_unboxed.push(rlr_unboxed);
+            let i = rlr.rreg.get_index();
+            fixed_ints[i]
+                .frags
+                .extend(rlr.sorted_frags.frag_ixs.iter().map(|fix| fragments[*fix]));
+            fixed_ints[i].frags.sort_unstable_by_key(|frag| frag.first);
+        }
+
+        // Create virtual intervals then.
+        let mut int_id = 0;
+
+        let mut regsets = RegSets::new(true);
+        for (vlr_ix, vlr) in virtual_ranges.iter().enumerate() {
+            let vreg = vlr.vreg;
+            let reg = vreg.to_reg();
+
+            stats.as_mut().map(|stats| {
+                stats.num_virtual_ranges += 1;
+                stats.num_vregs = usize::max(stats.num_vregs, vreg.get_index());
+            });
+
+            // Compute mentions.
+            // TODO this is probably quite expensive, and could be done earlier during analysis.
+            let mut mentions = MentionMap::new();
+
+            let vlr_frags = &vlr.sorted_frags.frags;
+            for &frag in vlr_frags {
+                for iix in frag
+                    .first
+                    .iix()
+                    .dotdot(InstIx::new(frag.last.iix().get() + 1))
+                {
+                    reg_uses.get_reg_sets_for_iix_reuse(iix, &mut regsets);
+
+                    debug_assert!(regsets.is_sanitized());
+                    if (iix != frag.first.iix() || frag.first.pt() == Point::Use)
+                        && regsets.uses.contains(reg)
+                    {
+                        if mentions.is_empty() || mentions.last().unwrap().0 != iix {
+                            mentions.push((iix, Mention::new()));
+                        }
+                        mentions.last_mut().unwrap().1.add_use();
+                    }
+                    if regsets.mods.contains(reg) {
+                        if mentions.is_empty() || mentions.last().unwrap().0 != iix {
+                            mentions.push((iix, Mention::new()));
+                        }
+                        mentions.last_mut().unwrap().1.add_mod();
+                    }
+                    if iix == frag.last.iix() && frag.last.pt() == Point::Use {
+                        continue;
+                    }
+                    if regsets.defs.contains(reg) {
+                        if mentions.is_empty() || mentions.last().unwrap().0 != iix {
+                            mentions.push((iix, Mention::new()));
+                        }
+                        mentions.last_mut().unwrap().1.add_def();
+                    }
+                }
+            }
+
+            let start = vlr_frags[0].first;
+            let end = vlr_frags.last().unwrap().last;
+
+            virtual_ints.push(VirtualInterval {
+                id: IntId(int_id),
+                vix: VirtualRangeIx::new(vlr_ix as u32),
+                vreg,
+                mentions,
+                start,
+                end,
+                parent: None,
+                child: None,
+                location: Location::None,
+            });
+            int_id += 1;
         }
 
         Self {
-            real_ranges: real_ranges_unboxed,
-            virtual_ranges,
-            data,
+            virtuals: virtual_ints,
+            fixeds: fixed_ints,
         }
     }
 
-    fn get(&self, int_id: IntId) -> &LiveInterval {
-        &self.data[int_id.0]
+    fn get(&self, int_id: IntId) -> &VirtualInterval {
+        &self.virtuals[int_id.0]
     }
-    fn get_mut(&mut self, int_id: IntId) -> &mut LiveInterval {
-        &mut self.data[int_id.0]
+    fn get_mut(&mut self, int_id: IntId) -> &mut VirtualInterval {
+        &mut self.virtuals[int_id.0]
     }
-
-    fn fragments(&self, int_id: IntId) -> &SmallVec<[RangeFrag; 4]> {
-        match &self.data[int_id.0].kind {
-            LiveIntervalKind::Fixed(r) => &self.real_ranges[*r].sorted_frags.frags,
-            LiveIntervalKind::Virtual(r) => &self.virtual_ranges[*r].sorted_frags.frags,
-        }
-    }
-    fn fragments_mut(&mut self, int_id: IntId) -> &mut SortedRangeFrags {
-        match &mut self.data[int_id.0].kind {
-            LiveIntervalKind::Fixed(r) => &mut self.real_ranges[*r].sorted_frags,
-            LiveIntervalKind::Virtual(r) => &mut self.virtual_ranges[*r].sorted_frags,
-        }
-    }
-
-    fn vreg(&self, int_id: IntId) -> VirtualReg {
-        match &self.data[int_id.0].kind {
-            LiveIntervalKind::Fixed(_) => panic!("asking for vreg of fixed interval"),
-            LiveIntervalKind::Virtual(r) => self.virtual_ranges[*r].vreg,
-        }
-    }
-
-    fn reg(&self, int_id: IntId) -> Reg {
-        match &self.data[int_id.0].kind {
-            LiveIntervalKind::Fixed(r) => self.real_ranges[*r].rreg.to_reg(),
-            LiveIntervalKind::Virtual(r) => self.virtual_ranges[*r].vreg.to_reg(),
-        }
-    }
-
-    #[inline(never)]
-    fn covers(&self, int_id: IntId, pos: InstPoint) -> bool {
-        // Fragments are sorted by start.
-        let frags = self.fragments(int_id);
-
-        // The binary search is useful only after some threshold number of elements;
-        // This value has been determined after benchmarking a large program.
-        if frags.len() <= 4 {
-            for &frag in frags {
-                if frag.first <= pos && pos <= frag.last {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        match frags.binary_search_by_key(&pos, |&frag| frag.first) {
-            // Either we find a precise match...
-            Ok(_) => true,
-            // ... or we're just after an interval that could contain it.
-            Err(index) => {
-                // There's at least one fragment, by construction, so no need to check
-                // against fragments.len().
-                index > 0 && pos <= frags[index - 1].last
-            }
-        }
-    }
-
-    #[inline(never)]
-    fn intersects_with(&self, left_id: IntId, right_id: IntId) -> Option<InstPoint> {
-        let left = self.get(left_id);
-        let right = self.get(right_id);
-
-        if left.start == right.start {
-            return Some(left.start);
-        }
-
-        let left_frags = &self.fragments(left_id);
-        let right_frags = &self.fragments(right_id);
-
-        let mut left_i = left.last_frag;
-        let mut right_i = right.last_frag;
-        let mut left_max_i = left_frags.len() - 1;
-        let mut right_max_i = right_frags.len() - 1;
-
-        if left.end < right.end {
-            right_max_i = match right_frags.binary_search_by_key(&left.end, |&frag| frag.first) {
-                Ok(index) => index,
-                Err(index) => {
-                    if index == 0 {
-                        index
-                    } else {
-                        index - 1
-                    }
-                }
-            };
-        } else {
-            left_max_i = match left_frags.binary_search_by_key(&right.end, |&frag| frag.first) {
-                Ok(index) => index,
-                Err(index) => {
-                    if index == 0 {
-                        index
-                    } else {
-                        index - 1
-                    }
-                }
-            };
-        }
-
-        let mut left_frag = &left_frags[left_i];
-        let mut right_frag = &right_frags[right_i];
-        loop {
-            if left_frag.first == right_frag.first {
-                return Some(left_frag.first);
-            }
-            if left_frag.last < right_frag.first {
-                // left_frag < right_frag, go to the range following left_frag.
-                left_i += 1;
-                if left_i > left_max_i {
-                    break;
-                }
-                left_frag = &left_frags[left_i];
-            } else if right_frag.last < left_frag.first {
-                // left_frag > right_frag, go to the range following right_frag.
-                right_i += 1;
-                if right_i > right_max_i {
-                    break;
-                }
-                right_frag = &right_frags[right_i];
-            } else {
-                // They intersect!
-                return Some(if left_frag.first < right_frag.first {
-                    right_frag.first
-                } else {
-                    left_frag.first
-                });
-            }
-        }
-
-        None
-    }
-
-    fn num_intervals(&self) -> usize {
-        self.data.len()
-    }
-
-    fn display(&self, int_id: IntId) -> String {
-        let int = &self.data[int_id.0];
-        let vreg = if int.is_fixed() {
-            "fixed".to_string()
-        } else {
-            format!("{:?}", self.vreg(int_id))
-        };
-        let frag_ixs = &self.fragments(int_id);
-        let fragments = frag_ixs
-            .iter()
-            .map(|&frag| (frag, frag.first, frag.last))
-            .collect::<Vec<_>>();
-        format!(
-            "{:?}{}: {} {} {:?}",
-            int.id,
-            if let Some(ref p) = int.parent {
-                format!(" (parent={:?}) ", p)
-            } else {
-                "".to_string()
-            },
-            vreg,
-            int.location,
-            fragments
-        )
+    fn num_virtual_intervals(&self) -> usize {
+        self.virtuals.len()
     }
 
     // Mutators.
     fn set_reg(&mut self, int_id: IntId, reg: RealReg) {
         let int = self.get_mut(int_id);
         debug_assert!(int.location.is_none());
-        debug_assert!(!int.is_fixed());
         int.location = Location::Reg(reg);
     }
     fn set_spill(&mut self, int_id: IntId, slot: SpillSlot) {
         let int = self.get_mut(int_id);
         debug_assert!(int.location.spill().is_none());
-        debug_assert!(!int.is_fixed());
         int.location = Location::Stack(slot);
     }
-    fn push_interval(&mut self, int: LiveInterval) {
-        debug_assert!(int.id.0 == self.data.len());
-        self.data.push(int);
+    fn push_interval(&mut self, int: VirtualInterval) {
+        debug_assert!(int.id.0 == self.virtuals.len());
+        self.virtuals.push(int);
     }
     fn set_child(&mut self, int_id: IntId, child_id: IntId) {
-        if let Some(prev_child) = self.data[int_id.0].child.clone() {
-            self.data[child_id.0].child = Some(prev_child);
-            self.data[prev_child.0].parent = Some(child_id);
+        if let Some(prev_child) = self.virtuals[int_id.0].child.clone() {
+            self.virtuals[child_id.0].child = Some(prev_child);
+            self.virtuals[prev_child.0].parent = Some(child_id);
         }
-        self.data[int_id.0].child = Some(child_id);
+        self.virtuals[int_id.0].child = Some(child_id);
     }
 }
 
@@ -505,20 +437,13 @@ impl Intervals {
 ///
 /// Extends to the left, that is, "modified" means "used".
 #[inline(never)]
-fn next_use(
-    mentions: &HashMap<Reg, MentionMap>,
-    intervals: &Intervals,
-    id: IntId,
-    pos: InstPoint,
-    _reg_uses: &RegUses,
-) -> Option<InstPoint> {
+fn next_use(interval: &VirtualInterval, pos: InstPoint, _reg_uses: &RegUses) -> Option<InstPoint> {
     if log_enabled!(Level::Trace) {
-        trace!("find next use of {} after {:?}", intervals.display(id), pos);
+        trace!("find next use of {} after {:?}", interval, pos);
     }
 
-    let mentions = &mentions[&intervals.reg(id)];
-
-    let target = InstPoint::max(pos, intervals.get(id).start);
+    let mentions = interval.mentions();
+    let target = InstPoint::max(pos, interval.start);
 
     let ret = match mentions.binary_search_by_key(&target.iix(), |mention| mention.0) {
         Ok(index) => {
@@ -563,7 +488,7 @@ fn next_use(
     // theory.
     let ret = match ret {
         Some(pos) => {
-            if pos <= intervals.get(id).end {
+            if pos <= interval.end {
                 Some(pos)
             } else {
                 None
@@ -572,99 +497,20 @@ fn next_use(
         None => None,
     };
 
-    #[cfg(debug_assertions)]
-    debug_assert_eq!(ref_next_use(intervals, id, pos, _reg_uses), ret);
-
     ret
-}
-
-#[cfg(debug_assertions)]
-fn ref_next_use(
-    intervals: &Intervals,
-    id: IntId,
-    pos: InstPoint,
-    reg_uses: &RegUses,
-) -> Option<InstPoint> {
-    let int = intervals.get(id);
-    if int.end < pos {
-        return None;
-    }
-
-    let reg = if int.is_fixed() {
-        int.location.reg().unwrap().to_reg()
-    } else {
-        intervals.vreg(id).to_reg()
-    };
-
-    for &frag in intervals.fragments(id) {
-        if frag.last < pos {
-            continue;
-        }
-        for inst_id in frag.first.iix().dotdot(frag.last.iix().plus_n(1)) {
-            if inst_id < pos.iix() {
-                continue;
-            }
-
-            let regsets = &reg_uses.get_reg_sets_for_iix(inst_id);
-            debug_assert!(regsets.is_sanitized());
-
-            let at_use = InstPoint::new_use(inst_id);
-            if pos <= at_use && frag.contains(&at_use) {
-                if regsets.uses.contains(reg) || regsets.mods.contains(reg) {
-                    #[cfg(debug_assertions)]
-                    debug_assert!(intervals.covers(id, at_use));
-                    trace!(
-                        "ref next_use: found next use of {:?} after {:?} at {:?}",
-                        id,
-                        pos,
-                        at_use
-                    );
-                    return Some(at_use);
-                }
-            }
-
-            let at_def = InstPoint::new_def(inst_id);
-            if pos <= at_def && frag.contains(&at_def) {
-                if regsets.defs.contains(reg) || regsets.mods.contains(reg) {
-                    #[cfg(debug_assertions)]
-                    debug_assert!(intervals.covers(id, at_def));
-                    trace!(
-                        "ref next_use: found next use of {:?} after {:?} at {:?}",
-                        id,
-                        pos,
-                        at_def
-                    );
-                    return Some(at_def);
-                }
-            }
-        }
-    }
-
-    trace!("ref next_use: no next use");
-    None
 }
 
 /// Finds the last use of a vreg before a given target, including it in possible
 /// return values.
 /// Extends to the right, that is, modified means "def".
-fn last_use(
-    mention_map: &HashMap<Reg, MentionMap>,
-    intervals: &Intervals,
-    id: IntId,
-    pos: InstPoint,
-    _reg_uses: &RegUses,
-) -> Option<InstPoint> {
+fn last_use(interval: &VirtualInterval, pos: InstPoint, _reg_uses: &RegUses) -> Option<InstPoint> {
     if log_enabled!(Level::Trace) {
-        trace!(
-            "searching last use of {} before {:?}",
-            intervals.display(id),
-            pos,
-        );
+        trace!("searching last use of {} before {:?}", interval, pos,);
     }
 
-    let mentions = &mention_map[&intervals.reg(id)];
+    let mentions = interval.mentions();
 
-    let target = InstPoint::min(pos, intervals.get(id).end);
+    let target = InstPoint::min(pos, interval.end);
 
     let ret = match mentions.binary_search_by_key(&target.iix(), |mention| mention.0) {
         Ok(index) => {
@@ -709,7 +555,7 @@ fn last_use(
     // theory.
     let ret = match ret {
         Some(pos) => {
-            if pos >= intervals.get(id).start {
+            if pos >= interval.start {
                 Some(pos)
             } else {
                 None
@@ -719,282 +565,115 @@ fn last_use(
     };
 
     trace!("mentions: {:?}", mentions);
-    trace!("new algo: {:?}", ret);
-
-    #[cfg(debug_assertions)]
-    debug_assert_eq!(ref_last_use(intervals, id, pos, _reg_uses), ret);
+    trace!("found: {:?}", ret);
 
     ret
 }
 
-#[allow(dead_code)]
-#[inline(never)]
-fn ref_last_use(
-    intervals: &Intervals,
-    id: IntId,
-    pos: InstPoint,
-    reg_uses: &RegUses,
-) -> Option<InstPoint> {
-    let int = intervals.get(id);
-    debug_assert!(int.start <= pos);
-
-    let reg = intervals.vreg(id).to_reg();
-
-    for &frag in intervals.fragments(id).iter().rev() {
-        if frag.first > pos {
-            continue;
-        }
-
-        let mut inst = frag.last.iix();
-        while inst >= frag.first.iix() {
-            let regsets = &reg_uses.get_reg_sets_for_iix(inst);
-            debug_assert!(regsets.is_sanitized());
-
-            let at_def = InstPoint::new_def(inst);
-            if at_def <= pos && at_def <= frag.last {
-                if regsets.defs.contains(reg) || regsets.mods.contains(reg) {
-                    #[cfg(debug_assertions)]
-                    debug_assert!(intervals.covers(id, at_def), "last use must be in interval");
-                    trace!(
-                        "last use of {:?} before {:?} found at {:?}",
-                        id,
-                        pos,
-                        at_def,
-                    );
-                    return Some(at_def);
-                }
+/// Checks that each register class has its own scratch register in addition to one available
+/// register, and creates a mapping of register class -> scratch register.
+fn compute_scratches(
+    reg_universe: &RealRegUniverse,
+) -> Result<Vec<Option<RealReg>>, RegAllocError> {
+    let mut scratches_by_rc = vec![None; NUM_REG_CLASSES];
+    for i in 0..NUM_REG_CLASSES {
+        if let Some(info) = &reg_universe.allocable_by_class[i] {
+            if info.first == info.last {
+                return Err(RegAllocError::Other(
+                    "at least 2 registers required for linear scan".into(),
+                ));
             }
-
-            let at_use = InstPoint::new_use(inst);
-            if at_use <= pos && at_use <= frag.last {
-                if regsets.uses.contains(reg) || regsets.mods.contains(reg) {
-                    #[cfg(debug_assertions)]
-                    debug_assert!(intervals.covers(id, at_use), "last use must be in interval");
-                    trace!(
-                        "last use of {:?} before {:?} found at {:?}",
-                        id,
-                        pos,
-                        at_use,
-                    );
-                    return Some(at_use);
-                }
-            }
-
-            if inst.get() == 0 {
-                break;
-            }
-            inst = inst.minus(1);
+            let scratch = if let Some(suggested_reg) = info.suggested_scratch {
+                reg_universe.regs[suggested_reg].0
+            } else {
+                return Err(RegAllocError::MissingSuggestedScratchReg(
+                    RegClass::rc_from_u32(i as u32),
+                ));
+            };
+            scratches_by_rc[i] = Some(scratch);
         }
     }
-
-    None
+    Ok(scratches_by_rc)
 }
 
-fn try_compress_ranges(rlrs: &mut RealRanges, vlrs: &mut VirtualRanges, fragments: &mut Fragments) {
-    // This is the same as `compress` just below, but acting on a SmallVec of
-    // RangeFrag, not of RangeFragIx.
-    fn compress_no_indirect(frags: &mut SmallVec<[RangeFrag; 4]>) {
-        if frags.len() == 1 {
-            return;
-        }
-
-        let last_frag_end = frags.last().unwrap().last;
-        let first_frag = &mut frags[0];
-
-        let new_range = RangeFrag::new(first_frag.first, last_frag_end);
-
-        frags.clear();
-        frags.push(new_range);
-    }
-    #[allow(dead_code)]
-    fn compress(frag_ixs: &mut SmallVec<[RangeFragIx; 4]>, fragments: &mut Fragments) {
-        if frag_ixs.len() == 1 {
-            return;
-        }
-
-        let last_frag_end = fragments[*frag_ixs.last().unwrap()].last;
-        let first_frag = &mut fragments[frag_ixs[0]];
-
-        let new_range = RangeFrag::new(first_frag.first, last_frag_end);
-
-        let new_range_ix = RangeFragIx::new(fragments.len());
-        fragments.push(new_range);
-        frag_ixs.clear();
-        frag_ixs.push(new_range_ix);
-
-        //let old_size = frag_ixs.len();
-        //let mut i = frag_ixs.len() - 1;
-        //while i > 0 {
-        //let cur_frag = &fragments[frag_ixs[i]];
-        //let prev_frag = &fragments[frag_ixs[i - 1]];
-        //if prev_frag.last.iix().get() + 1 == cur_frag.first.iix().get()
-        //&& prev_frag.last.pt() == Point::Def
-        //&& cur_frag.first.pt() == Point::Use
-        //{
-        //let (new_range, new_range_metrics) = RangeFrag::new_multi_block(
-        //func,
-        //prev_frag.bix,
-        //prev_frag.first,
-        //cur_frag.last,
-        //prev_frag.count + cur_frag.count,
-        //);
-
-        //let new_range_ix = RangeFragIx::new(fragments.len());
-        //fragments.push(new_range);
-        //frag_ixs[i - 1] = new_range_ix;
-
-        //let _ = frag_ixs.remove(i);
-        //}
-        //i -= 1;
-        //}
-
-        //let new_size = frag_ixs.len();
-        //info!(
-        //"compress: {} -> {}; {}",
-        //old_size,
-        //new_size,
-        //100. * (old_size as f64 - new_size as f64) / (old_size as f64)
-        //);
-    }
-
-    let mut by_vreg: HashMap<VirtualReg, VirtualRange> = HashMap::default();
-
-    for vlr in vlrs.iter_mut() {
-        if let Some(vrange) = by_vreg.get_mut(&vlr.vreg) {
-            let vlr_start = vlr.sorted_frags.frags[0].first;
-            let vlr_last = vlr.sorted_frags.frags.last().unwrap().last;
-            if vlr_start < vrange.sorted_frags.frags[0].first {
-                vrange.sorted_frags.frags[0].first = vlr_start;
-            }
-            let n = vrange.sorted_frags.frags.len();
-            assert!(n > 0);
-            if vlr_last > vrange.sorted_frags.frags[n - 1].last {
-                vrange.sorted_frags.frags[n - 1].last = vlr_last;
-            }
-        } else {
-            // First time we see this vreg, compress and insert it.
-            compress_no_indirect(&mut vlr.sorted_frags.frags);
-            // TODO try to avoid the clone?
-            by_vreg.insert(vlr.vreg, vlr.clone());
-        }
-    }
-
-    vlrs.clear();
-    for (_, vlr) in by_vreg {
-        vlrs.push(vlr);
-    }
-
-    let mut reg_map: HashMap<RealReg, SmallVec<[RangeFragIx; 4]>> = HashMap::default();
-    for rlr in rlrs.iter_mut() {
-        let reg = rlr.rreg;
-        if let Some(ref mut vec) = reg_map.get_mut(&reg) {
-            smallvec_append(vec, &mut rlr.sorted_frags.frag_ixs);
-        } else {
-            // TODO clone can be avoided with an into_iter methods.
-            reg_map.insert(reg, rlr.sorted_frags.frag_ixs.clone());
-        }
-    }
-
-    rlrs.clear();
-    for (rreg, mut sorted_frags) in reg_map {
-        sorted_frags.sort_by_key(|frag_ix| fragments[*frag_ix].first);
-
-        //compress(func, &mut sorted_frags, fragments);
-
-        rlrs.push(RealRange {
-            rreg,
-            sorted_frags: SortedRangeFragIxs {
-                frag_ixs: sorted_frags,
-            },
-        });
-    }
-}
-
-// Allocator top level.  `func` is modified so that, when this function
-// returns, it will contain no VirtualReg uses.  Allocation can fail if there
-// are insufficient registers to even generate spill/reload code, or if the
-// function appears to have any undefined VirtualReg/RealReg uses.
+/// Allocator top level.
+///
+/// `func` is modified so that, when this function returns, it will contain no VirtualReg uses.
+///
+/// Allocation can fail if there are insufficient registers to even generate spill/reload code, or
+/// if the function appears to have any undefined VirtualReg/RealReg uses.
 #[inline(never)]
 pub(crate) fn run<F: Function>(
     func: &mut F,
     reg_universe: &RealRegUniverse,
     use_checker: bool,
-    _opts: &LinearScanOptions,
+    opts: &LinearScanOptions,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     let AnalysisInfo {
         reg_vecs_and_bounds: reg_uses,
-        real_ranges: mut rlrs,
-        virtual_ranges: mut vlrs,
-        range_frags: mut fragments,
+        real_ranges: rlrs,
+        virtual_ranges: vlrs,
+        range_frags: fragments,
+        liveins,
         liveouts,
         ..
     } = run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
 
-    let scratches_by_rc = {
-        let mut scratches_by_rc = vec![None; NUM_REG_CLASSES];
-        for i in 0..NUM_REG_CLASSES {
-            if let Some(info) = &reg_universe.allocable_by_class[i] {
-                if info.first == info.last {
-                    return Err(RegAllocError::Other(
-                        "at least 2 registers required for linear scan".into(),
-                    ));
-                }
-                let scratch = if let Some(suggested_reg) = info.suggested_scratch {
-                    reg_universe.regs[suggested_reg].0
-                } else {
-                    return Err(RegAllocError::MissingSuggestedScratchReg(
-                        RegClass::rc_from_u32(i as u32),
-                    ));
-                };
-                scratches_by_rc[i] = Some(scratch);
-            }
-        }
-        scratches_by_rc
+    let scratches_by_rc = compute_scratches(reg_universe)?;
+
+    let mut stats = if opts.stats {
+        Some(Statistics::default())
+    } else {
+        None
     };
 
-    // The VirtualRanges we have here are compressed conservatively (only
-    // across block boundaries, but not inside blocks).  The RealRanges are
-    // not compressed at all.
-    try_compress_ranges(&mut rlrs, &mut vlrs, &mut fragments);
-
-    let intervals = Intervals::new(rlrs, vlrs, &fragments);
+    let intervals = Intervals::new(
+        &reg_universe,
+        &reg_uses,
+        &rlrs,
+        vlrs,
+        &fragments,
+        &mut stats,
+    );
 
     if log_enabled!(Level::Trace) {
+        trace!("fixed intervals:");
+        for int in &intervals.fixeds {
+            trace!("{}", int);
+        }
+        trace!("");
         trace!("unassigned intervals:");
-        for int in &intervals.data {
-            trace!("{}", intervals.display(int.id));
+        for int in &intervals.virtuals {
+            trace!("{}", int);
+            for mention in &int.mentions {
+                trace!("  mention @ {:?}: {:?}", mention.0, mention.1);
+            }
         }
         trace!("");
     }
 
-    let (mention_map, intervals, mut num_spill_slots) =
-        assign_registers::run(func, &reg_uses, reg_universe, &scratches_by_rc, intervals)?;
+    let (intervals, mut num_spill_slots) = assign_registers::run(
+        opts,
+        func,
+        &reg_uses,
+        reg_universe,
+        &scratches_by_rc,
+        intervals,
+        stats,
+    )?;
 
-    // Filter fixed intervals, they're already in the right place.
-    let mut virtual_intervals = intervals
-        .data
-        .iter()
-        .filter_map(|int| {
-            if let LiveIntervalKind::Fixed(_) = &int.kind {
-                None
-            } else {
-                Some(int.id)
-            }
-        })
-        .collect::<Vec<_>>();
+    // TODO avoid this clone.
+    let mut sorted_virtuals = intervals.virtuals.clone();
+    let virtuals = intervals.virtuals;
 
     // Sort by vreg and starting point, so we can plug all the different intervals
     // together.
-    virtual_intervals.sort_by_key(|&int_id| {
-        let int = intervals.get(int_id);
-        let vreg = &intervals.virtual_ranges[int.unwrap_virtual()].vreg;
-        (vreg, int.start)
-    });
+    sorted_virtuals.sort_unstable_by_key(|int| (int.vreg, int.start));
 
     if log_enabled!(Level::Debug) {
         debug!("allocation results (by vreg)");
-        for &int_id in &virtual_intervals {
-            debug!("{}", intervals.display(int_id));
+        for int in sorted_virtuals.iter() {
+            debug!("{}", int);
         }
         debug!("");
     }
@@ -1002,9 +681,9 @@ pub(crate) fn run<F: Function>(
     let memory_moves = resolve_moves::run(
         func,
         &reg_uses,
-        &mention_map,
-        &intervals,
-        &virtual_intervals,
+        &virtuals,
+        &sorted_virtuals,
+        &liveins,
         &liveouts,
         &mut num_spill_slots,
         &scratches_by_rc,
@@ -1012,8 +691,7 @@ pub(crate) fn run<F: Function>(
 
     apply_registers(
         func,
-        &intervals,
-        virtual_intervals,
+        &sorted_virtuals,
         memory_moves,
         reg_universe,
         num_spill_slots,
@@ -1021,12 +699,138 @@ pub(crate) fn run<F: Function>(
     )
 }
 
+#[inline(never)]
+fn set_registers<F: Function>(
+    func: &mut F,
+    virtual_intervals: &Vec<VirtualInterval>,
+    reg_universe: &RealRegUniverse,
+    use_checker: bool,
+    memory_moves: &Vec<InstToInsertAndPoint>,
+) -> Set<RealReg> {
+    info!("set_registers");
+
+    // Set up checker state, if indicated by our configuration.
+    let mut checker: Option<CheckerContext> = None;
+    let mut insn_blocks: Vec<BlockIx> = vec![];
+    if use_checker {
+        checker = Some(CheckerContext::new(func, reg_universe, memory_moves));
+        insn_blocks.resize(func.insns().len(), BlockIx::new(0));
+        for block_ix in func.blocks() {
+            for insn_ix in func.block_insns(block_ix) {
+                insn_blocks[insn_ix.get() as usize] = block_ix;
+            }
+        }
+    }
+
+    let mut clobbered_registers = Set::empty();
+
+    // Collect all the regs per instruction and mention set.
+    let capacity = virtual_intervals
+        .iter()
+        .map(|int| int.mentions.len())
+        .fold(0, |a, b| a + b);
+
+    if capacity == 0 {
+        // No virtual registers have been allocated, exit early.
+        return clobbered_registers;
+    }
+
+    let mut mention_map = Vec::with_capacity(capacity);
+
+    for int in virtual_intervals {
+        let rreg = match int.location.reg() {
+            Some(rreg) => rreg,
+            _ => continue,
+        };
+        trace!("int: {}", int);
+        trace!("  {:?}", int.mentions);
+        for &mention in &int.mentions {
+            mention_map.push((mention.0, mention.1, int.vreg, rreg));
+        }
+    }
+
+    // Sort by instruction index.
+    mention_map.sort_unstable_by_key(|quad| quad.0);
+
+    // Iterate over all the mentions.
+    let mut mapper = MentionRegUsageMapper::new();
+
+    let flush_inst = |func: &mut F,
+                      mapper: &mut MentionRegUsageMapper,
+                      iix: InstIx,
+                      checker: Option<&mut CheckerContext>| {
+        trace!("map_regs for {:?}", iix);
+        let mut inst = func.get_insn_mut(iix);
+        F::map_regs(&mut inst, mapper);
+
+        if let Some(checker) = checker {
+            let block_ix = insn_blocks[iix.get() as usize];
+            checker
+                .handle_insn(reg_universe, func, block_ix, iix, mapper)
+                .unwrap();
+        }
+
+        mapper.clear();
+    };
+
+    let mut prev_iix = mention_map[0].0;
+    for (iix, mention_set, vreg, rreg) in mention_map {
+        if prev_iix != iix {
+            // Flush previous instruction.
+            flush_inst(func, &mut mapper, prev_iix, checker.as_mut());
+            prev_iix = iix;
+        }
+
+        trace!(
+            "{:?}: {:?} is in {:?} at {:?}",
+            iix,
+            vreg,
+            rreg,
+            mention_set
+        );
+
+        // Fill in new information at the given index.
+        if mention_set.is_use() {
+            if let Some(prev_rreg) = mapper.lookup_use(vreg) {
+                debug_assert_eq!(prev_rreg, rreg, "different use allocs for {:?}", vreg);
+            }
+            mapper.set_use(vreg, rreg);
+        }
+
+        if mention_set.is_mod() {
+            if let Some(prev_rreg) = mapper.lookup_use(vreg) {
+                debug_assert_eq!(prev_rreg, rreg, "different use allocs for {:?}", vreg);
+            }
+            if let Some(prev_rreg) = mapper.lookup_def(vreg) {
+                debug_assert_eq!(prev_rreg, rreg, "different def allocs for {:?}", vreg);
+            }
+
+            mapper.set_use(vreg, rreg);
+            mapper.set_def(vreg, rreg);
+            clobbered_registers.insert(rreg);
+        }
+
+        if mention_set.is_def() {
+            if let Some(prev_rreg) = mapper.lookup_def(vreg) {
+                debug_assert_eq!(prev_rreg, rreg, "different def allocs for {:?}", vreg);
+            }
+
+            mapper.set_def(vreg, rreg);
+            clobbered_registers.insert(rreg);
+        }
+    }
+
+    // Flush last instruction.
+    flush_inst(func, &mut mapper, prev_iix, checker.as_mut());
+
+    clobbered_registers
+}
+
 /// Fills in the register assignments into instructions.
 #[inline(never)]
 fn apply_registers<F: Function>(
     func: &mut F,
-    intervals: &Intervals,
-    virtual_intervals: Vec<IntId>,
+    virtual_intervals: &Vec<VirtualInterval>,
     memory_moves: Vec<InstToInsertAndPoint>,
     reg_universe: &RealRegUniverse,
     num_spill_slots: u32,
@@ -1034,55 +838,18 @@ fn apply_registers<F: Function>(
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     info!("apply_registers");
 
-    let mut frag_map = Vec::<(RangeFrag, VirtualReg, RealReg)>::new();
-    for int_id in virtual_intervals {
-        if let Some(rreg) = intervals.get(int_id).location.reg() {
-            let vreg = intervals.vreg(int_id);
-            for &range in intervals.fragments(int_id) {
-                trace!("in {:?}, {:?} lives in {:?}", range, vreg, rreg);
-                frag_map.push((range, vreg, rreg));
-            }
-        }
-    }
-
-    trace!("frag_map: {:?}", frag_map);
-
-    let (final_insns, target_map, orig_insn_map) = edit_inst_stream(
+    let clobbered_registers = set_registers(
         func,
-        memory_moves,
-        &vec![],
-        frag_map,
+        virtual_intervals,
         reg_universe,
         use_checker,
-    )?;
+        &memory_moves,
+    );
 
-    // Compute clobbered registers with one final, quick pass.
-    //
-    // FIXME: derive this information directly from the allocation data
-    // structures used above.
-    //
-    // NB at this point, the `san_reg_uses` that was computed in the analysis
-    // phase is no longer valid, because we've added and removed instructions to
-    // the function relative to the one that `san_reg_uses` was computed from,
-    // so we have to re-visit all insns with `add_raw_reg_vecs_for_insn`.
-    // That's inefficient, but we don't care .. this should only be a temporary
-    // fix.
+    let (final_insns, target_map, orig_insn_map) =
+        add_spills_reloads_and_moves(func, memory_moves).map_err(|e| RegAllocError::Other(e))?;
 
-    let mut clobbered_registers: Set<RealReg> = Set::empty();
-
-    // We'll dump all the reg uses in here.  We don't care the bounds, so just
-    // pass a dummy one in the loop.
-    let mut reg_vecs = RegVecs::new(/*sanitized=*/ false);
-    let mut dummy_bounds = RegVecBounds::new();
-    for insn in &final_insns {
-        add_raw_reg_vecs_for_insn::<F>(insn, &mut reg_vecs, &mut dummy_bounds);
-    }
-    for reg in reg_vecs.defs.iter().chain(reg_vecs.mods.iter()) {
-        debug_assert!(reg.is_real());
-        clobbered_registers.insert(reg.to_real_reg());
-    }
-
-    // And now remove from the set, all those not available to the allocator.
+    // And now remove from the clobbered registers set, all those not available to the allocator.
     // But not removing the reserved regs, since we might have modified those.
     clobbered_registers.filter_map(|&reg| {
         if reg.get_index() >= reg_universe.allocable {

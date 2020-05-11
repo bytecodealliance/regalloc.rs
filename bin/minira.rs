@@ -611,6 +611,10 @@ fn lsra_split_unused() {
     test_utils::check_lsra("lsra_split_unused", 5, 2);
 }
 #[test]
+fn lsra_split_unused_2() {
+    test_utils::check_lsra("lsra_split_unused_2", 5, 2);
+}
+#[test]
 fn lsra_split_positions() {
     test_utils::check_lsra("lsra_split_positions", 5, 2);
 }

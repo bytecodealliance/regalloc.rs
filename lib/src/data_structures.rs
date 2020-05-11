@@ -174,6 +174,10 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> Set<T> {
             set: self.set.iter().filter_map(f).collect(),
         }
     }
+
+    pub fn clear(&mut self) {
+        self.set.clear();
+    }
 }
 
 impl<T: Eq + Ord + Hash + Copy + fmt::Debug> fmt::Debug for Set<T> {
@@ -1084,6 +1088,7 @@ impl RegVecsAndBounds {
     pub fn is_sanitized(&self) -> bool {
         self.vecs.sanitized
     }
+    #[allow(dead_code)] // XXX for some reason, Rustc 1.43.1 thinks this is currently unused.
     pub fn num_insns(&self) -> u32 {
         self.bounds.len()
     }
@@ -1113,8 +1118,15 @@ impl RegSets {
             sanitized,
         }
     }
+
     pub fn is_sanitized(&self) -> bool {
         self.sanitized
+    }
+
+    fn clear(&mut self) {
+        self.uses.clear();
+        self.defs.clear();
+        self.mods.clear();
     }
 }
 
@@ -1135,6 +1147,20 @@ impl RegVecsAndBounds {
             regsets.mods.insert(self.vecs.mods[i]);
         }
         regsets
+    }
+
+    pub fn get_reg_sets_for_iix_reuse(&self, iix: InstIx, regsets: &mut RegSets) {
+        regsets.clear();
+        let bounds = &self.bounds[iix];
+        for i in bounds.uses_start as usize..bounds.uses_start as usize + bounds.uses_len as usize {
+            regsets.uses.insert(self.vecs.uses[i]);
+        }
+        for i in bounds.defs_start as usize..bounds.defs_start as usize + bounds.defs_len as usize {
+            regsets.defs.insert(self.vecs.defs[i]);
+        }
+        for i in bounds.mods_start as usize..bounds.mods_start as usize + bounds.mods_len as usize {
+            regsets.mods.insert(self.vecs.mods[i]);
+        }
     }
 }
 
@@ -1569,6 +1595,7 @@ impl fmt::Debug for RangeFrag {
 }
 
 impl RangeFrag {
+    #[allow(dead_code)] // XXX for some reason, Rustc 1.43.1 thinks this is unused.
     pub fn new(first: InstPoint, last: InstPoint) -> Self {
         debug_assert!(first <= last);
         RangeFrag { first, last }

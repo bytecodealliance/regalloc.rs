@@ -288,3 +288,60 @@ mod test {
         assert_eq!(None, mapper.get_use(vreg(50)));
     }
 }
+
+/// This implementation of RegUsageMapper relies on explicit mentions of vregs in instructions. The
+/// caller must keep them, and for each instruction:
+///
+/// - clear the previous mappings, using `clear()`,
+/// - feed the mappings from vregs to rregs for uses and defs, with `set_use`/`set_def`,
+/// - then call the `Function::map_regs` function with this structure.
+///
+/// This avoids a lot of resizes, and makes it possible for algorithms that don't have precise live
+/// ranges to fill in vreg -> rreg mappings.
+#[derive(Debug)]
+pub struct MentionRegUsageMapper {
+    /// Sparse vector-map indexed by virtual register number. This is consulted for use-queries.
+    uses: SmallVec<[(VirtualReg, RealReg); 8]>,
+
+    /// Sparse vector-map indexed by virtual register number. This is consulted for def-queries.
+    defs: SmallVec<[(VirtualReg, RealReg); 8]>,
+}
+
+impl MentionRegUsageMapper {
+    pub(crate) fn new() -> Self {
+        Self {
+            uses: SmallVec::new(),
+            defs: SmallVec::new(),
+        }
+    }
+    pub(crate) fn clear(&mut self) {
+        self.uses.clear();
+        self.defs.clear();
+    }
+    pub(crate) fn lookup_use(&self, vreg: VirtualReg) -> Option<RealReg> {
+        self.uses.iter().find(|&pair| pair.0 == vreg).map(|x| x.1)
+    }
+    pub(crate) fn lookup_def(&self, vreg: VirtualReg) -> Option<RealReg> {
+        self.defs.iter().find(|&pair| pair.0 == vreg).map(|x| x.1)
+    }
+    pub(crate) fn set_use(&mut self, vreg: VirtualReg, rreg: RealReg) {
+        self.uses.push((vreg, rreg));
+    }
+    pub(crate) fn set_def(&mut self, vreg: VirtualReg, rreg: RealReg) {
+        self.defs.push((vreg, rreg));
+    }
+}
+
+impl RegUsageMapper for MentionRegUsageMapper {
+    fn get_use(&self, vreg: VirtualReg) -> Option<RealReg> {
+        return self.lookup_use(vreg);
+    }
+    fn get_def(&self, vreg: VirtualReg) -> Option<RealReg> {
+        return self.lookup_def(vreg);
+    }
+    fn get_mod(&self, vreg: VirtualReg) -> Option<RealReg> {
+        let result = self.lookup_use(vreg);
+        debug_assert_eq!(result, self.lookup_def(vreg));
+        return result;
+    }
+}

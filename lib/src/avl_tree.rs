@@ -728,6 +728,7 @@ pub struct AVLTreeIter<'t, 's, T> {
 }
 
 impl<'t, 's, T> AVLTreeIter<'t, 's, T> {
+    #[allow(dead_code)]
     fn new(tree: &'t AVLTree<T>, stack: &'s mut Vec<u32>) -> Self {
         let mut iter = AVLTreeIter { tree, stack };
         if tree.root != AVL_NULL {
@@ -912,6 +913,7 @@ impl<T: Copy + PartialOrd> AVLTree<T> {
         res
     }
 
+    #[allow(dead_code)]
     pub fn iter<'t, 's>(&'t self, storage: &'s mut Vec<u32>) -> AVLTreeIter<'t, 's, T> {
         storage.clear();
         AVLTreeIter::new(self, storage)

@@ -392,7 +392,7 @@ fn map_vregs_to_rregs<F: Function>(
 // algorithm has asked us to add.
 
 #[inline(never)]
-fn add_spills_reloads_and_moves<F: Function>(
+pub(crate) fn add_spills_reloads_and_moves<F: Function>(
     func: &mut F,
     mut insts_to_add: Vec<InstToInsertAndPoint>,
 ) -> Result<
