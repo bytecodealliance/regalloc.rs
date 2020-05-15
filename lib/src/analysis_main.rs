@@ -72,31 +72,32 @@ impl ToString for AnalysisError {
 //=============================================================================
 // Top level for all analysis activities.
 
+pub struct AnalysisInfo {
+    /// The sanitized per-insn reg-use info
+    pub(crate) reg_vecs_and_bounds: RegVecsAndBounds,
+    /// The real-reg live ranges
+    pub(crate) real_ranges: TypedIxVec<RealRangeIx, RealRange>,
+    /// The virtual-reg live ranges
+    pub(crate) virtual_ranges: TypedIxVec<VirtualRangeIx, VirtualRange>,
+    /// The fragment table
+    pub(crate) range_frags: TypedIxVec<RangeFragIx, RangeFrag>,
+    /// The fragment metrics table
+    pub(crate) range_metrics: TypedIxVec<RangeFragIx, RangeFragMetrics>,
+    /// Liveins per block
+    pub(crate) _liveins: TypedIxVec<BlockIx, SparseSet<Reg>>,
+    /// Liveouts per block
+    pub(crate) liveouts: TypedIxVec<BlockIx, SparseSet<Reg>>,
+    /// Estimated execution frequency per block
+    pub(crate) estimated_frequencies: TypedIxVec<BlockIx, u32>,
+    /// Maps InstIxs to BlockIxs
+    pub(crate) inst_to_block_map: InstIxToBlockIxMap,
+}
+
 #[inline(never)]
 pub fn run_analysis<F: Function>(
     func: &F,
     reg_universe: &RealRegUniverse,
-) -> Result<
-    (
-        // The sanitized per-insn reg-use info
-        RegVecsAndBounds,
-        // The real-reg live ranges
-        TypedIxVec<RealRangeIx, RealRange>,
-        // The virtual-reg live ranges
-        TypedIxVec<VirtualRangeIx, VirtualRange>,
-        // The fragment table
-        TypedIxVec<RangeFragIx, RangeFrag>,
-        // The fragment metrics table
-        TypedIxVec<RangeFragIx, RangeFragMetrics>,
-        // Liveouts per block
-        TypedIxVec<BlockIx, SparseSet<Reg>>,
-        // Estimated execution frequency per block
-        TypedIxVec<BlockIx, u32>,
-        // Maps InstIxs to BlockIxs
-        InstIxToBlockIxMap,
-    ),
-    AnalysisError,
-> {
+) -> Result<AnalysisInfo, AnalysisError> {
     info!("run_analysis: begin");
     info!(
         "  run_analysis: {} blocks, {} insns",
@@ -233,14 +234,15 @@ pub fn run_analysis<F: Function>(
     info!("  run_analysis: end liveness analysis");
     info!("run_analysis: end");
 
-    Ok((
+    Ok(AnalysisInfo {
         reg_vecs_and_bounds,
-        rlr_env,
-        vlr_env,
-        frag_env,
-        frag_metrics_env,
-        liveout_sets_per_block,
+        real_ranges: rlr_env,
+        virtual_ranges: vlr_env,
+        range_frags: frag_env,
+        range_metrics: frag_metrics_env,
+        _liveins: livein_sets_per_block,
+        liveouts: liveout_sets_per_block,
         estimated_frequencies,
         inst_to_block_map,
-    ))
+    })
 }

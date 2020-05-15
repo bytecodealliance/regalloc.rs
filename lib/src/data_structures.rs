@@ -1887,18 +1887,13 @@ impl fmt::Debug for SortedRangeFragIxs {
 }
 
 impl SortedRangeFragIxs {
-    pub fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
-        let mut ok = true;
+    pub(crate) fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
         for i in 1..self.frag_ixs.len() {
             let prev_frag = &fenv[self.frag_ixs[i - 1]];
-            let this_frag = &fenv[self.frag_ixs[i - 0]];
+            let this_frag = &fenv[self.frag_ixs[i]];
             if cmp_range_frags(prev_frag, this_frag) != Some(Ordering::Less) {
-                ok = false;
-                break;
+                panic!("SortedRangeFragIxs::check: vector not ok");
             }
-        }
-        if !ok {
-            panic!("SortedRangeFragIxs::check: vector not ok");
         }
     }
 

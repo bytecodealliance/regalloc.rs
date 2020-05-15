@@ -18,7 +18,7 @@ use std::default;
 use std::fmt;
 
 use crate::analysis_data_flow::add_raw_reg_vecs_for_insn;
-use crate::analysis_main::run_analysis;
+use crate::analysis_main::{run_analysis, AnalysisInfo};
 use crate::data_structures::*;
 use crate::inst_stream::{edit_inst_stream, InstToInsertAndPoint};
 use crate::{Function, RegAllocError, RegAllocResult};
@@ -921,16 +921,14 @@ pub(crate) fn run<F: Function>(
     use_checker: bool,
     _opts: &LinearScanOptions,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
-    let (
-        reg_uses,
-        mut rlrs,
-        mut vlrs,
-        mut fragments,
-        _fragment_metrics,
+    let AnalysisInfo {
+        reg_vecs_and_bounds: reg_uses,
+        real_ranges: mut rlrs,
+        virtual_ranges: mut vlrs,
+        range_frags: mut fragments,
         liveouts,
-        _est_freqs,
-        _inst_to_block_map,
-    ) = run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
+        ..
+    } = run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
 
     let scratches_by_rc = {
         let mut scratches_by_rc = vec![None; NUM_REG_CLASSES];

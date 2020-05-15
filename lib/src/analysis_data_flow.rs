@@ -1253,6 +1253,7 @@ fn create_and_add_range(
             frag_metrics_env,
             estimated_frequencies,
         );
+
         // Now it's safe to compress the fragments.
         let sorted_frags = deref_and_compress_sorted_range_frag_ixs(
             stats_num_vfrags_uncompressed,
@@ -1261,6 +1262,7 @@ fn create_and_add_range(
             frag_env,
             frag_metrics_env,
         );
+
         result_virtual.push(VirtualRange {
             vreg: reg.to_virtual_reg(),
             rreg: None,
@@ -1345,13 +1347,13 @@ pub fn merge_range_frags(
     let mut result_real = TypedIxVec::<RealRangeIx, RealRange>::new();
     let mut result_virtual = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
 
-    /* BEGIN per_reg_loop */
-    'per_reg_loop: for (reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
+    // BEGIN per_reg_loop
+    for (reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
         let n_frags_for_this_reg = all_frag_ixs_for_reg.len();
         assert!(n_frags_for_this_reg > 0);
 
-        // Do some shortcutting.  First off, if there's only one frag for this
-        // reg, we can directly give it its own live range, and have done.
+        // Do some shortcutting.  First off, if there's only one frag for this reg, we can directly
+        // give it its own live range, and have done.
         if n_frags_for_this_reg == 1 {
             create_and_add_range(
                 &mut stats_num_vfrags_uncompressed,
@@ -1365,7 +1367,7 @@ pub fn merge_range_frags(
                 estimated_frequencies,
             );
             stats_num_single_grps += 1;
-            continue 'per_reg_loop;
+            continue;
         }
 
         // BEGIN merge `all_frag_ixs_for_reg` entries as much as possible.
@@ -1375,16 +1377,15 @@ pub fn merge_range_frags(
 
         let mut triples = Vec::<(RangeFragIx, RangeFragKind, BlockIx)>::new();
 
-        // Create `triples`.  We will use it to guide the merging phase, but it is
-        // immutable there.
-        'per_frag_loop: for fix in all_frag_ixs_for_reg {
+        // Create `triples`.  We will use it to guide the merging phase, but it is immutable there.
+        for fix in all_frag_ixs_for_reg {
             let frag_metrics = &frag_metrics_env[*fix];
-            // This frag is Local (standalone).  Give it its own Range and move on.
-            // This is an optimisation, but it's also necessary: the main
-            // fragment-merging logic below relies on the fact that the
-            // fragments it is presented with are all either LiveIn, LiveOut or
-            // Thru.
+
             if frag_metrics.kind == RangeFragKind::Local {
+                // This frag is Local (standalone).  Give it its own Range and move on.  This is an
+                // optimisation, but it's also necessary: the main fragment-merging logic below
+                // relies on the fact that the fragments it is presented with are all either
+                // LiveIn, LiveOut or Thru.
                 create_and_add_range(
                     &mut stats_num_vfrags_uncompressed,
                     &mut stats_num_vfrags_compressed,
@@ -1397,10 +1398,10 @@ pub fn merge_range_frags(
                     estimated_frequencies,
                 );
                 stats_num_local_frags += 1;
-                continue 'per_frag_loop;
+                continue;
             }
+
             // This frag isn't Local (standalone) so we have to process it the slow way.
-            assert!(frag_metrics.kind != RangeFragKind::Local);
             triples.push((*fix, frag_metrics.kind, frag_metrics.bix));
         }
 
@@ -1442,18 +1443,21 @@ pub fn merge_range_frags(
         // still being fast for small inputs.
         if triples_len <= 250 {
             // The simple way, which is N^2 in the length of `triples`.
-            for ((_fix, kind, bix), ix) in triples.iter().zip(0..) {
-                // Deal with liveness flows outbound from `fix`.  Meaning, (1) above.
+            for (ix, (_fix, kind, bix)) in triples.iter().enumerate() {
+                // Deal with liveness flows outbound from `fix`. Meaning, (1) above.
                 if *kind == RangeFragKind::LiveOut || *kind == RangeFragKind::Thru {
                     for b in cfg_info.succ_map[*bix].iter() {
-                        // Visit all entries in `triples` that are for `b`
-                        for ((_fix2, kind2, bix2), ix2) in triples.iter().zip(0..) {
+                        // Visit all entries in `triples` that are for `b`.
+                        for (ix2, (_fix2, kind2, bix2)) in triples.iter().enumerate() {
                             if *bix2 != *b || *kind2 == RangeFragKind::LiveOut {
                                 continue;
                             }
-                            // Now we know that liveness for this reg "flows" from
-                            // `triples[ix]` to `triples[ix2]`.  So those two frags must be
-                            // part of the same live range.  Note this.
+                            debug_assert!(
+                                *kind2 == RangeFragKind::LiveIn || *kind2 == RangeFragKind::Thru
+                            );
+                            // Now we know that liveness for this reg "flows" from `triples[ix]` to
+                            // `triples[ix2]`.  So those two frags must be part of the same live
+                            // range.  Note this.
                             if ix != ix2 {
                                 eclasses_uf.union(ix, ix2); // Order of args irrelevant
                             }
@@ -1461,16 +1465,17 @@ pub fn merge_range_frags(
                     }
                 }
             } // outermost iteration over `triples`
+
             stats_num_multi_grps_small += 1;
             stats_size_multi_grps_small += triples_len;
         } else {
-            // The more complex way, which is N-log-N in the length of `triples`.
-            // This is the same as the simple way, except that the innermost loop,
-            // which is a linear search in `triples` to find entries for some block
-            // `b`, is replaced by a binary search.  This means that `triples` first
-            // needs to be sorted by block index.
-            triples.sort_unstable_by(|(_, _, bix1), (_, _, bix2)| bix1.partial_cmp(bix2).unwrap());
-            for ((_fix, kind, bix), ix) in triples.iter().zip(0..) {
+            // The more complex way, which is N-log-N in the length of `triples`.  This is the same
+            // as the simple way, except that the innermost loop, which is a linear search in
+            // `triples` to find entries for some block `b`, is replaced by a binary search.  This
+            // means that `triples` first needs to be sorted by block index.
+            triples.sort_unstable_by_key(|(_, _, bix)| *bix);
+
+            for (ix, (_fix, kind, bix)) in triples.iter().enumerate() {
                 // Deal with liveness flows outbound from `fix`.  Meaning, (1) above.
                 if *kind == RangeFragKind::LiveOut || *kind == RangeFragKind::Thru {
                     for b in cfg_info.succ_map[*bix].iter() {
@@ -1486,35 +1491,37 @@ pub fn merge_range_frags(
                                 ix_right = m;
                             }
                         }
-                        // It might be that there is no block for `b` in the sequence.
-                        // That's legit; it just means that block `bix` jumps to a
-                        // successor where the associated register isn't live-in/thru.  A
-                        // failure to find `b` can be indicated one of two ways:
+
+                        // It might be that there is no block for `b` in the sequence.  That's
+                        // legit; it just means that block `bix` jumps to a successor where the
+                        // associated register isn't live-in/thru.  A failure to find `b` can be
+                        // indicated one of two ways:
                         //
                         // * ix_left == triples_len
                         // * ix_left < triples_len and b < triples[ix_left].b
                         //
-                        // In both cases I *think* the 'loop_over_entries_for_b below will
-                        // not do anything.  But this is all a bit hairy, so let's convert
-                        // the second variant into the first, so as to make it obvious
-                        // that the loop won't do anything.
+                        // In both cases I *think* the 'loop_over_entries_for_b below will not do
+                        // anything.  But this is all a bit hairy, so let's convert the second
+                        // variant into the first, so as to make it obvious that the loop won't do
+                        // anything.
 
-                        // ix_left now holds the lowest index of any `triples` entry for block
-                        // `b`.  Assert this.
+                        // ix_left now holds the lowest index of any `triples` entry for block `b`.
+                        // Assert this.
                         if ix_left < triples_len && *b < triples[ix_left].2 {
                             ix_left = triples_len;
                         }
                         if ix_left < triples_len {
                             assert!(ix_left == 0 || triples[ix_left - 1].2 < *b);
                         }
+
                         // ix2 plays the same role as in the quadratic version.  ix_left and
                         // ix_right are not used after this point.
                         let mut ix2 = ix_left;
-                        'loop_over_entries_for_b: loop {
-                            if ix2 >= triples_len {
-                                break;
-                            }
-                            let (_fix2, kind2, bix2) = triples[ix2];
+                        loop {
+                            let (_fix2, kind2, bix2) = match triples.get(ix2) {
+                                None => break,
+                                Some(triple) => *triple,
+                            };
                             if *b < bix2 {
                                 // We've come to the end of the sequence of `b`-blocks.
                                 break;
@@ -1522,29 +1529,29 @@ pub fn merge_range_frags(
                             debug_assert!(*b == bix2);
                             if kind2 == RangeFragKind::LiveOut {
                                 ix2 += 1;
-                                continue 'loop_over_entries_for_b;
+                                continue;
                             }
-                            // Now we know that liveness for this reg "flows" from
-                            // `triples[ix]` to `triples[ix2]`.  So those two frags must be
-                            // part of the same live range.  Note this.
-                            if ix != ix2 {
-                                eclasses_uf.union(ix, ix2); // Order of args irrelevant
-                            }
+                            // Now we know that liveness for this reg "flows" from `triples[ix]` to
+                            // `triples[ix2]`.  So those two frags must be part of the same live
+                            // range.  Note this.
+                            eclasses_uf.union(ix, ix2);
                             ix2 += 1;
                         }
+
                         if ix2 + 1 < triples_len {
                             debug_assert!(*b < triples[ix2 + 1].2);
                         }
                     }
                 }
             }
+
             stats_num_multi_grps_large += 1;
             stats_size_multi_grps_large += triples_len;
         }
 
-        // Now `eclasses_uf` contains the results of the merging-search.  Visit
-        // each of its equivalence classes in turn, and convert each into a
-        // virtual or real live range as appropriate.
+        // Now `eclasses_uf` contains the results of the merging-search.  Visit each of its
+        // equivalence classes in turn, and convert each into a virtual or real live range as
+        // appropriate.
         let eclasses = eclasses_uf.get_equiv_classes();
         for leader_triple_ix in eclasses.equiv_class_leaders_iter() {
             // `leader_triple_ix` is an eclass leader.  Enumerate the whole eclass.
@@ -1566,8 +1573,7 @@ pub fn merge_range_frags(
             );
         }
         // END merge `all_frag_ixs_for_reg` entries as much as possible
-    } // 'per_reg_loop
-      /* END per_reg_loop */
+    } // END per reg loop
 
     info!("      in: {} single groups", stats_num_single_grps);
     info!(
