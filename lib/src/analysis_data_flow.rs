@@ -767,10 +767,10 @@ pub fn calc_livein_and_liveout<F: Function>(
 // handle (1) live-in and live-out Regs, (2) dead writes, and (3) instructions
 // that modify registers rather than merely reading or writing them.
 
-// Calculate all the RangeFrags for `bix`.  Add them to `out_frags` and
-// corresponding metrics data to `out_frag_metrics`.  Add to `out_map`, the
-// associated RangeFragIxs, segregated by Reg.  `bix`, `livein`, `liveout` and
-// `rvb` are expected to be valid in the context of the Func `f` (duh!)
+/// Calculate all the RangeFrags for `bix`.  Add them to `out_frags` and
+/// corresponding metrics data to `out_frag_metrics`.  Add to `out_map`, the
+/// associated RangeFragIxs, segregated by Reg.  `bix`, `livein`, `liveout` and
+/// `rvb` are expected to be valid in the context of the Func `f` (duh!).
 #[inline(never)]
 fn get_range_frags_for_block<F: Function>(
     func: &F,
@@ -782,49 +782,44 @@ fn get_range_frags_for_block<F: Function>(
     out_frags: &mut TypedIxVec<RangeFragIx, RangeFrag>,
     out_frag_metrics: &mut TypedIxVec<RangeFragIx, RangeFragMetrics>,
 ) {
-    //println!("QQQQ --- block {}", bix.show());
-    // BEGIN ProtoRangeFrag
-    // A ProtoRangeFrag carries information about a write .. read range,
-    // within a Block, which we will later turn into a fully-fledged
-    // RangeFrag.  It basically records the first and last-known
-    // InstPoints for appearances of a Reg.
-    //
-    // ProtoRangeFrag also keeps count of the number of appearances of
-    // the Reg to which it pertains, using `uses`.  The counts get rolled
-    // into the resulting RangeFrags, and later are used to calculate
-    // spill costs.
-    //
-    // The running state of this function is a map from Reg to
-    // ProtoRangeFrag.  Only Regs that actually appear in the Block (or are
-    // live-in to it) are mapped.  This has the advantage of economy, since
-    // most Regs will not appear in (or be live-in to) most Blocks.
-    //
+    /// A ProtoRangeFrag carries information about a [write .. read] range, within a Block, which
+    /// we will later turn into a fully-fledged RangeFrag.  It basically records the first and
+    /// last-known InstPoints for appearances of a Reg.
+    ///
+    /// ProtoRangeFrag also keeps count of the number of appearances of the Reg to which it
+    /// pertains, using `uses`.  The counts get rolled into the resulting RangeFrags, and later are
+    /// used to calculate spill costs.
+    ///
+    /// The running state of this function is a map from Reg to ProtoRangeFrag.  Only Regs that
+    /// actually appear in the Block (or are live-in to it) are mapped.  This has the advantage of
+    /// economy, since most Regs will not appear in (or be live-in to) most Blocks.
     struct ProtoRangeFrag {
-        // The InstPoint in this Block at which the associated Reg most
-        // recently became live (when moving forwards though the Block).
-        // If this value is the first InstPoint for the Block (the U point
-        // for the Block's lowest InstIx), that indicates the associated
-        // Reg is live-in to the Block.
+        /// The InstPoint in this Block at which the associated Reg most recently became live (when
+        /// moving forwards though the Block).  If this value is the first InstPoint for the Block
+        /// (the U point for the Block's lowest InstIx), that indicates the associated Reg is
+        /// live-in to the Block.
         first: InstPoint,
 
-        // And this is the InstPoint which is the end point (most recently
-        // observed read, in general) for the current RangeFrag under
-        // construction.  In general we will move `last` forwards as we
-        // discover reads of the associated Reg.  If this is the last
-        // InstPoint for the Block (the D point for the Block's highest
-        // InstInx), that indicates that the associated reg is live-out
-        // from the Block.
+        /// This is the InstPoint which is the end point (most recently observed read, in general)
+        /// for the current RangeFrag under construction.  In general we will move `last` forwards
+        /// as we discover reads of the associated Reg.  If this is the last InstPoint for the
+        /// Block (the D point for the Block's highest InstInx), that indicates that the associated
+        /// reg is live-out from the Block.
         last: InstPoint,
 
-        // Number of mentions of the associated Reg in this ProtoRangeFrag.
-        uses: u16,
+        /// Number of mentions of the associated Reg in this ProtoRangeFrag.
+        num_mentions: u16,
     }
+
     impl fmt::Debug for ProtoRangeFrag {
         fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-            write!(fmt, "{:?}x {:?} - {:?}", self.uses, self.first, self.last)
+            write!(
+                fmt,
+                "{:?}x {:?} - {:?}",
+                self.num_mentions, self.first, self.last
+            )
         }
     }
-    // END ProtoRangeFrag
 
     fn plus1(n: u16) -> u16 {
         if n == 0xFFFFu16 {
@@ -854,7 +849,7 @@ fn get_range_frags_for_block<F: Function>(
         state.insert(
             *r,
             ProtoRangeFrag {
-                uses: 0,
+                num_mentions: 0,
                 first: first_pt_in_block,
                 last: first_pt_in_block,
             },
@@ -872,29 +867,20 @@ fn get_range_frags_for_block<F: Function>(
             ..bounds_for_iix.uses_start as usize + bounds_for_iix.uses_len as usize
         {
             let r = &rvb.vecs.uses[i];
-            let new_pf: ProtoRangeFrag;
-            match state.get(r) {
-                // First event for `r` is a read, but it's not listed in
-                // `livein`, since otherwise `state` would have an entry
-                // for it.
-                None => {
-                    panic!("get_range_frags_for_block: fail #1");
-                }
-                // This the first or subsequent read after a write.  Note
-                // that the "write" can be either a real write, or due to
-                // the fact that `r` is listed in `livein`.  We don't care
-                // here.
-                Some(ProtoRangeFrag { uses, first, last }) => {
-                    let new_last = InstPoint::new_use(iix);
-                    debug_assert!(last <= &new_last);
-                    new_pf = ProtoRangeFrag {
-                        uses: plus1(*uses),
-                        first: *first,
-                        last: new_last,
-                    };
-                }
-            }
-            state.insert(*r, new_pf);
+            let pf = state
+                .get_mut(r)
+                // First event for `r` is a read, but it's not listed in `livein`, since otherwise
+                // `state` would have an entry for it.
+                .expect("get_range_frags_for_block: fail #1");
+
+            // This the first or subsequent read after a write.  Note that the "write" can be
+            // either a real write, or due to the fact that `r` is listed in `livein`.  We don't
+            // care here.
+            pf.num_mentions = plus1(pf.num_mentions);
+
+            let new_last = InstPoint::new_use(iix);
+            debug_assert!(pf.last <= new_last);
+            pf.last = new_last;
         }
 
         // Examine modifies.  These are handled almost identically to
@@ -904,157 +890,128 @@ fn get_range_frags_for_block<F: Function>(
             ..bounds_for_iix.mods_start as usize + bounds_for_iix.mods_len as usize
         {
             let r = &rvb.vecs.mods[i];
-            let new_pf: ProtoRangeFrag;
-            match state.get(r) {
-                // First event for `r` is a read (really, since this insn
-                // modifies `r`), but it's not listed in `livein`, since
-                // otherwise `state` would have an entry for it.
-                None => {
-                    panic!("get_range_frags_for_block: fail #2");
-                }
-                // This the first or subsequent modify after a write.
-                Some(ProtoRangeFrag { uses, first, last }) => {
-                    let new_last = InstPoint::new_def(iix);
-                    debug_assert!(last <= &new_last);
-                    new_pf = ProtoRangeFrag {
-                        uses: plus1(*uses),
-                        first: *first,
-                        last: new_last,
-                    };
-                }
-            }
-            state.insert(*r, new_pf);
+            let pf = state
+                .get_mut(r)
+                // First event for `r` is a read (really, since this insn modifies `r`), but it's
+                // not listed in `livein`, since otherwise `state` would have an entry for it.
+                .expect("get_range_frags_for_block: fail #2");
+
+            // This the first or subsequent modify after a write.
+            pf.num_mentions = plus1(pf.num_mentions);
+
+            let new_last = InstPoint::new_def(iix);
+            debug_assert!(pf.last <= new_last);
+            pf.last = new_last;
         }
 
-        // Examine writes (but not writes implied by modifies).  The
-        // general idea is that a write causes us to terminate the
-        // existing ProtoRangeFrag, if any, add it to `tmp_result_vec`,
+        // Examine writes (but not writes implied by modifies).  The general idea is that a write
+        // causes us to terminate the existing ProtoRangeFrag, if any, add it to `tmp_result_vec`,
         // and start a new frag.
         for i in bounds_for_iix.defs_start as usize
             ..bounds_for_iix.defs_start as usize + bounds_for_iix.defs_len as usize
         {
             let r = &rvb.vecs.defs[i];
-            let new_pf: ProtoRangeFrag;
-            match state.get(r) {
+            match state.get_mut(r) {
                 // First mention of a Reg we've never heard of before.
                 // Start a new ProtoRangeFrag for it and keep going.
                 None => {
                     let new_pt = InstPoint::new_def(iix);
-                    new_pf = ProtoRangeFrag {
-                        uses: 1,
-                        first: new_pt,
-                        last: new_pt,
-                    };
+                    state.insert(
+                        *r,
+                        ProtoRangeFrag {
+                            num_mentions: 1,
+                            first: new_pt,
+                            last: new_pt,
+                        },
+                    );
                 }
-                // There's already a ProtoRangeFrag for `r`.  This write
-                // will start a new one, so flush the existing one and
-                // note this write.
-                Some(ProtoRangeFrag { uses, first, last }) => {
+
+                // There's already a ProtoRangeFrag for `r`.  This write will start a new one, so
+                // flush the existing one and note this write.
+                Some(ProtoRangeFrag {
+                    ref mut num_mentions,
+                    ref mut first,
+                    ref mut last,
+                }) => {
                     if first == last {
-                        debug_assert!(*uses == 1);
+                        debug_assert!(*num_mentions == 1);
                     }
                     let (frag, frag_metrics) =
-                        RangeFrag::new_with_metrics(func, bix, *first, *last, *uses);
+                        RangeFrag::new_with_metrics(func, bix, *first, *last, *num_mentions);
                     tmp_result_vec.push((*r, frag, frag_metrics));
                     let new_pt = InstPoint::new_def(iix);
-                    new_pf = ProtoRangeFrag {
-                        uses: 1,
-                        first: new_pt,
-                        last: new_pt,
-                    };
+
+                    // Reuse the previous entry for this new definition of the same vreg.
+                    *num_mentions = 1;
+                    *first = new_pt;
+                    *last = new_pt;
                 }
             }
-            state.insert(*r, new_pf);
         }
-        //println!("QQQQ state after  {}",
-        //         id(state.iter().collect()).show());
     }
 
-    // We are at the end of the block.  We still have to deal with
-    // live-out Regs.  We must also deal with ProtoRangeFrags in `state`
-    // that are for registers not listed as live-out.
+    // We are at the end of the block.  We still have to deal with live-out Regs.  We must also
+    // deal with ProtoRangeFrags in `state` that are for registers not listed as live-out.
 
-    // Deal with live-out Regs.  Treat each one as if it is read just
-    // after the block.
+    // Deal with live-out Regs.  Treat each one as if it is read just after the block.
     for r in liveout.iter() {
-        //println!("QQQQ post: liveout:  {}", r.show());
-        match state.get(r) {
-            // This can't happen.  `r` is in `liveout`, but this implies
-            // that it is neither defined in the block nor present in
-            // `livein`.
-            None => {
-                panic!("get_range_frags_for_block: fail #3");
-            }
-            // `r` is written (or modified), either literally or by virtue
-            // of being present in `livein`, and may or may not
-            // subsequently be read -- we don't care, because it must be
-            // read "after" the block.  Create a `LiveOut` or `Thru` frag
-            // accordingly.
-            Some(ProtoRangeFrag {
-                uses,
-                first,
-                last: _,
-            }) => {
-                let (frag, frag_metrics) =
-                    RangeFrag::new_with_metrics(func, bix, *first, last_pt_in_block, *uses);
-                tmp_result_vec.push((*r, frag, frag_metrics));
-            }
-        }
-        // Remove the entry from `state` so that the following loop
-        // doesn't process it again.
-        state.remove(r);
+        // Remove the entry from `state` so that the following loop doesn't process it again.
+        let pf = state
+            .remove(r)
+            // This can't happen.  `r` is in `liveout`, but this implies that it is neither defined
+            // in the block nor present in `livein`.
+            .expect("get_range_frags_for_block: fail #3");
+
+        // `r` is written (or modified), either literally or by virtue of being present in
+        // `livein`, and may or may not subsequently be read -- we don't care, because it must be
+        // read "after" the block.  Create a `LiveOut` or `Thru` frag accordingly.
+        let (frag, frag_metrics) =
+            RangeFrag::new_with_metrics(func, bix, pf.first, last_pt_in_block, pf.num_mentions);
+        tmp_result_vec.push((*r, frag, frag_metrics));
     }
 
     // Finally, round up any remaining ProtoRangeFrags left in `state`.
     for (r, pf) in state.iter() {
-        //println!("QQQQ post: leftover: {} {}", r.show(), pf.show());
         if pf.first == pf.last {
-            debug_assert!(pf.uses == 1);
+            debug_assert!(pf.num_mentions == 1);
         }
         let (frag, frag_metrics) =
-            RangeFrag::new_with_metrics(func, bix, pf.first, pf.last, pf.uses);
-        //println!("QQQQ post: leftover: {}", (r,frag).show());
+            RangeFrag::new_with_metrics(func, bix, pf.first, pf.last, pf.num_mentions);
         tmp_result_vec.push((*r, frag, frag_metrics));
     }
 
     // Copy the entries in `tmp_result_vec` into `out_map` and `outVec`.
-    // TODO: do this as we go along, so as to avoid the use of a temporary
-    // vector.
+    // TODO: do this as we go along, so as to avoid the use of a temporary vector.
     assert!(out_frags.len() == out_frag_metrics.len());
     for (r, frag, frag_metrics) in tmp_result_vec {
-        // Allocate a new RangeFragIx for `frag`, except, make some minimal effort
-        // to avoid huge numbers of duplicates by inspecting the previous two
-        // entries, and using them if possible.
+        // Allocate a new RangeFragIx for `frag`, except, make some minimal effort to avoid huge
+        // numbers of duplicates by inspecting the previous two entries, and using them if
+        // possible.
+        let mut new_fix = None;
+
         let num_out_frags = out_frags.len();
-        let new_fix: RangeFragIx;
         if num_out_frags >= 2 {
             let back_0 = RangeFragIx::new(num_out_frags - 1);
             let back_1 = RangeFragIx::new(num_out_frags - 2);
             if out_frags[back_0] == frag && out_frag_metrics[back_0] == frag_metrics {
-                new_fix = back_0;
+                new_fix = Some(back_0);
             } else if out_frags[back_1] == frag && out_frag_metrics[back_1] == frag_metrics {
-                new_fix = back_1;
-            } else {
-                // No match; create a new one.
+                new_fix = Some(back_1);
+            }
+        }
+
+        let new_fix = match new_fix {
+            Some(fix) => fix,
+            None => {
+                // We can't look back or there was no match; create a new one.
                 out_frags.push(frag);
                 out_frag_metrics.push(frag_metrics);
-                new_fix = RangeFragIx::new(out_frags.len() as u32 - 1);
+                RangeFragIx::new(out_frags.len() as u32 - 1)
             }
-        } else {
-            // We can't look back; create a new one.
-            out_frags.push(frag);
-            out_frag_metrics.push(frag_metrics);
-            new_fix = RangeFragIx::new(out_frags.len() as u32 - 1);
-        }
+        };
+
         // And use the new RangeFragIx.
-        match out_map.get_mut(&r) {
-            None => {
-                out_map.insert(r, vec![new_fix]);
-            }
-            Some(frag_vec) => {
-                frag_vec.push(new_fix);
-            }
-        }
+        out_map.entry(r).or_insert_with(|| Vec::new()).push(new_fix);
     }
 }
 
