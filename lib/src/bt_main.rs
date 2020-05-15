@@ -8,22 +8,20 @@ use smallvec::SmallVec;
 use std::default;
 use std::fmt;
 
-use crate::analysis_control_flow::InstIxToBlockIxMap;
 use crate::analysis_data_flow::{add_raw_reg_vecs_for_insn, does_inst_use_def_or_mod_reg};
-use crate::analysis_main::run_analysis;
+use crate::analysis_main::{run_analysis, AnalysisInfo};
 use crate::avl_tree::{AVLTree, AVL_NULL};
 use crate::bt_coalescing_analysis::{do_coalescing_analysis, Hint};
 use crate::bt_commitment_map::{CommitmentMap, RangeFragAndVLRIx};
 use crate::bt_spillslot_allocator::SpillSlotAllocator;
 use crate::bt_vlr_priority_queue::VirtualRangePrioQ;
 use crate::data_structures::{
-    BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx, RangeFragMetrics, RealRange,
-    RealRangeIx, RealReg, RealRegUniverse, Reg, RegVecBounds, RegVecs, RegVecsAndBounds, Set,
-    SortedRangeFrags, SpillCost, SpillSlot, TypedIxVec, VirtualRange, VirtualRangeIx, VirtualReg,
-    Writable,
+    BlockIx, InstIx, InstPoint, Point, RangeFrag, RangeFragIx, RealRange, RealReg, RealRegUniverse,
+    Reg, RegVecBounds, RegVecs, Set, SortedRangeFrags, SpillCost, SpillSlot, TypedIxVec,
+    VirtualRange, VirtualRangeIx, VirtualReg, Writable,
 };
 use crate::inst_stream::{edit_inst_stream, InstToInsert, InstToInsertAndPoint};
-use crate::sparse_set::{SparseSet, SparseSetU};
+use crate::sparse_set::SparseSetU;
 use crate::union_find::UnionFindEquivClasses;
 use crate::{Function, RegAllocError, RegAllocResult};
 
@@ -472,17 +470,16 @@ pub fn alloc_main<F: Function>(
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     // -------- Perform initial liveness analysis --------
     // Note that the analysis phase can fail; hence we propagate any error.
-    let analysis_info =
-        run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
-
-    let reg_vecs_and_bounds: RegVecsAndBounds = analysis_info.0;
-    let rlr_env: TypedIxVec<RealRangeIx, RealRange> = analysis_info.1;
-    let mut vlr_env: TypedIxVec<VirtualRangeIx, VirtualRange> = analysis_info.2;
-    let frag_env: TypedIxVec<RangeFragIx, RangeFrag> = analysis_info.3;
-    let frag_metrics_env: TypedIxVec<RangeFragIx, RangeFragMetrics> = analysis_info.4;
-    let _liveouts: TypedIxVec<BlockIx, SparseSet<Reg>> = analysis_info.5;
-    let est_freqs: TypedIxVec<BlockIx, u32> = analysis_info.6;
-    let inst_to_block_map: InstIxToBlockIxMap = analysis_info.7;
+    let AnalysisInfo {
+        reg_vecs_and_bounds,
+        real_ranges: rlr_env,
+        virtual_ranges: mut vlr_env,
+        range_frags: frag_env,
+        range_metrics: frag_metrics_env,
+        estimated_frequencies: est_freqs,
+        inst_to_block_map,
+        ..
+    } = run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
 
     assert!(reg_vecs_and_bounds.is_sanitized());
     assert!(frag_env.len() == frag_metrics_env.len());
