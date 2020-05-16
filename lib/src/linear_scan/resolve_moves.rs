@@ -1,4 +1,4 @@
-use super::{next_use, Fragments, IntId, Intervals, Location, MentionMap, RegUses};
+use super::{next_use, IntId, Intervals, Location, MentionMap, RegUses};
 use crate::{
     data_structures::{BlockIx, InstPoint, Point},
     inst_stream::{InstToInsert, InstToInsertAndPoint},
@@ -18,7 +18,6 @@ pub(crate) fn run<F: Function>(
     mention_map: &HashMap<Reg, MentionMap>,
     intervals: &Intervals,
     virtual_intervals: &Vec<IntId>,
-    fragments: &Fragments,
     liveouts: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     spill_slot: &mut u32,
     scratches_by_rc: &[Option<RealReg>],
@@ -60,7 +59,6 @@ pub(crate) fn run<F: Function>(
                                 int_id,
                                 InstPoint::min_value(),
                                 reg_uses,
-                                fragments
                             )
                             .is_none())
                     );
@@ -71,10 +69,10 @@ pub(crate) fn run<F: Function>(
             let parent = intervals.get(parent_id);
 
             // If this is a move between blocks, handle it as such.
-            if parent.end.pt == Point::Def
-                && interval.start.pt == Point::Use
-                && block_ends.contains(&parent.end.iix)
-                && block_starts.contains(&interval.start.iix)
+            if parent.end.pt() == Point::Def
+                && interval.start.pt() == Point::Use
+                && block_ends.contains(&parent.end.iix())
+                && block_starts.contains(&interval.start.iix())
             {
                 continue;
             }
@@ -90,17 +88,10 @@ pub(crate) fn run<F: Function>(
 
             Location::Reg(rreg) => {
                 // Reconnect with the parent location, by adding a move if needed.
-                match next_use(
-                    mention_map,
-                    intervals,
-                    int_id,
-                    child_start,
-                    reg_uses,
-                    fragments,
-                ) {
+                match next_use(mention_map, intervals, int_id, child_start, reg_uses) {
                     Some(next_use) => {
                         // No need to reload before a new definition.
-                        if next_use.pt == Point::Def {
+                        if next_use.pt() == Point::Def {
                             continue;
                         }
                     }
@@ -108,12 +99,12 @@ pub(crate) fn run<F: Function>(
                 };
 
                 let mut at_inst = child_start;
-                match at_inst.pt {
+                match at_inst.pt() {
                     Point::Use => {
-                        at_inst.pt = Point::Reload;
+                        at_inst.set_pt(Point::Reload);
                     }
                     Point::Def => {
-                        at_inst.pt = Point::Spill;
+                        at_inst.set_pt(Point::Spill);
                     }
                     _ => unreachable!(),
                 }
@@ -146,12 +137,12 @@ pub(crate) fn run<F: Function>(
                 // This interval has been spilled (i.e. split). Spill after the last def
                 // or before the last use.
                 let mut at_inst = parent_end;
-                at_inst.pt = if at_inst.pt == Point::Use {
+                at_inst.set_pt(if at_inst.pt() == Point::Use {
                     Point::Reload
                 } else {
-                    debug_assert!(at_inst.pt == Point::Def);
+                    debug_assert!(at_inst.pt() == Point::Def);
                     Point::Spill
-                };
+                });
 
                 match parent_loc {
                     Location::None => unreachable!(),
@@ -275,11 +266,11 @@ pub(crate) fn run<F: Function>(
                 let (at_inst, block_pos) = if cur_has_one_succ {
                     let mut pos = cur_last_inst;
                     // Before the control flow instruction.
-                    pos.pt = Point::Reload;
+                    pos.set_pt(Point::Reload);
                     (pos, BlockPos::End)
                 } else {
                     let mut pos = succ_first_inst;
-                    pos.pt = Point::Reload;
+                    pos.set_pt(Point::Reload);
                     (pos, BlockPos::Start)
                 };
 

@@ -52,10 +52,33 @@ where
     src.clear();
 }
 
+// A temporary "impedance matching" structure that is necessary because
+// VirtualRange currently contains RangeFrags whilst RealRange still contains
+// RangeFragIxs.  Hopefully this can be removed once RealRange is converted to
+// use RangeFrags, or some better representation.
+#[derive(Clone)]
+pub struct RealRangeUNBOXED {
+    pub rreg: RealReg,
+    pub sorted_frags: SortedRangeFrags,
+}
+impl RealRangeUNBOXED {
+    fn new(rlr: &RealRange, fragments: &Fragments) -> Self {
+        let mut frags = SortedRangeFrags::empty();
+        for fix in &rlr.sorted_frags.frag_ixs {
+            frags.frags.push(fragments[*fix]);
+        }
+        Self {
+            rreg: rlr.rreg,
+            sorted_frags: frags,
+        }
+    }
+}
+
 // Local shorthands.
 type Fragments = TypedIxVec<RangeFragIx, RangeFrag>;
 type VirtualRanges = TypedIxVec<VirtualRangeIx, VirtualRange>;
 type RealRanges = TypedIxVec<RealRangeIx, RealRange>;
+type RealRangesUNBOXED = TypedIxVec<RealRangeIx, RealRangeUNBOXED>;
 type RegUses = RegVecsAndBounds;
 
 /// A unique identifier for an interval.
@@ -218,7 +241,7 @@ impl LiveInterval {
 
 /// A group of live intervals.
 pub(crate) struct Intervals {
-    real_ranges: RealRanges,
+    real_ranges: RealRangesUNBOXED,
     virtual_ranges: VirtualRanges,
     data: Vec<LiveInterval>,
 }
@@ -250,8 +273,8 @@ impl Intervals {
                     }
                     LiveIntervalKind::Virtual(ix) => {
                         let range = &virtual_ranges[ix];
-                        let start = fragments[range.sorted_frags.frag_ixs[0]].first;
-                        let end = fragments[*range.sorted_frags.frag_ixs.last().unwrap()].last;
+                        let start = range.sorted_frags.frags[0].first;
+                        let end = range.sorted_frags.frags.last().unwrap().last;
                         let reg_class = range.vreg.get_class();
                         let location = Location::None;
                         (location, start, end, reg_class)
@@ -272,8 +295,14 @@ impl Intervals {
             })
             .collect();
 
+        let mut real_ranges_unboxed = RealRangesUNBOXED::new();
+        for rlr in real_ranges.iter() {
+            let rlr_unboxed = RealRangeUNBOXED::new(rlr, fragments);
+            real_ranges_unboxed.push(rlr_unboxed);
+        }
+
         Self {
-            real_ranges,
+            real_ranges: real_ranges_unboxed,
             virtual_ranges,
             data,
         }
@@ -286,13 +315,13 @@ impl Intervals {
         &mut self.data[int_id.0]
     }
 
-    fn fragments(&self, int_id: IntId) -> &SmallVec<[RangeFragIx; 4]> {
+    fn fragments(&self, int_id: IntId) -> &SmallVec<[RangeFrag; 4]> {
         match &self.data[int_id.0].kind {
-            LiveIntervalKind::Fixed(r) => &self.real_ranges[*r].sorted_frags.frag_ixs,
-            LiveIntervalKind::Virtual(r) => &self.virtual_ranges[*r].sorted_frags.frag_ixs,
+            LiveIntervalKind::Fixed(r) => &self.real_ranges[*r].sorted_frags.frags,
+            LiveIntervalKind::Virtual(r) => &self.virtual_ranges[*r].sorted_frags.frags,
         }
     }
-    fn fragments_mut(&mut self, int_id: IntId) -> &mut SortedRangeFragIxs {
+    fn fragments_mut(&mut self, int_id: IntId) -> &mut SortedRangeFrags {
         match &mut self.data[int_id.0].kind {
             LiveIntervalKind::Fixed(r) => &mut self.real_ranges[*r].sorted_frags,
             LiveIntervalKind::Virtual(r) => &mut self.virtual_ranges[*r].sorted_frags,
@@ -314,15 +343,14 @@ impl Intervals {
     }
 
     #[inline(never)]
-    fn covers(&self, int_id: IntId, pos: InstPoint, fragments: &Fragments) -> bool {
+    fn covers(&self, int_id: IntId, pos: InstPoint) -> bool {
         // Fragments are sorted by start.
-        let frag_ixs = self.fragments(int_id);
+        let frags = self.fragments(int_id);
 
         // The binary search is useful only after some threshold number of elements;
         // This value has been determined after benchmarking a large program.
-        if frag_ixs.len() <= 4 {
-            for &frag_ix in frag_ixs {
-                let frag = &fragments[frag_ix];
+        if frags.len() <= 4 {
+            for &frag in frags {
                 if frag.first <= pos && pos <= frag.last {
                     return true;
                 }
@@ -330,25 +358,20 @@ impl Intervals {
             return false;
         }
 
-        match frag_ixs.binary_search_by_key(&pos, |&index| fragments[index].first) {
+        match frags.binary_search_by_key(&pos, |&frag| frag.first) {
             // Either we find a precise match...
             Ok(_) => true,
             // ... or we're just after an interval that could contain it.
             Err(index) => {
                 // There's at least one fragment, by construction, so no need to check
                 // against fragments.len().
-                index > 0 && pos <= fragments[frag_ixs[index - 1]].last
+                index > 0 && pos <= frags[index - 1].last
             }
         }
     }
 
     #[inline(never)]
-    fn intersects_with(
-        &self,
-        left_id: IntId,
-        right_id: IntId,
-        fragments: &Fragments,
-    ) -> Option<InstPoint> {
+    fn intersects_with(&self, left_id: IntId, right_id: IntId) -> Option<InstPoint> {
         let left = self.get(left_id);
         let right = self.get(right_id);
 
@@ -365,9 +388,7 @@ impl Intervals {
         let mut right_max_i = right_frags.len() - 1;
 
         if left.end < right.end {
-            right_max_i = match right_frags
-                .binary_search_by_key(&left.end, |&frag_ix| fragments[frag_ix].first)
-            {
+            right_max_i = match right_frags.binary_search_by_key(&left.end, |&frag| frag.first) {
                 Ok(index) => index,
                 Err(index) => {
                     if index == 0 {
@@ -378,9 +399,7 @@ impl Intervals {
                 }
             };
         } else {
-            left_max_i = match left_frags
-                .binary_search_by_key(&right.end, |&frag_ix| fragments[frag_ix].first)
-            {
+            left_max_i = match left_frags.binary_search_by_key(&right.end, |&frag| frag.first) {
                 Ok(index) => index,
                 Err(index) => {
                     if index == 0 {
@@ -392,8 +411,8 @@ impl Intervals {
             };
         }
 
-        let mut left_frag = &fragments[left_frags[left_i]];
-        let mut right_frag = &fragments[right_frags[right_i]];
+        let mut left_frag = &left_frags[left_i];
+        let mut right_frag = &right_frags[right_i];
         loop {
             if left_frag.first == right_frag.first {
                 return Some(left_frag.first);
@@ -404,14 +423,14 @@ impl Intervals {
                 if left_i > left_max_i {
                     break;
                 }
-                left_frag = &fragments[left_frags[left_i]];
+                left_frag = &left_frags[left_i];
             } else if right_frag.last < left_frag.first {
                 // left_frag > right_frag, go to the range following right_frag.
                 right_i += 1;
                 if right_i > right_max_i {
                     break;
                 }
-                right_frag = &fragments[right_frags[right_i]];
+                right_frag = &right_frags[right_i];
             } else {
                 // They intersect!
                 return Some(if left_frag.first < right_frag.first {
@@ -429,7 +448,7 @@ impl Intervals {
         self.data.len()
     }
 
-    fn display(&self, int_id: IntId, fragments: &Fragments) -> String {
+    fn display(&self, int_id: IntId) -> String {
         let int = &self.data[int_id.0];
         let vreg = if int.is_fixed() {
             "fixed".to_string()
@@ -439,10 +458,7 @@ impl Intervals {
         let frag_ixs = &self.fragments(int_id);
         let fragments = frag_ixs
             .iter()
-            .map(|&ix| {
-                let frag = fragments[ix];
-                (ix, frag.first, frag.last)
-            })
+            .map(|&frag| (frag, frag.first, frag.last))
             .collect::<Vec<_>>();
         format!(
             "{:?}{}: {} {} {:?}",
@@ -495,32 +511,27 @@ fn next_use(
     id: IntId,
     pos: InstPoint,
     _reg_uses: &RegUses,
-    fragments: &Fragments,
 ) -> Option<InstPoint> {
     if log_enabled!(Level::Trace) {
-        trace!(
-            "find next use of {} after {:?}",
-            intervals.display(id, fragments),
-            pos
-        );
+        trace!("find next use of {} after {:?}", intervals.display(id), pos);
     }
 
     let mentions = &mentions[&intervals.reg(id)];
 
     let target = InstPoint::max(pos, intervals.get(id).start);
 
-    let ret = match mentions.binary_search_by_key(&target.iix, |mention| mention.0) {
+    let ret = match mentions.binary_search_by_key(&target.iix(), |mention| mention.0) {
         Ok(index) => {
             // Either the selected index is a perfect match, or the next mention is
             // the correct answer.
             let mention = &mentions[index];
-            if target.pt == Point::Use {
+            if target.pt() == Point::Use {
                 if mention.1.is_use_or_mod() {
                     Some(InstPoint::new_use(mention.0))
                 } else {
                     Some(InstPoint::new_def(mention.0))
                 }
-            } else if target.pt == Point::Def && mention.1.is_mod_or_def() {
+            } else if target.pt() == Point::Def && mention.1.is_mod_or_def() {
                 Some(target)
             } else if index == mentions.len() - 1 {
                 None
@@ -562,7 +573,7 @@ fn next_use(
     };
 
     #[cfg(debug_assertions)]
-    debug_assert_eq!(ref_next_use(intervals, id, pos, _reg_uses, fragments), ret);
+    debug_assert_eq!(ref_next_use(intervals, id, pos, _reg_uses), ret);
 
     ret
 }
@@ -573,7 +584,6 @@ fn ref_next_use(
     id: IntId,
     pos: InstPoint,
     reg_uses: &RegUses,
-    fragments: &Fragments,
 ) -> Option<InstPoint> {
     let int = intervals.get(id);
     if int.end < pos {
@@ -586,13 +596,12 @@ fn ref_next_use(
         intervals.vreg(id).to_reg()
     };
 
-    for &frag_id in intervals.fragments(id) {
-        let frag = &fragments[frag_id];
+    for &frag in intervals.fragments(id) {
         if frag.last < pos {
             continue;
         }
-        for inst_id in frag.first.iix.dotdot(frag.last.iix.plus_n(1)) {
-            if inst_id < pos.iix {
+        for inst_id in frag.first.iix().dotdot(frag.last.iix().plus_n(1)) {
+            if inst_id < pos.iix() {
                 continue;
             }
 
@@ -603,7 +612,7 @@ fn ref_next_use(
             if pos <= at_use && frag.contains(&at_use) {
                 if regsets.uses.contains(reg) || regsets.mods.contains(reg) {
                     #[cfg(debug_assertions)]
-                    debug_assert!(intervals.covers(id, at_use, fragments));
+                    debug_assert!(intervals.covers(id, at_use));
                     trace!(
                         "ref next_use: found next use of {:?} after {:?} at {:?}",
                         id,
@@ -618,7 +627,7 @@ fn ref_next_use(
             if pos <= at_def && frag.contains(&at_def) {
                 if regsets.defs.contains(reg) || regsets.mods.contains(reg) {
                     #[cfg(debug_assertions)]
-                    debug_assert!(intervals.covers(id, at_def, fragments));
+                    debug_assert!(intervals.covers(id, at_def));
                     trace!(
                         "ref next_use: found next use of {:?} after {:?} at {:?}",
                         id,
@@ -644,12 +653,11 @@ fn last_use(
     id: IntId,
     pos: InstPoint,
     _reg_uses: &RegUses,
-    fragments: &Fragments,
 ) -> Option<InstPoint> {
     if log_enabled!(Level::Trace) {
         trace!(
             "searching last use of {} before {:?}",
-            intervals.display(id, fragments),
+            intervals.display(id),
             pos,
         );
     }
@@ -658,18 +666,18 @@ fn last_use(
 
     let target = InstPoint::min(pos, intervals.get(id).end);
 
-    let ret = match mentions.binary_search_by_key(&target.iix, |mention| mention.0) {
+    let ret = match mentions.binary_search_by_key(&target.iix(), |mention| mention.0) {
         Ok(index) => {
             // Either the selected index is a perfect match, or the previous mention
             // is the correct answer.
             let mention = &mentions[index];
-            if target.pt == Point::Def {
+            if target.pt() == Point::Def {
                 if mention.1.is_mod_or_def() {
                     Some(InstPoint::new_def(mention.0))
                 } else {
                     Some(InstPoint::new_use(mention.0))
                 }
-            } else if target.pt == Point::Use && mention.1.is_use() {
+            } else if target.pt() == Point::Use && mention.1.is_use() {
                 Some(target)
             } else if index == 0 {
                 None
@@ -714,7 +722,7 @@ fn last_use(
     trace!("new algo: {:?}", ret);
 
     #[cfg(debug_assertions)]
-    debug_assert_eq!(ref_last_use(intervals, id, pos, _reg_uses, fragments), ret);
+    debug_assert_eq!(ref_last_use(intervals, id, pos, _reg_uses), ret);
 
     ret
 }
@@ -726,21 +734,19 @@ fn ref_last_use(
     id: IntId,
     pos: InstPoint,
     reg_uses: &RegUses,
-    fragments: &Fragments,
 ) -> Option<InstPoint> {
     let int = intervals.get(id);
     debug_assert!(int.start <= pos);
 
     let reg = intervals.vreg(id).to_reg();
 
-    for &i in intervals.fragments(id).iter().rev() {
-        let frag = fragments[i];
+    for &frag in intervals.fragments(id).iter().rev() {
         if frag.first > pos {
             continue;
         }
 
-        let mut inst = frag.last.iix;
-        while inst >= frag.first.iix {
+        let mut inst = frag.last.iix();
+        while inst >= frag.first.iix() {
             let regsets = &reg_uses.get_reg_sets_for_iix(inst);
             debug_assert!(regsets.is_sanitized());
 
@@ -748,10 +754,7 @@ fn ref_last_use(
             if at_def <= pos && at_def <= frag.last {
                 if regsets.defs.contains(reg) || regsets.mods.contains(reg) {
                     #[cfg(debug_assertions)]
-                    debug_assert!(
-                        intervals.covers(id, at_def, fragments),
-                        "last use must be in interval"
-                    );
+                    debug_assert!(intervals.covers(id, at_def), "last use must be in interval");
                     trace!(
                         "last use of {:?} before {:?} found at {:?}",
                         id,
@@ -766,10 +769,7 @@ fn ref_last_use(
             if at_use <= pos && at_use <= frag.last {
                 if regsets.uses.contains(reg) || regsets.mods.contains(reg) {
                     #[cfg(debug_assertions)]
-                    debug_assert!(
-                        intervals.covers(id, at_use, fragments),
-                        "last use must be in interval"
-                    );
+                    debug_assert!(intervals.covers(id, at_use), "last use must be in interval");
                     trace!(
                         "last use of {:?} before {:?} found at {:?}",
                         id,
@@ -791,6 +791,22 @@ fn ref_last_use(
 }
 
 fn try_compress_ranges(rlrs: &mut RealRanges, vlrs: &mut VirtualRanges, fragments: &mut Fragments) {
+    // This is the same as `compress` just below, but acting on a SmallVec of
+    // RangeFrag, not of RangeFragIx.
+    fn compress_no_indirect(frags: &mut SmallVec<[RangeFrag; 4]>) {
+        if frags.len() == 1 {
+            return;
+        }
+
+        let last_frag_end = frags.last().unwrap().last;
+        let first_frag = &mut frags[0];
+
+        let new_range = RangeFrag::new(first_frag.first, last_frag_end);
+
+        frags.clear();
+        frags.push(new_range);
+    }
+    #[allow(dead_code)]
     fn compress(frag_ixs: &mut SmallVec<[RangeFragIx; 4]>, fragments: &mut Fragments) {
         if frag_ixs.len() == 1 {
             return;
@@ -811,9 +827,9 @@ fn try_compress_ranges(rlrs: &mut RealRanges, vlrs: &mut VirtualRanges, fragment
         //while i > 0 {
         //let cur_frag = &fragments[frag_ixs[i]];
         //let prev_frag = &fragments[frag_ixs[i - 1]];
-        //if prev_frag.last.iix.get() + 1 == cur_frag.first.iix.get()
-        //&& prev_frag.last.pt == Point::Def
-        //&& cur_frag.first.pt == Point::Use
+        //if prev_frag.last.iix().get() + 1 == cur_frag.first.iix().get()
+        //&& prev_frag.last.pt() == Point::Def
+        //&& cur_frag.first.pt() == Point::Use
         //{
         //let (new_range, new_range_metrics) = RangeFrag::new_multi_block(
         //func,
@@ -844,19 +860,20 @@ fn try_compress_ranges(rlrs: &mut RealRanges, vlrs: &mut VirtualRanges, fragment
     let mut by_vreg: HashMap<VirtualReg, VirtualRange> = HashMap::default();
 
     for vlr in vlrs.iter_mut() {
-        if let Some(vrange) = by_vreg.get(&vlr.vreg) {
-            let vlr_start = fragments[vlr.sorted_frags.frag_ixs[0]].first;
-            let vlr_last = fragments[*vlr.sorted_frags.frag_ixs.last().unwrap()].last;
-            let common_frags = &vrange.sorted_frags.frag_ixs;
-            if vlr_start < fragments[common_frags[0]].first {
-                fragments[vrange.sorted_frags.frag_ixs[0]].first = vlr_start;
+        if let Some(vrange) = by_vreg.get_mut(&vlr.vreg) {
+            let vlr_start = vlr.sorted_frags.frags[0].first;
+            let vlr_last = vlr.sorted_frags.frags.last().unwrap().last;
+            if vlr_start < vrange.sorted_frags.frags[0].first {
+                vrange.sorted_frags.frags[0].first = vlr_start;
             }
-            if vlr_last > fragments[*common_frags.last().unwrap()].last {
-                fragments[*common_frags.last().unwrap()].last = vlr_last;
+            let n = vrange.sorted_frags.frags.len();
+            assert!(n > 0);
+            if vlr_last > vrange.sorted_frags.frags[n - 1].last {
+                vrange.sorted_frags.frags[n - 1].last = vlr_last;
             }
         } else {
             // First time we see this vreg, compress and insert it.
-            compress(&mut vlr.sorted_frags.frag_ixs, fragments);
+            compress_no_indirect(&mut vlr.sorted_frags.frags);
             // TODO try to avoid the clone?
             by_vreg.insert(vlr.vreg, vlr.clone());
         }
@@ -937,6 +954,9 @@ pub(crate) fn run<F: Function>(
         scratches_by_rc
     };
 
+    // The VirtualRanges we have here are compressed conservatively (only
+    // across block boundaries, but not inside blocks).  The RealRanges are
+    // not compressed at all.
     try_compress_ranges(&mut rlrs, &mut vlrs, &mut fragments);
 
     let intervals = Intervals::new(rlrs, vlrs, &fragments);
@@ -944,19 +964,13 @@ pub(crate) fn run<F: Function>(
     if log_enabled!(Level::Trace) {
         trace!("unassigned intervals:");
         for int in &intervals.data {
-            trace!("{}", intervals.display(int.id, &fragments));
+            trace!("{}", intervals.display(int.id));
         }
         trace!("");
     }
 
-    let (mention_map, fragments, intervals, mut num_spill_slots) = assign_registers::run(
-        func,
-        &reg_uses,
-        reg_universe,
-        &scratches_by_rc,
-        intervals,
-        fragments,
-    )?;
+    let (mention_map, intervals, mut num_spill_slots) =
+        assign_registers::run(func, &reg_uses, reg_universe, &scratches_by_rc, intervals)?;
 
     // Filter fixed intervals, they're already in the right place.
     let mut virtual_intervals = intervals
@@ -982,7 +996,7 @@ pub(crate) fn run<F: Function>(
     if log_enabled!(Level::Debug) {
         debug!("allocation results (by vreg)");
         for &int_id in &virtual_intervals {
-            debug!("{}", intervals.display(int_id, &fragments));
+            debug!("{}", intervals.display(int_id));
         }
         debug!("");
     }
@@ -993,7 +1007,6 @@ pub(crate) fn run<F: Function>(
         &mention_map,
         &intervals,
         &virtual_intervals,
-        &fragments,
         &liveouts,
         &mut num_spill_slots,
         &scratches_by_rc,
@@ -1003,7 +1016,6 @@ pub(crate) fn run<F: Function>(
         func,
         &intervals,
         virtual_intervals,
-        &fragments,
         memory_moves,
         reg_universe,
         num_spill_slots,
@@ -1017,7 +1029,6 @@ fn apply_registers<F: Function>(
     func: &mut F,
     intervals: &Intervals,
     virtual_intervals: Vec<IntId>,
-    fragments: &Fragments,
     memory_moves: Vec<InstToInsertAndPoint>,
     reg_universe: &RealRegUniverse,
     num_spill_slots: u32,
@@ -1025,14 +1036,13 @@ fn apply_registers<F: Function>(
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     info!("apply_registers");
 
-    let mut frag_map = Vec::<(RangeFragIx, VirtualReg, RealReg)>::new();
+    let mut frag_map = Vec::<(RangeFrag, VirtualReg, RealReg)>::new();
     for int_id in virtual_intervals {
         if let Some(rreg) = intervals.get(int_id).location.reg() {
             let vreg = intervals.vreg(int_id);
-            for &range_ix in intervals.fragments(int_id) {
-                let range = &fragments[range_ix];
+            for &range in intervals.fragments(int_id) {
                 trace!("in {:?}, {:?} lives in {:?}", range, vreg, rreg);
-                frag_map.push((range_ix, vreg, rreg));
+                frag_map.push((range, vreg, rreg));
             }
         }
     }
@@ -1044,7 +1054,6 @@ fn apply_registers<F: Function>(
         memory_moves,
         &vec![],
         frag_map,
-        fragments,
         reg_universe,
         use_checker,
     )?;

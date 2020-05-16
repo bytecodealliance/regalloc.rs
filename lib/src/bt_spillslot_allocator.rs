@@ -4,12 +4,11 @@
 //! Allocation of spill slots for the backtracking allocator.
 
 use log::debug;
-use std::cmp::Ordering;
 
 use crate::avl_tree::{AVLTree, AVL_NULL};
 use crate::data_structures::{
-    cmp_range_frags, RangeFrag, RangeFragIx, SortedRangeFragIxs, SpillSlot, TypedIxVec,
-    VirtualRange, VirtualRangeIx,
+    cmp_range_frags, RangeFrag, SortedRangeFrags, SpillSlot, TypedIxVec, VirtualRange,
+    VirtualRangeIx,
 };
 use crate::union_find::UnionFindEquivClasses;
 use crate::Function;
@@ -32,10 +31,7 @@ enum LogicalSpillSlot {
     // `SpillSlotAllocator::slots`, the next `size` - 1 entries must be
     // `Unavail`.  This is a hard invariant, violation of which will cause
     // overlapping spill slots and potential chaos.
-    InUse {
-        size: u32,
-        tree: AVLTree<RangeFragIx>,
-    },
+    InUse { size: u32, tree: AVLTree<RangeFrag> },
     // This slot is unavailable, as described above.  It's unavailable because
     // it holds some part of the values associated with the nearest lower
     // numbered entry which isn't `Unavail`, and that entry must be an `InUse`
@@ -52,13 +48,13 @@ impl LogicalSpillSlot {
     fn is_InUse(&self) -> bool {
         !self.is_Unavail()
     }
-    fn get_tree(&self) -> &AVLTree<RangeFragIx> {
+    fn get_tree(&self) -> &AVLTree<RangeFrag> {
         match self {
             LogicalSpillSlot::InUse { ref tree, .. } => tree,
             LogicalSpillSlot::Unavail => panic!("LogicalSpillSlot::get_tree"),
         }
     }
-    fn get_mut_tree(&mut self) -> &mut AVLTree<RangeFragIx> {
+    fn get_mut_tree(&mut self) -> &mut AVLTree<RangeFrag> {
         match self {
             LogicalSpillSlot::InUse { ref mut tree, .. } => tree,
             LogicalSpillSlot::Unavail => panic!("LogicalSpillSlot::get_mut_tree"),
@@ -73,16 +69,6 @@ impl LogicalSpillSlot {
 }
 
 // HELPER FUNCTION
-// The custom comparator
-fn cmp_tree_entries_for_SpillSlotAllocator(
-    fix1: RangeFragIx,
-    fix2: RangeFragIx,
-    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-) -> Option<Ordering> {
-    cmp_range_frags(&frag_env[fix1], &frag_env[fix2])
-}
-
-// HELPER FUNCTION
 // Find out whether it is possible to add all of `frags` to `tree`.  Returns
 // true if possible, false if not.  This routine relies on the fact that
 // SortedFrags is non-overlapping.  However, this is a bit subtle.  We know
@@ -90,20 +76,14 @@ fn cmp_tree_entries_for_SpillSlotAllocator(
 // no guarantee that elements of `frags` don't overlap `tree`.  Hence we have
 // to do a custom walk of `tree` to check for overlap; we can't just use
 // `AVLTree::contains`.
-fn ssal_is_add_possible(
-    tree: &AVLTree<RangeFragIx>,
-    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-    frags: &SortedRangeFragIxs,
-) -> bool {
+fn ssal_is_add_possible(tree: &AVLTree<RangeFrag>, frags: &SortedRangeFrags) -> bool {
     // Figure out whether all the frags will go in.
-    for fix in &frags.frag_ixs {
-        // BEGIN check `fix` for any overlap against `tree`.
-        let frag = &frag_env[*fix];
+    for frag in &frags.frags {
+        // BEGIN check `frag` for any overlap against `tree`.
         let mut root = tree.root;
         while root != AVL_NULL {
             let root_node = &tree.pool[root as usize];
-            let root_fix = root_node.item;
-            let root_frag = &frag_env[root_fix];
+            let root_frag = root_node.item;
             if frag.last < root_frag.first {
                 // `frag` is entirely to the left of the `root`.  So there's no
                 // overlap with root.  Continue by inspecting the left subtree.
@@ -116,8 +96,8 @@ fn ssal_is_add_possible(
                 return false;
             }
         }
-        // END check `fix` for any overlap against `tree`.
-        // `fix` doesn't overlap.  Move on to the next one.
+        // END check `frag` for any overlap against `tree`.
+        // `frag` doesn't overlap.  Move on to the next one.
     }
     true
 }
@@ -127,21 +107,14 @@ fn ssal_is_add_possible(
 // not possible.  If `false` is returned, `tree` is unchanged (this is
 // important).  This routine relies on the fact that SortedFrags is
 // non-overlapping.
-fn ssal_add_if_possible(
-    tree: &mut AVLTree<RangeFragIx>,
-    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-    frags: &SortedRangeFragIxs,
-) -> bool {
+fn ssal_add_if_possible(tree: &mut AVLTree<RangeFrag>, frags: &SortedRangeFrags) -> bool {
     // Check if all the frags will go in.
-    if !ssal_is_add_possible(tree, frag_env, frags) {
+    if !ssal_is_add_possible(tree, frags) {
         return false;
     }
     // They will.  So now insert them.
-    for fix in &frags.frag_ixs {
-        let inserted = tree.insert(
-            *fix,
-            Some(&|fix1, fix2| cmp_tree_entries_for_SpillSlotAllocator(fix1, fix2, frag_env)),
-        );
+    for frag in &frags.frags {
+        let inserted = tree.insert(*frag, Some(&|frag1, frag2| cmp_range_frags(&frag1, &frag2)));
         // This can't fail
         assert!(inserted);
     }
@@ -175,8 +148,8 @@ impl SpillSlotAllocator {
             self.slots.push(LogicalSpillSlot::Unavail);
         }
         // And now the new slot.
-        let dflt = RangeFragIx::invalid_value();
-        let tree = AVLTree::<RangeFragIx>::new(dflt);
+        let dflt = RangeFrag::invalid_value();
+        let tree = AVLTree::<RangeFrag>::new(dflt);
         let res = self.slots.len() as u32;
         self.slots.push(LogicalSpillSlot::InUse {
             size: req_size,
@@ -206,7 +179,6 @@ impl SpillSlotAllocator {
         &mut self,
         vlr_slot_env: &mut TypedIxVec<VirtualRangeIx, Option<SpillSlot>>,
         func: &F,
-        frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
         vlrEquivClasses: &UnionFindEquivClasses<VirtualRangeIx>,
         vlrix: VirtualRangeIx,
@@ -263,7 +235,7 @@ impl SpillSlotAllocator {
             let mut all_cands_fit_individually = true;
             for cand_vlrix in vlrEquivClasses.equiv_class_elems_iter(vlrix) {
                 let cand_vlr = &vlr_env[cand_vlrix];
-                let this_cand_fits = ssal_is_add_possible(&tree, &frag_env, &cand_vlr.sorted_frags);
+                let this_cand_fits = ssal_is_add_possible(&tree, &cand_vlr.sorted_frags);
                 if !this_cand_fits {
                     all_cands_fit_individually = false;
                     break;
@@ -296,7 +268,7 @@ impl SpillSlotAllocator {
         'pass2_per_equiv_class: for cand_vlrix in vlrEquivClasses.equiv_class_elems_iter(vlrix) {
             let cand_vlr = &vlr_env[cand_vlrix];
             let mut tree = self.slots[chosen_slotno as usize].get_mut_tree();
-            let added = ssal_add_if_possible(&mut tree, &frag_env, &cand_vlr.sorted_frags);
+            let added = ssal_add_if_possible(&mut tree, &cand_vlr.sorted_frags);
             if added {
                 vlr_slot_env[cand_vlrix] = Some(SpillSlot::new(chosen_slotno));
                 continue 'pass2_per_equiv_class;
@@ -315,7 +287,7 @@ impl SpillSlotAllocator {
                     continue;
                 }
                 let mut tree = self.slots[alt_slotno as usize].get_mut_tree();
-                let added = ssal_add_if_possible(&mut tree, &frag_env, &cand_vlr.sorted_frags);
+                let added = ssal_add_if_possible(&mut tree, &cand_vlr.sorted_frags);
                 if added {
                     vlr_slot_env[cand_vlrix] = Some(SpillSlot::new(alt_slotno));
                     continue 'pass2_per_equiv_class;
@@ -326,7 +298,7 @@ impl SpillSlotAllocator {
             _all_in_chosen = false;
             let new_slotno = self.add_new_slot(req_size);
             let mut tree = self.slots[new_slotno as usize].get_mut_tree();
-            let added = ssal_add_if_possible(&mut tree, &frag_env, &cand_vlr.sorted_frags);
+            let added = ssal_add_if_possible(&mut tree, &cand_vlr.sorted_frags);
             if added {
                 vlr_slot_env[cand_vlrix] = Some(SpillSlot::new(new_slotno));
                 continue 'pass2_per_equiv_class;

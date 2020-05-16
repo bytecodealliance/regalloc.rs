@@ -638,40 +638,34 @@ impl RegClass {
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Reg {
-    do_not_access_this_directly: u32,
+    bits: u32,
 }
 
 static INVALID_REG: u32 = 0xffffffff;
 
 impl Reg {
     pub fn is_virtual(self) -> bool {
-        self.is_valid() && (self.do_not_access_this_directly & 0x8000_0000) != 0
+        self.is_valid() && (self.bits & 0x8000_0000) != 0
     }
     pub fn is_real(self) -> bool {
         self.is_valid() && !self.is_virtual()
     }
     pub fn new_real(rc: RegClass, enc: u8, index: u8) -> Self {
         let n = (0 << 31) | (rc.rc_to_u32() << 28) | ((enc as u32) << 8) | ((index as u32) << 0);
-        Reg {
-            do_not_access_this_directly: n,
-        }
+        Reg { bits: n }
     }
     pub fn new_virtual(rc: RegClass, index: u32) -> Self {
         if index >= (1 << 28) {
             panic!("new_virtual(): index too large");
         }
         let n = (1 << 31) | (rc.rc_to_u32() << 28) | (index << 0);
-        Reg {
-            do_not_access_this_directly: n,
-        }
+        Reg { bits: n }
     }
     pub fn invalid() -> Reg {
-        Reg {
-            do_not_access_this_directly: INVALID_REG,
-        }
+        Reg { bits: INVALID_REG }
     }
     pub fn is_invalid(self) -> bool {
-        self.do_not_access_this_directly == INVALID_REG
+        self.bits == INVALID_REG
     }
     pub fn is_valid(self) -> bool {
         !self.is_invalid()
@@ -684,16 +678,16 @@ impl Reg {
     }
     pub fn get_class(self) -> RegClass {
         debug_assert!(self.is_valid());
-        RegClass::rc_from_u32((self.do_not_access_this_directly >> 28) & 0x7)
+        RegClass::rc_from_u32((self.bits >> 28) & 0x7)
     }
     pub fn get_index(self) -> usize {
         debug_assert!(self.is_valid());
         // Return type is usize because typically we will want to use the
         // result for indexing into a Vec
         if self.is_virtual() {
-            (self.do_not_access_this_directly & ((1 << 28) - 1)) as usize
+            (self.bits & ((1 << 28) - 1)) as usize
         } else {
-            (self.do_not_access_this_directly & ((1 << 8) - 1)) as usize
+            (self.bits & ((1 << 8) - 1)) as usize
         }
     }
     pub fn get_hw_encoding(self) -> u8 {
@@ -701,7 +695,7 @@ impl Reg {
         if self.is_virtual() {
             panic!("Virtual register does not have a hardware encoding")
         } else {
-            ((self.do_not_access_this_directly >> 8) & ((1 << 8) - 1)) as u8
+            ((self.bits >> 8) & ((1 << 8) - 1)) as u8
         }
     }
     pub fn as_virtual_reg(self) -> Option<VirtualReg> {
@@ -1546,19 +1540,14 @@ impl RealRegUniverse {
 // * A spill for instruction i is considered to be live from i.D to i.S.
 
 pub enum Point {
-    Reload,
-    Use,
-    Def,
-    Spill,
+    // The values here are important.  Don't change them.
+    Reload = 0,
+    Use = 1,
+    Def = 2,
+    Spill = 3,
 }
 
 impl Point {
-    pub fn min_value() -> Self {
-        Self::Reload
-    }
-    pub fn max_value() -> Self {
-        Self::Spill
-    }
     pub fn is_reload(self) -> bool {
         match self {
             Point::Reload => true,
@@ -1592,93 +1581,100 @@ impl PartialOrd for Point {
     // In short .. R < U < D < S.  This is probably what would be #derive'd
     // anyway, but we need to be sure.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // This is a bit idiotic, but hey .. hopefully LLVM can turn it into a
-        // no-op.
-        fn convert(pt: &Point) -> u32 {
-            match pt {
-                Point::Reload => 0,
-                Point::Use => 1,
-                Point::Def => 2,
-                Point::Spill => 3,
-            }
-        }
-        convert(self).partial_cmp(&convert(other))
+        (*self as u32).partial_cmp(&(*other as u32))
     }
 }
 
 // See comments below on `RangeFrag` for the meaning of `InstPoint`.
-#[derive(Copy, Clone, Hash, PartialEq, Eq, Ord)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InstPoint {
-    pub iix: InstIx,
-    pub pt: Point,
+    /// This is conceptually:
+    ///   pub iix: InstIx,
+    ///   pub pt: Point,
+    ///
+    /// but packed into a single 32 bit word, so as
+    /// (1) to ensure it is only 32 bits (and hence to guarantee that `RangeFrag`
+    ///     is 64 bits), and
+    /// (2) to make it possible to implement `PartialOrd` using `PartialOrd`
+    ///     directly on 32 bit words (and hence we let it be derived).
+    ///
+    /// This has the format:
+    ///    InstIx as bits 31:2,  Point as bits 1:0.
+    ///
+    /// It does give the slight limitation that all InstIxs must be < 2^30, but
+    /// that's hardly a big deal: the analysis module rejects any input with 2^24
+    /// or more Insns.
+    ///
+    /// Do not access this directly:
+    bits: u32,
 }
 
 impl InstPoint {
     #[inline(always)]
     pub fn new(iix: InstIx, pt: Point) -> Self {
-        InstPoint { iix, pt }
+        let iix_n = iix.get();
+        assert!(iix_n < 0x4000_0000u32);
+        let pt_n = pt as u32;
+        InstPoint {
+            bits: (iix_n << 2) | pt_n,
+        }
+    }
+    #[inline(always)]
+    pub fn iix(self) -> InstIx {
+        InstIx::new(self.bits >> 2)
+    }
+    #[inline(always)]
+    pub fn pt(self) -> Point {
+        match self.bits & 3 {
+            0 => Point::Reload,
+            1 => Point::Use,
+            2 => Point::Def,
+            3 => Point::Spill,
+            // This can never happen, but rustc doesn't seem to know that.
+            _ => panic!("InstPt::pt: unreachable case"),
+        }
+    }
+    #[inline(always)]
+    pub fn set_iix(&mut self, iix: InstIx) {
+        let iix_n = iix.get();
+        assert!(iix_n < 0x4000_0000u32);
+        self.bits = (iix_n << 2) | (self.bits & 3);
+    }
+    #[inline(always)]
+    pub fn set_pt(&mut self, pt: Point) {
+        self.bits = (self.bits & 0xFFFF_FFFCu32) | pt as u32;
     }
     #[inline(always)]
     pub fn new_reload(iix: InstIx) -> Self {
-        InstPoint {
-            iix,
-            pt: Point::Reload,
-        }
+        InstPoint::new(iix, Point::Reload)
     }
     #[inline(always)]
     pub fn new_use(iix: InstIx) -> Self {
-        InstPoint {
-            iix,
-            pt: Point::Use,
-        }
+        InstPoint::new(iix, Point::Use)
     }
     #[inline(always)]
     pub fn new_def(iix: InstIx) -> Self {
-        InstPoint {
-            iix,
-            pt: Point::Def,
-        }
+        InstPoint::new(iix, Point::Def)
     }
     #[inline(always)]
     pub fn new_spill(iix: InstIx) -> Self {
-        InstPoint {
-            iix,
-            pt: Point::Spill,
+        InstPoint::new(iix, Point::Spill)
+    }
+    #[inline(always)]
+    pub fn invalid_value() -> Self {
+        Self {
+            bits: 0xFFFF_FFFFu32,
         }
     }
-    pub fn step(&self) -> Self {
-        match self.pt {
-            Point::Reload => InstPoint::new(self.iix, Point::Use),
-            Point::Use => InstPoint::new(self.iix, Point::Def),
-            Point::Def => InstPoint::new(self.iix, Point::Spill),
-            Point::Spill => InstPoint::new(self.iix.plus(1), Point::Reload),
-        }
-    }
+    #[inline(always)]
     pub fn max_value() -> Self {
         Self {
-            iix: InstIx::max_value(),
-            pt: Point::max_value(),
+            bits: 0xFFFF_FFFFu32,
         }
     }
+    #[inline(always)]
     pub fn min_value() -> Self {
-        Self {
-            iix: InstIx::min_value(),
-            pt: Point::min_value(),
-        }
-    }
-}
-
-impl PartialOrd for InstPoint {
-    // Again .. don't assume anything about the #derive'd version.  These have
-    // to be ordered using `iix` as the primary key and `pt` as the
-    // secondary.
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.iix.partial_cmp(&other.iix) {
-            Some(Ordering::Less) => Some(Ordering::Less),
-            Some(Ordering::Greater) => Some(Ordering::Greater),
-            Some(Ordering::Equal) => self.pt.partial_cmp(&other.pt),
-            None => panic!("InstPoint::partial_cmp: fail #1"),
-        }
+        Self { bits: 0u32 }
     }
 }
 
@@ -1687,8 +1683,8 @@ impl fmt::Debug for InstPoint {
         write!(
             fmt,
             "{:?}{}",
-            self.iix,
-            match self.pt {
+            self.iix(),
+            match self.pt() {
                 Point::Reload => ".r",
                 Point::Use => ".u",
                 Point::Def => ".d",
@@ -1743,6 +1739,13 @@ impl RangeFrag {
         RangeFrag { first, last }
     }
 
+    pub fn invalid_value() -> Self {
+        Self {
+            first: InstPoint::invalid_value(),
+            last: InstPoint::invalid_value(),
+        }
+    }
+
     pub fn new_with_metrics<F: Function>(
         f: &F,
         bix: BlockIx,
@@ -1751,8 +1754,8 @@ impl RangeFrag {
         count: u16,
     ) -> (Self, RangeFragMetrics) {
         debug_assert!(f.block_insns(bix).len() >= 1);
-        debug_assert!(f.block_insns(bix).contains(first.iix));
-        debug_assert!(f.block_insns(bix).contains(last.iix));
+        debug_assert!(f.block_insns(bix).contains(first.iix()));
+        debug_assert!(f.block_insns(bix).contains(last.iix()));
         debug_assert!(first <= last);
         if first == last {
             debug_assert!(count == 1);
@@ -1840,12 +1843,13 @@ impl fmt::Debug for RangeFragKind {
 // * `kind` is another convenience field, indicating how the range is included
 //   within its owning block.
 //
-// The core allocation algorithsm (BT and LSRA) compress ranges (independently) and
-// as a result break the invariant that a `RangeFrag` exists only within a single `Block`.
-// For a `RangeFrag` spanning multiple `Block`s, all three `RangeFragMetric` fields are
-// meaningless.  This is the reason for separating `RangeFrag` and `RangeFragMetrics`
-// -- so that it is possible to merge `RangeFrag`s without being forced to create fake
-// values for the metrics fields.
+// The analysis phase (fn `deref_and_compress_sorted_range_frag_ixs`)
+// compresses ranges and as a result breaks the invariant that a `RangeFrag`
+// exists only within a single `Block`.  For a `RangeFrag` spanning multiple
+// `Block`s, all three `RangeFragMetric` fields are meaningless.  This is the
+// reason for separating `RangeFrag` and `RangeFragMetrics` -- so that it is
+// possible to merge `RangeFrag`s without being forced to create fake values
+// for the metrics fields.
 #[derive(Clone, PartialEq)]
 pub struct RangeFragMetrics {
     pub bix: BlockIx,
@@ -1865,7 +1869,8 @@ impl fmt::Debug for RangeFragMetrics {
 
 //=============================================================================
 // Vectors of RangeFragIxs, sorted so that the associated RangeFrags are in
-// ascending order (per their InstPoint fields).
+// ascending order, per their InstPoint fields.  The associated RangeFrags may
+// not overlap.
 //
 // The "fragment environment" (usually called "frag_env"), to which the
 // RangeFragIxs refer, is not stored here.
@@ -1882,10 +1887,6 @@ impl fmt::Debug for SortedRangeFragIxs {
 }
 
 impl SortedRangeFragIxs {
-    pub fn cmp_debug_only(&self, other: &SortedRangeFragIxs) -> Ordering {
-        self.frag_ixs.cmp(&other.frag_ixs)
-    }
-
     pub fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
         let mut ok = true;
         for i in 1..self.frag_ixs.len() {
@@ -1907,7 +1908,7 @@ impl SortedRangeFragIxs {
                 Some(Ordering::Less) => Ordering::Less,
                 Some(Ordering::Greater) => Ordering::Greater,
                 Some(Ordering::Equal) | None => {
-                    panic!("SortedRangeFragIxs::new: overlapping Frags!")
+                    panic!("SortedRangeFragIxs::sort: overlapping Frags!")
                 }
             }
         });
@@ -1931,6 +1932,37 @@ impl SortedRangeFragIxs {
         res.frag_ixs.push(fix);
         res.check(fenv);
         res
+    }
+}
+
+//=============================================================================
+// Vectors of RangeFrags, sorted so that they are in ascending order, per
+// their InstPoint fields.  The RangeFrags may not overlap.
+
+#[derive(Clone)]
+pub struct SortedRangeFrags {
+    pub frags: SmallVec<[RangeFrag; 4]>,
+}
+
+impl fmt::Debug for SortedRangeFrags {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        self.frags.fmt(fmt)
+    }
+}
+
+impl SortedRangeFrags {
+    pub fn unit(frag: RangeFrag) -> Self {
+        let mut res = SortedRangeFrags {
+            frags: SmallVec::<[RangeFrag; 4]>::new(),
+        };
+        res.frags.push(frag);
+        res
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            frags: SmallVec::<[RangeFrag; 4]>::new(),
+        }
     }
 }
 
@@ -2002,18 +2034,6 @@ impl SpillCost {
             (SpillCost::Finite(c1), SpillCost::Finite(c2)) => c1 < c2,
         }
     }
-    pub fn partial_cmp_debug_only(&self, other: &Self) -> Option<Ordering> {
-        // NB!  This is only for debugging; it serves only to give an arbitrary
-        // structural partial ordering on `SpillCost` so it can participate in
-        // sorting.  The induced ordering should not be used to make any
-        // judgements about spill costs.
-        match (self, other) {
-            (SpillCost::Infinite, SpillCost::Infinite) => Some(Ordering::Equal),
-            (SpillCost::Finite(_), SpillCost::Infinite) => Some(Ordering::Less),
-            (SpillCost::Infinite, SpillCost::Finite(_)) => Some(Ordering::Greater),
-            (SpillCost::Finite(c1), SpillCost::Finite(c2)) => c1.partial_cmp(c2),
-        }
-    }
     pub fn add(&mut self, other: &Self) {
         match (*self, other) {
             (SpillCost::Finite(c1), SpillCost::Finite(c2)) => {
@@ -2035,22 +2055,33 @@ impl SpillCost {
 
 // RealRanges are live ranges for real regs (RealRegs).  VirtualRanges are
 // live ranges for virtual regs (VirtualRegs).  VirtualRanges are the
-// fundamental unit of allocation.  Both RealRange and VirtualRange pair the
-// relevant kind of Reg with a vector of RangeFragIxs in which it is live.
-// The RangeFragIxs are indices into some vector of RangeFrags (a "fragment
-// environment", 'fenv'), which is not specified here.  They are sorted so as
-// to give ascending order to the RangeFrags which they refer to.
+// fundamental unit of allocation.
 //
-// VirtualRanges contain metrics.  Not all are initially filled in:
+// A RealRange pairs a RealReg with a vector of RangeFragIxs in which it is
+// live.  The RangeFragIxs are indices into some vector of RangeFrags (a
+// "fragment environment", 'fenv'), which is not specified here.  They are
+// sorted so as to give ascending order to the RangeFrags which they refer to.
+//
+// A VirtualRange pairs a VirtualReg with a vector of RangeFrags in which it
+// is live.  Same scheme as for a RealRange, except it avoids the overhead of
+// having to indirect into the fragment environment.
+//
+// VirtualRanges also contain metrics:
 //
 // * `size` is the number of instructions in total spanned by the LR.  It must
 //   not be zero.
 //
-// * `spill_cost` is an abstractified measure of the cost of spilling the LR.
-//   The only constraint (w.r.t. correctness) is that normal LRs have a `Some`
-//   value, whilst `None` is reserved for live ranges created for spills and
-//   reloads and interpreted to mean "infinity".  This is needed to guarantee
-//   that allocation can always succeed in the worst case, in which all of the
+// * `total cost` is an abstractified measure of the cost of the LR.  Each
+//   basic block in which the range exists gives a contribution to the `total
+//   cost`, which is the number of times the register is mentioned in this
+//   block, multiplied by the estimated execution frequency for the block.
+//
+// * `spill_cost` is an abstractified measure of the cost of spilling the LR,
+//   and is the `total cost` divided by the `size`. The only constraint
+//   (w.r.t. correctness) is that normal LRs have a `Some` value, whilst
+//   `None` is reserved for live ranges created for spills and reloads and
+//   interpreted to mean "infinity".  This is needed to guarantee that
+//   allocation can always succeed in the worst case, in which all of the
 //   original live ranges of the program are spilled.
 //
 // RealRanges don't carry any metrics info since we are not trying to allocate
@@ -2061,15 +2092,6 @@ impl SpillCost {
 // `reg` at some point inside `sorted_frags`, then you must rename *all*
 // occurrences of `reg` inside `sorted_frags`, since otherwise the program will
 // no longer work.
-//
-// Invariants for RealRange/VirtualRange RangeFrag sets (their `sfrags` fields):
-//
-// * Either `sorted_frags` contains just one RangeFrag, in which case it *must*
-//   be RangeFragKind::Local.
-//
-// * Or `sorted_frags` contains more than one RangeFrag, in which case: at
-//   least one must be RangeFragKind::LiveOut, at least one must be
-//   RangeFragKind::LiveIn, and there may be zero or more RangeFragKind::Thrus.
 
 #[derive(Clone)]
 pub struct RealRange {
@@ -2084,12 +2106,6 @@ impl fmt::Debug for RealRange {
 }
 
 impl RealRange {
-    pub fn cmp_debug_only(&self, other: &RealRange) -> Ordering {
-        match self.rreg.cmp(&other.rreg) {
-            Ordering::Equal => self.sorted_frags.cmp_debug_only(&other.sorted_frags),
-            oth1 => oth1,
-        }
-    }
     pub fn show_with_rru(&self, univ: &RealRegUniverse) -> String {
         format!(
             "(RR: {}, {:?})",
@@ -2109,7 +2125,7 @@ impl RealRange {
 pub struct VirtualRange {
     pub vreg: VirtualReg,
     pub rreg: Option<RealReg>,
-    pub sorted_frags: SortedRangeFragIxs,
+    pub sorted_frags: SortedRangeFrags,
     pub size: u16,
     pub total_cost: u32,
     pub spill_cost: SpillCost, // == total_cost / size
@@ -2126,27 +2142,6 @@ impl fmt::Debug for VirtualRange {
             " sz={}, tc={}, sc={:?}, {:?})",
             self.size, self.total_cost, self.spill_cost, self.sorted_frags
         )
-    }
-}
-
-impl VirtualRange {
-    pub fn cmp_debug_only(&self, other: &VirtualRange) -> Ordering {
-        match self.vreg.cmp(&other.vreg) {
-            Ordering::Equal => match self.rreg.cmp(&other.rreg) {
-                Ordering::Equal => match self.sorted_frags.cmp_debug_only(&other.sorted_frags) {
-                    Ordering::Equal => match self.size.cmp(&other.size) {
-                        Ordering::Equal => self
-                            .spill_cost
-                            .partial_cmp_debug_only(&other.spill_cost)
-                            .unwrap(),
-                        oth4 => oth4,
-                    },
-                    oth3 => oth3,
-                },
-                oth2 => oth2,
-            },
-            oth1 => oth1,
-        }
     }
 }
 

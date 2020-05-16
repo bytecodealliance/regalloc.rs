@@ -2,24 +2,19 @@
 
 use log::{debug, info, log_enabled, Level};
 use smallvec::SmallVec;
+use std::cmp::min;
 use std::fmt;
 
 use crate::analysis_control_flow::CFGInfo;
 use crate::data_structures::{
-    BlockIx, InstIx, InstPoint, Map, Queue, RangeFrag, RangeFragIx, RangeFragKind,
+    BlockIx, InstIx, InstPoint, Map, Point, Queue, RangeFrag, RangeFragIx, RangeFragKind,
     RangeFragMetrics, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg, RegSets,
-    RegUsageCollector, RegVecBounds, RegVecs, RegVecsAndBounds, Set, SortedRangeFragIxs, SpillCost,
-    TypedIxVec, VirtualRange, VirtualRangeIx,
+    RegUsageCollector, RegVecBounds, RegVecs, RegVecsAndBounds, SortedRangeFragIxs,
+    SortedRangeFrags, SpillCost, TypedIxVec, VirtualRange, VirtualRangeIx,
 };
 use crate::sparse_set::SparseSet;
 use crate::union_find::{ToFromU32, UnionFind};
 use crate::Function;
-
-//=============================================================================
-// Debugging config.  Set all these to `false` for normal operation.
-
-// DEBUGGING: set to true to cross-check the merge_range_frags machinery.
-const CROSSCHECK_MERGE: bool = false;
 
 //===========================================================================//
 //                                                                           //
@@ -763,16 +758,19 @@ pub fn calc_livein_and_liveout<F: Function>(
 }
 
 //=============================================================================
-// Computation of RangeFrags (Live Range Fragments)
+// Computation of RangeFrags (Live Range Fragments), aggregated per register.
+// This does not produce complete live ranges.  That is done later, by
+// `merge_range_frags` below, using the information computed in this section
+// by `get_range_frags`.
 
 // This is surprisingly complex, in part because of the need to correctly
 // handle (1) live-in and live-out Regs, (2) dead writes, and (3) instructions
 // that modify registers rather than merely reading or writing them.
 
-// Calculate all the RangeFrags for `bix`.  Add them to `out_frags` and add to
-// `out_map`, the associated RangeFragIxs, segregated by Reg.  `bix`, `livein`,
-// `liveout` and `rvb` are expected to be valid in the context of the Func `f`
-// (duh!)
+// Calculate all the RangeFrags for `bix`.  Add them to `out_frags` and
+// corresponding metrics data to `out_frag_metrics`.  Add to `out_map`, the
+// associated RangeFragIxs, segregated by Reg.  `bix`, `livein`, `liveout` and
+// `rvb` are expected to be valid in the context of the Func `f` (duh!)
 #[inline(never)]
 fn get_range_frags_for_block<F: Function>(
     func: &F,
@@ -1110,199 +1108,202 @@ pub fn get_range_frags<F: Function>(
 }
 
 //=============================================================================
-// Merging of RangeFrags, producing the final LRs, minus metrics
-// (SLOW reference implementation)
-
-#[inline(never)]
-fn merge_range_frags_slow(
-    frag_ix_vec_per_reg: &Map<Reg, Vec<RangeFragIx>>,
-    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-    frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
-    cfg_info: &CFGInfo,
-) -> (
-    TypedIxVec<RealRangeIx, RealRange>,
-    TypedIxVec<VirtualRangeIx, VirtualRange>,
-) {
-    assert!(frag_env.len() == frag_metrics_env.len());
-    let mut n_total_incoming_frags = 0;
-    for (_reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
-        n_total_incoming_frags += all_frag_ixs_for_reg.len();
-    }
-    info!("      merge_range_frags_slow: begin");
-    info!("        in: {} in frag_env", frag_env.len());
-    info!(
-        "        in: {} regs containing in total {} frags",
-        frag_ix_vec_per_reg.len(),
-        n_total_incoming_frags
-    );
-
-    let mut result_real = TypedIxVec::<RealRangeIx, RealRange>::new();
-    let mut result_virtual = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
-    for (reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
-        let n_for_this_reg = all_frag_ixs_for_reg.len();
-        assert!(n_for_this_reg > 0);
-
-        // BEGIN merge `all_frag_ixs_for_reg` entries as much as possible.
-        // Each `state` entry has four components:
-        //    (1) An is-this-entry-still-valid flag
-        //    (2) A set of RangeFragIxs.  These should refer to disjoint
-        //        RangeFrags.
-        //    (3) A set of blocks, which are those corresponding to (2)
-        //        that are LiveIn or Thru (== have an inbound value)
-        //    (4) A set of blocks, which are the union of the successors of
-        //        blocks corresponding to the (2) which are LiveOut or Thru
-        //        (== have an outbound value)
-        struct MergeGroup {
-            valid: bool,
-            frag_ixs: Set<RangeFragIx>,
-            live_in_blocks: Set<BlockIx>,
-            succs_of_live_out_blocks: Set<BlockIx>,
-        }
-
-        let mut state = Vec::<MergeGroup>::new();
-
-        // Create the initial state by giving each RangeFragIx its own Vec, and
-        // tagging it with its interface blocks.
-        for fix in all_frag_ixs_for_reg {
-            let mut live_in_blocks = Set::<BlockIx>::empty();
-            let mut succs_of_live_out_blocks = Set::<BlockIx>::empty();
-            let frag_metrics = &frag_metrics_env[*fix];
-            let frag_bix = frag_metrics.bix;
-            let frag_succ_bixes = &cfg_info.succ_map[frag_bix];
-            match frag_metrics.kind {
-                RangeFragKind::Local => {}
-                RangeFragKind::LiveIn => {
-                    live_in_blocks.insert(frag_bix);
-                }
-                RangeFragKind::LiveOut => {
-                    for bix in frag_succ_bixes.iter() {
-                        succs_of_live_out_blocks.insert(*bix);
-                    }
-                    //succs_of_live_out_blocks.union(frag_succ_bixes);
-                }
-                RangeFragKind::Thru => {
-                    live_in_blocks.insert(frag_bix);
-                    for bix in frag_succ_bixes.iter() {
-                        succs_of_live_out_blocks.insert(*bix);
-                    }
-                    //succs_of_live_out_blocks.union(frag_succ_bixes);
-                }
-            }
-
-            let valid = true;
-            let frag_ixs = Set::unit(*fix);
-            let mg = MergeGroup {
-                valid,
-                frag_ixs,
-                live_in_blocks,
-                succs_of_live_out_blocks,
-            };
-            state.push(mg);
-        }
-
-        // Iterate over `state`, merging entries as much as possible.  This
-        // is, unfortunately, quadratic.
-        let state_len = state.len();
-        loop {
-            let mut changed = false;
-
-            for i in 0..state_len {
-                if !state[i].valid {
-                    continue;
-                }
-                for j in i + 1..state_len {
-                    if !state[j].valid {
-                        continue;
-                    }
-                    let do_merge = // frag group i feeds a value to group j
-                        state[i].succs_of_live_out_blocks
-                                .intersects(&state[j].live_in_blocks)
-                        || // frag group j feeds a value to group i
-                        state[j].succs_of_live_out_blocks
-                                .intersects(&state[i].live_in_blocks);
-                    if do_merge {
-                        let mut tmp_frag_ixs = state[i].frag_ixs.clone();
-                        state[j].frag_ixs.union(&mut tmp_frag_ixs);
-                        let tmp_libs = state[i].live_in_blocks.clone();
-                        state[j].live_in_blocks.union(&tmp_libs);
-                        let tmp_solobs = state[i].succs_of_live_out_blocks.clone();
-                        state[j].succs_of_live_out_blocks.union(&tmp_solobs);
-                        state[i].valid = false;
-                        changed = true;
-                    }
-                }
-            }
-
-            if !changed {
-                break;
-            }
-        }
-
-        // Harvest the merged RangeFrag sets from `state`, and turn them into
-        // RealRanges or VirtualRanges.
-        for MergeGroup {
-            valid, frag_ixs, ..
-        } in state
-        {
-            if !valid {
-                continue;
-            }
-            // This isn't efficient, but it's debug code only.
-            let mut frag_ixs_sv = SmallVec::<[RangeFragIx; 4]>::new();
-            for fix in frag_ixs.iter() {
-                frag_ixs_sv.push(*fix);
-            }
-            let sorted_frags = SortedRangeFragIxs::new(frag_ixs_sv, &frag_env);
-            // Set all metrics to zero for now.  We'll fill them in later, in
-            // set_virtual_range_metrics.
-            let size = 0;
-            let total_cost = 0;
-            let spill_cost = SpillCost::zero();
-            if reg.is_virtual() {
-                result_virtual.push(VirtualRange {
-                    vreg: reg.to_virtual_reg(),
-                    rreg: None,
-                    sorted_frags,
-                    size,
-                    total_cost,
-                    spill_cost,
-                });
-            } else {
-                result_real.push(RealRange {
-                    rreg: reg.to_real_reg(),
-                    sorted_frags,
-                });
-            }
-        }
-
-        // END merge `all_frag_ixs_for_reg` entries as much as possible
-    }
-
-    info!(
-        "        out: {} VLRs, {} RLRs",
-        result_virtual.len(),
-        result_real.len()
-    );
-    info!("      merge_range_frags_slow: end");
-    (result_real, result_virtual)
-}
-
-//=============================================================================
-// Merging of RangeFrags, producing the final LRs, minus metrics
+// Auxiliary tasks involved in creating a single VirtualRange from its
+// constituent RangeFragIxs:
+//
+// * The RangeFragIxs we are given here are purely within single blocks.
+//   Here, we "compress" them, that is, merge those pairs that flow from one
+//   block into the the one that immediately follows it in the instruction
+//   stream.  This does not imply anything about control flow; it is purely a
+//   scheme for reducing the total number of fragments that need to be dealt
+//   with during interference detection (later on).
+//
+// * Computation of metrics for the VirtualRange.  This is done by examining
+//   metrics of the individual fragments, and must be done before they are
+//   compressed.
 
 // HELPER FUNCTION
+// Does `frag1` describe some range of instructions that is followed
+// immediately by `frag2` ?  Note that this assumes (and checks) that there
+// are no spill or reload ranges in play at this point; there should not be.
+// Note also, this is very conservative: it only merges the case where the two
+// ranges are separated by a block boundary.  From measurements, it appears that
+// this is the only case where merging is actually a win, though.
+fn frags_are_mergeable(
+    frag1: &RangeFrag,
+    frag1metrics: &RangeFragMetrics,
+    frag2: &RangeFrag,
+    frag2metrics: &RangeFragMetrics,
+) -> bool {
+    assert!(frag1.first.pt().is_use_or_def());
+    assert!(frag1.last.pt().is_use_or_def());
+    assert!(frag2.first.pt().is_use_or_def());
+    assert!(frag2.last.pt().is_use_or_def());
+
+    if frag1metrics.bix != frag2metrics.bix
+        && frag1.last.iix().plus(1) == frag2.first.iix()
+        && frag1.last.pt() == Point::Def
+        && frag2.first.pt() == Point::Use
+    {
+        assert!(
+            frag1metrics.kind == RangeFragKind::LiveOut || frag1metrics.kind == RangeFragKind::Thru
+        );
+        assert!(
+            frag2metrics.kind == RangeFragKind::LiveIn || frag2metrics.kind == RangeFragKind::Thru
+        );
+        return true;
+    }
+
+    false
+}
+
+// HELPER FUNCTION
+// Create a compressed version of the fragments listed in `sorted_frag_ixs`,
+// taking the opportunity to dereference them (look them up in `frag_env`) in
+// the process.  Assumes that `sorted_frag_ixs` is indeed ordered so that the
+// dereferenced frag sequence is in instruction order.
+#[inline(never)]
+fn deref_and_compress_sorted_range_frag_ixs(
+    stats_num_vfrags_uncompressed: &mut usize,
+    stats_num_vfrags_compressed: &mut usize,
+    sorted_frag_ixs: &SortedRangeFragIxs,
+    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+    frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
+) -> SortedRangeFrags {
+    let mut res = SortedRangeFrags::empty();
+
+    let frag_ixs = &sorted_frag_ixs.frag_ixs;
+    let num_frags = frag_ixs.len();
+    *stats_num_vfrags_uncompressed += num_frags;
+
+    if num_frags == 1 {
+        // Nothing we can do.  Shortcut.
+        res.frags.push(frag_env[frag_ixs[0]]);
+        *stats_num_vfrags_compressed += 1;
+        return res;
+    }
+
+    // BEGIN merge this frag sequence as much as possible
+    assert!(num_frags > 1);
+
+    let mut s = 0; // start point of current group
+    let mut e = 0; // end point of current group
+    loop {
+        if s >= num_frags {
+            break;
+        }
+        while e + 1 < num_frags
+            && frags_are_mergeable(
+                &frag_env[frag_ixs[e]],
+                &frag_metrics_env[frag_ixs[e]],
+                &frag_env[frag_ixs[e + 1]],
+                &frag_metrics_env[frag_ixs[e + 1]],
+            )
+        {
+            e += 1;
+        }
+        // s to e inclusive is a maximal group
+        // emit (s, e)
+        if s == e {
+            // Can't compress this one
+            res.frags.push(frag_env[frag_ixs[s]]);
+        } else {
+            let compressed_frag = RangeFrag {
+                first: frag_env[frag_ixs[s]].first,
+                last: frag_env[frag_ixs[e]].last,
+            };
+            res.frags.push(compressed_frag);
+        }
+        // move on
+        s = e + 1;
+        e = s;
+    }
+    // END merge this frag sequence as much as possible
+
+    *stats_num_vfrags_compressed += res.frags.len();
+    res
+}
+
+// HELPER FUNCTION
+// Computes the `size`, `total_cost` and `spill_cost` values for a
+// VirtualRange, while being very careful to avoid overflow.
+fn calc_virtual_range_metrics(
+    sorted_frag_ixs: &SortedRangeFragIxs,
+    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+    frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
+    estimated_frequencies: &TypedIxVec<BlockIx, u32>,
+) -> (u16, u32, SpillCost) {
+    assert!(frag_env.len() == frag_metrics_env.len());
+
+    let mut tot_size: u32 = 0;
+    let mut tot_cost: u32 = 0;
+
+    for fix in &sorted_frag_ixs.frag_ixs {
+        let frag = &frag_env[*fix];
+        let frag_metrics = &frag_metrics_env[*fix];
+
+        // Add on the size of this fragment, but make sure we can't
+        // overflow a u32 no matter how many fragments there are.
+        let mut frag_size: u32 = frag.last.iix().get() - frag.first.iix().get() + 1;
+        frag_size = min(frag_size, 0xFFFFu32);
+        tot_size += frag_size;
+        tot_size = min(tot_size, 0xFFFFu32);
+
+        // Here, tot_size <= 0xFFFF.  frag.count is u16.  estFreq[] is u32.
+        // We must be careful not to overflow tot_cost, which is u32.
+        let mut new_tot_cost: u64 = frag_metrics.count as u64; // at max 16 bits
+        new_tot_cost *= estimated_frequencies[frag_metrics.bix] as u64; // at max 48 bits
+        new_tot_cost += tot_cost as u64; // at max 48 bits + epsilon
+        new_tot_cost = min(new_tot_cost, 0xFFFF_FFFFu64);
+
+        // Hence this is safe.
+        tot_cost = new_tot_cost as u32;
+    }
+
+    debug_assert!(tot_size <= 0xFFFF);
+    let size = tot_size as u16;
+    let total_cost = tot_cost;
+
+    // Divide tot_cost by the total length, so as to increase the apparent
+    // spill cost of short LRs.  This is so as to give the advantage to
+    // short LRs in competition for registers.  This seems a bit of a hack
+    // to me, but hey ..
+    debug_assert!(tot_size >= 1);
+    let spill_cost = SpillCost::finite(tot_cost as f32 / tot_size as f32);
+
+    (size, total_cost, spill_cost)
+}
+
+// MAIN FUNCTION in this section
+#[inline(never)]
 fn create_and_add_range(
+    stats_num_vfrags_uncompressed: &mut usize,
+    stats_num_vfrags_compressed: &mut usize,
     result_real: &mut TypedIxVec<RealRangeIx, RealRange>,
     result_virtual: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
     reg: Reg,
-    sorted_frags: SortedRangeFragIxs,
+    sorted_frag_ixs: SortedRangeFragIxs,
+    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+    frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
+    estimated_frequencies: &TypedIxVec<BlockIx, u32>,
 ) {
-    // Set all metrics to zero for now.  We'll fill them in later, in
-    // set_virtual_range_metrics.
-    let size = 0;
-    let total_cost = 0;
-    let spill_cost = SpillCost::zero();
     if reg.is_virtual() {
+        // First, compute the VirtualRange metrics.  This has to be done
+        // before fragment compression.
+        let (size, total_cost, spill_cost) = calc_virtual_range_metrics(
+            &sorted_frag_ixs,
+            frag_env,
+            frag_metrics_env,
+            estimated_frequencies,
+        );
+        // Now it's safe to compress the fragments.
+        let sorted_frags = deref_and_compress_sorted_range_frag_ixs(
+            stats_num_vfrags_uncompressed,
+            stats_num_vfrags_compressed,
+            &sorted_frag_ixs,
+            frag_env,
+            frag_metrics_env,
+        );
         result_virtual.push(VirtualRange {
             vreg: reg.to_virtual_reg(),
             rreg: None,
@@ -1314,10 +1315,14 @@ fn create_and_add_range(
     } else {
         result_real.push(RealRange {
             rreg: reg.to_real_reg(),
-            sorted_frags,
+            sorted_frags: sorted_frag_ixs,
         });
     }
 }
+
+//=============================================================================
+// Merging of RangeFrags, producing the final LRs, including metrication and
+// compression
 
 // We need this in order to construct a UnionFind<usize>.
 impl ToFromU32 for usize {
@@ -1350,36 +1355,40 @@ pub fn merge_range_frags(
     frag_ix_vec_per_reg: &Map<Reg, Vec<RangeFragIx>>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
+    estimated_frequencies: &TypedIxVec<BlockIx, u32>,
     cfg_info: &CFGInfo,
 ) -> (
     TypedIxVec<RealRangeIx, RealRange>,
     TypedIxVec<VirtualRangeIx, VirtualRange>,
 ) {
     assert!(frag_env.len() == frag_metrics_env.len());
-    let mut n_total_incoming_frags = 0;
+    let mut stats_num_total_incoming_frags = 0;
     for (_reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
-        n_total_incoming_frags += all_frag_ixs_for_reg.len();
+        stats_num_total_incoming_frags += all_frag_ixs_for_reg.len();
     }
     info!("    merge_range_frags: begin");
     info!("      in: {} in frag_env", frag_env.len());
     info!(
         "      in: {} regs containing in total {} frags",
         frag_ix_vec_per_reg.len(),
-        n_total_incoming_frags
+        stats_num_total_incoming_frags
     );
 
-    let mut n_single_grps = 0;
-    let mut n_local_frags = 0;
+    let mut stats_num_single_grps = 0;
+    let mut stats_num_local_frags = 0;
 
-    let mut n_multi_grps_small = 0;
-    let mut n_multi_grps_large = 0;
-    let mut sz_multi_grps_small = 0;
-    let mut sz_multi_grps_large = 0;
+    let mut stats_num_multi_grps_small = 0;
+    let mut stats_num_multi_grps_large = 0;
+    let mut stats_size_multi_grps_small = 0;
+    let mut stats_size_multi_grps_large = 0;
+
+    let mut stats_num_vfrags_uncompressed = 0;
+    let mut stats_num_vfrags_compressed = 0;
 
     let mut result_real = TypedIxVec::<RealRangeIx, RealRange>::new();
     let mut result_virtual = TypedIxVec::<VirtualRangeIx, VirtualRange>::new();
 
-    // BEGIN per_reg_loop
+    /* BEGIN per_reg_loop */
     'per_reg_loop: for (reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
         let n_frags_for_this_reg = all_frag_ixs_for_reg.len();
         assert!(n_frags_for_this_reg > 0);
@@ -1388,12 +1397,17 @@ pub fn merge_range_frags(
         // reg, we can directly give it its own live range, and have done.
         if n_frags_for_this_reg == 1 {
             create_and_add_range(
+                &mut stats_num_vfrags_uncompressed,
+                &mut stats_num_vfrags_compressed,
                 &mut result_real,
                 &mut result_virtual,
                 *reg,
                 SortedRangeFragIxs::unit(all_frag_ixs_for_reg[0], frag_env),
+                frag_env,
+                frag_metrics_env,
+                estimated_frequencies,
             );
-            n_single_grps += 1;
+            stats_num_single_grps += 1;
             continue 'per_reg_loop;
         }
 
@@ -1415,12 +1429,17 @@ pub fn merge_range_frags(
             // Thru.
             if frag_metrics.kind == RangeFragKind::Local {
                 create_and_add_range(
+                    &mut stats_num_vfrags_uncompressed,
+                    &mut stats_num_vfrags_compressed,
                     &mut result_real,
                     &mut result_virtual,
                     *reg,
                     SortedRangeFragIxs::unit(*fix, frag_env),
+                    frag_env,
+                    frag_metrics_env,
+                    estimated_frequencies,
                 );
-                n_local_frags += 1;
+                stats_num_local_frags += 1;
                 continue 'per_frag_loop;
             }
             // This frag isn't Local (standalone) so we have to process it the slow way.
@@ -1485,8 +1504,8 @@ pub fn merge_range_frags(
                     }
                 }
             } // outermost iteration over `triples`
-            n_multi_grps_small += 1;
-            sz_multi_grps_small += triples_len;
+            stats_num_multi_grps_small += 1;
+            stats_size_multi_grps_small += triples_len;
         } else {
             // The more complex way, which is N-log-N in the length of `triples`.
             // This is the same as the simple way, except that the innermost loop,
@@ -1562,8 +1581,8 @@ pub fn merge_range_frags(
                     }
                 }
             }
-            n_multi_grps_large += 1;
-            sz_multi_grps_large += triples_len;
+            stats_num_multi_grps_large += 1;
+            stats_size_multi_grps_large += triples_len;
         }
 
         // Now `eclasses_uf` contains the results of the merging-search.  Visit
@@ -1577,141 +1596,45 @@ pub fn merge_range_frags(
                 frag_ixs.push(triples[triple_ix].0 /*first field is frag ix*/);
             }
             let sorted_frags = SortedRangeFragIxs::new(frag_ixs, &frag_env);
-            create_and_add_range(&mut result_real, &mut result_virtual, *reg, sorted_frags);
+            create_and_add_range(
+                &mut stats_num_vfrags_uncompressed,
+                &mut stats_num_vfrags_compressed,
+                &mut result_real,
+                &mut result_virtual,
+                *reg,
+                sorted_frags,
+                frag_env,
+                frag_metrics_env,
+                estimated_frequencies,
+            );
         }
         // END merge `all_frag_ixs_for_reg` entries as much as possible
     } // 'per_reg_loop
-      // END per_reg_loop
+      /* END per_reg_loop */
 
-    info!("      in: {} single groups", n_single_grps);
-    info!("      in: {} local frags in multi groups", n_local_frags);
+    info!("      in: {} single groups", stats_num_single_grps);
+    info!(
+        "      in: {} local frags in multi groups",
+        stats_num_local_frags
+    );
     info!(
         "      in: {} small multi groups, {} small multi group total size",
-        n_multi_grps_small, sz_multi_grps_small
+        stats_num_multi_grps_small, stats_size_multi_grps_small
     );
     info!(
         "      in: {} large multi groups, {} large multi group total size",
-        n_multi_grps_large, sz_multi_grps_large
+        stats_num_multi_grps_large, stats_size_multi_grps_large
     );
     info!(
         "      out: {} VLRs, {} RLRs",
         result_virtual.len(),
         result_real.len()
     );
+    info!(
+        "      compress vfrags: in {}, out {}",
+        stats_num_vfrags_uncompressed, stats_num_vfrags_compressed
+    );
     info!("    merge_range_frags: end");
 
-    if CROSSCHECK_MERGE {
-        info!("    merge_range_frags: crosscheck: begin");
-        let (result_real_ref, result_virtual_ref) =
-            merge_range_frags_slow(frag_ix_vec_per_reg, frag_env, frag_metrics_env, cfg_info);
-        assert!(result_real.len() == result_real_ref.len());
-        assert!(result_virtual.len() == result_virtual_ref.len());
-
-        // We need to check that result_real comprises an identical set of RealRanges to
-        // result_real_ref.  Problem is they are presented in some arbitrary order.  Hence
-        // we need to sort both, per some arbitrary total order, before comparing.
-        let mut result_real_clone = result_real.clone();
-        let mut result_real_ref_clone = result_real_ref.clone();
-        result_real_clone.sort_by(|x, y| RealRange::cmp_debug_only(x, y));
-        result_real_ref_clone.sort_by(|x, y| RealRange::cmp_debug_only(x, y));
-        for i in 0..result_real.len() {
-            let rlrix = RealRangeIx::new(i);
-            assert!(result_real_clone[rlrix].rreg == result_real_ref_clone[rlrix].rreg);
-            assert!(
-                result_real_clone[rlrix].sorted_frags.frag_ixs
-                    == result_real_ref_clone[rlrix].sorted_frags.frag_ixs
-            );
-        }
-        // Same deal for the VirtualRanges.
-        let mut result_virtual_clone = result_virtual.clone();
-        let mut result_virtual_ref_clone = result_virtual_ref.clone();
-        result_virtual_clone.sort_by(|x, y| VirtualRange::cmp_debug_only(x, y));
-        result_virtual_ref_clone.sort_by(|x, y| VirtualRange::cmp_debug_only(x, y));
-        for i in 0..result_virtual.len() {
-            let vlrix = VirtualRangeIx::new(i);
-            assert!(result_virtual_clone[vlrix].vreg == result_virtual_ref_clone[vlrix].vreg);
-            assert!(result_virtual_clone[vlrix].rreg == result_virtual_ref_clone[vlrix].rreg);
-            assert!(
-                result_virtual_clone[vlrix].sorted_frags.frag_ixs
-                    == result_virtual_ref_clone[vlrix].sorted_frags.frag_ixs
-            );
-            assert!(result_virtual_clone[vlrix].size == result_virtual_ref_clone[vlrix].size);
-            assert!(result_virtual_clone[vlrix].spill_cost.is_zero());
-            assert!(result_virtual_ref_clone[vlrix].spill_cost.is_zero());
-        }
-        info!("    merge_range_frags: crosscheck: end");
-    }
-
     (result_real, result_virtual)
-}
-
-//=============================================================================
-// Finalising of VirtualRanges, by setting the `size` and `spill_cost` metrics.
-
-// `size`: this is simple.  Simply sum the size of the individual fragments.
-// Note that this must produce a value > 0 for a dead write, hence the "+1".
-//
-// `spill_cost`: try to estimate the number of spills and reloads that would
-// result from spilling the VirtualRange, thusly:
-//    sum, for each frag
-//        # mentions of the VirtualReg in the frag
-//            (that's the per-frag, per pass spill spill_cost)
-//        *
-//        the estimated execution count of the containing block
-//
-// all the while being very careful to avoid overflow.
-#[inline(never)]
-pub fn set_virtual_range_metrics(
-    vlrs: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
-    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-    frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
-    estimated_frequency: &TypedIxVec<BlockIx, u32>,
-) {
-    info!("    set_virtual_range_metrics: begin");
-    assert!(frag_env.len() == frag_metrics_env.len());
-    for vlr in vlrs.iter_mut() {
-        debug_assert!(vlr.size == 0 && vlr.total_cost == 0 && vlr.spill_cost.is_zero());
-        debug_assert!(vlr.rreg.is_none());
-        let mut tot_size: u32 = 0;
-        let mut tot_cost: u32 = 0;
-
-        for fix in &vlr.sorted_frags.frag_ixs {
-            let frag = &frag_env[*fix];
-            let frag_metrics = &frag_metrics_env[*fix];
-
-            // Add on the size of this fragment, but make sure we can't
-            // overflow a u32 no matter how many fragments there are.
-            let mut frag_size: u32 = frag.last.iix.get() - frag.first.iix.get() + 1;
-            if frag_size > 0xFFFF {
-                frag_size = 0xFFFF;
-            }
-            tot_size += frag_size;
-            if tot_size > 0xFFFF {
-                tot_size = 0xFFFF;
-            }
-
-            // Here, tot_size <= 0xFFFF.  frag.count is u16.  estFreq[] is u32.
-            // We must be careful not to overflow tot_cost, which is u32.
-            let mut new_tot_cost: u64 = frag_metrics.count as u64; // at max 16 bits
-            new_tot_cost *= estimated_frequency[frag_metrics.bix] as u64; // at max 48 bits
-            new_tot_cost += tot_cost as u64; // at max 48 bits + epsilon
-            if new_tot_cost > 0xFFFF_FFFF {
-                new_tot_cost = 0xFFFF_FFFF;
-            }
-            // Hence this is safe.
-            tot_cost = new_tot_cost as u32;
-        }
-
-        debug_assert!(tot_size <= 0xFFFF);
-        vlr.size = tot_size as u16;
-        vlr.total_cost = tot_cost;
-
-        // Divide tot_cost by the total length, so as to increase the apparent
-        // spill cost of short LRs.  This is so as to give the advantage to
-        // short LRs in competition for registers.  This seems a bit of a hack
-        // to me, but hey ..
-        debug_assert!(tot_size >= 1);
-        vlr.spill_cost = SpillCost::finite(tot_cost as f32 / tot_size as f32);
-    }
-    info!("    set_virtual_range_metrics: end");
 }
