@@ -521,14 +521,8 @@ impl CheckerContext {
         mapper: &RegUsageMapper,
     ) -> Result<(), CheckerErrors> {
         let empty = vec![];
-        let pre_point = InstPoint {
-            iix,
-            pt: Point::Reload,
-        };
-        let post_point = InstPoint {
-            iix,
-            pt: Point::Spill,
-        };
+        let pre_point = InstPoint::new(iix, Point::Reload);
+        let post_point = InstPoint::new(iix, Point::Spill);
 
         for checker_inst in self.checker_inst_map.get(&pre_point).unwrap_or(&empty) {
             debug!("at inst {:?}: pre checker_inst: {:?}", iix, checker_inst);

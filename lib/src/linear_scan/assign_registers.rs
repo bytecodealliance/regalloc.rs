@@ -1,12 +1,12 @@
 use super::{
-    last_use, next_use, Fragments, IntId, Intervals, LiveInterval, LiveIntervalKind, Location,
-    Mention, MentionMap, RegUses,
+    last_use, next_use, IntId, Intervals, LiveInterval, LiveIntervalKind, Location, Mention,
+    MentionMap, RegUses,
 };
 use crate::{
     avl_tree::{AVLTree, AVL_NULL},
     data_structures::{
-        InstPoint, Point, RangeFrag, RangeFragIx, RegVecsAndBounds, SortedRangeFragIxs, SpillCost,
-        VirtualRange, VirtualRangeIx,
+        InstPoint, Point, RangeFrag, RegVecsAndBounds, SortedRangeFrags, SpillCost, VirtualRange,
+        VirtualRangeIx,
     },
     Function, InstIx, RealReg, RealRegUniverse, Reg, RegAllocError, RegClass, SpillSlot,
     VirtualReg, NUM_REG_CLASSES,
@@ -25,8 +25,7 @@ pub(crate) fn run<F: Function>(
     reg_universe: &RealRegUniverse,
     scratches_by_rc: &Vec<Option<RealReg>>,
     intervals: Intervals,
-    fragments: Fragments,
-) -> Result<(HashMap<Reg, MentionMap>, Fragments, Intervals, u32), RegAllocError> {
+) -> Result<(HashMap<Reg, MentionMap>, Intervals, u32), RegAllocError> {
     // Subset of fixed intervals.
     let mut fixed_intervals = intervals
         .data
@@ -35,7 +34,7 @@ pub(crate) fn run<F: Function>(
         .collect::<Vec<_>>();
     fixed_intervals.sort_by_key(|&id| intervals.get(id).start);
 
-    let mut state = State::new(func, &reg_uses, fragments, intervals);
+    let mut state = State::new(func, &reg_uses, intervals);
     let mut reusable = ReusableState::new(reg_universe, &scratches_by_rc);
 
     #[cfg(debug_assertions)]
@@ -68,10 +67,9 @@ pub(crate) fn run<F: Function>(
 
                 {
                     let intervals = &state.intervals;
-                    let fragments = &state.fragments;
                     state.interval_tree.insert(
                         (fixed_intervals[last_fixed], 0),
-                        Some(&|left, right| cmp_interval_tree(left, right, intervals, fragments)),
+                        Some(&|left, right| cmp_interval_tree(left, right, intervals)),
                     );
                 }
 
@@ -96,11 +94,10 @@ pub(crate) fn run<F: Function>(
                 if state.intervals.get(id).location.reg().is_some() {
                     // Add the current interval to the interval tree, if it's been
                     // allocated.
-                    let fragments = &state.fragments;
                     let intervals = &state.intervals;
                     state.interval_tree.insert(
                         (id, 0),
-                        Some(&|left, right| cmp_interval_tree(left, right, intervals, fragments)),
+                        Some(&|left, right| cmp_interval_tree(left, right, intervals)),
                     );
 
                     #[cfg(debug_assertions)]
@@ -115,14 +112,13 @@ pub(crate) fn run<F: Function>(
     if log_enabled!(Level::Debug) {
         debug!("allocation results (in order):");
         for id in 0..state.intervals.data.len() {
-            debug!("{}", state.intervals.display(IntId(id), &state.fragments));
+            debug!("{}", state.intervals.display(IntId(id)));
         }
         debug!("");
     }
 
     Ok((
         state.mention_map,
-        state.fragments,
         state.intervals,
         state.next_spill_slot.get(),
     ))
@@ -269,7 +265,6 @@ struct State<'a, F: Function> {
 
     optimal_split_strategy: OptimalSplitStrategy,
 
-    fragments: Fragments,
     intervals: Intervals,
 
     interval_tree: AVLTree<(IntId, usize)>,
@@ -295,7 +290,7 @@ struct State<'a, F: Function> {
 }
 
 impl<'a, F: Function> State<'a, F> {
-    fn new(func: &'a F, reg_uses: &'a RegUses, fragments: Fragments, intervals: Intervals) -> Self {
+    fn new(func: &'a F, reg_uses: &'a RegUses, intervals: Intervals) -> Self {
         // Trick! Keep unhandled in reverse sorted order, so we can just pop
         // unhandled ids instead of shifting the first element.
         let mut unhandled = AVLTree::new(IntId(usize::max_value()));
@@ -327,7 +322,6 @@ impl<'a, F: Function> State<'a, F> {
             func,
             reg_uses,
             optimal_split_strategy,
-            fragments,
             intervals,
             unhandled,
             active: Vec::new(),
@@ -412,7 +406,6 @@ fn match_previous_update_state(
     prev_active: Vec<IntId>,
     prev_inactive: Vec<IntId>,
     intervals: &Intervals,
-    fragments: &Fragments,
 ) -> Result<bool, &'static str> {
     // Make local mutable copies.
     let mut active = active.clone();
@@ -423,13 +416,13 @@ fn match_previous_update_state(
         if start_point > intervals.get(int_id).end {
             return Err("active should have expired");
         }
-        if !intervals.covers(int_id, start_point, fragments) {
+        if !intervals.covers(int_id, start_point) {
             return Err("active should contain start pos");
         }
     }
 
     for &int_id in &inactive {
-        if intervals.covers(int_id, start_point, fragments) {
+        if intervals.covers(int_id, start_point) {
             return Err("inactive should not contain start pos");
         }
         if start_point > intervals.get(int_id).end {
@@ -438,7 +431,7 @@ fn match_previous_update_state(
     }
 
     for &int_id in &expired {
-        if intervals.covers(int_id, start_point, fragments) {
+        if intervals.covers(int_id, start_point) {
             return Err("expired shouldn't cover target");
         }
         if intervals.get(int_id).end >= start_point {
@@ -456,7 +449,7 @@ fn match_previous_update_state(
         if intervals.get(id).end < start_point {
             // It's expired, forget about it.
             other_expired.push(id);
-        } else if intervals.covers(id, start_point, fragments) {
+        } else if intervals.covers(id, start_point) {
             other_active.push(id);
         } else {
             other_inactive.push(id);
@@ -469,7 +462,7 @@ fn match_previous_update_state(
         if intervals.get(id).end < start_point {
             // It's expired, forget about it.
             other_expired.push(id);
-        } else if intervals.covers(id, start_point, fragments) {
+        } else if intervals.covers(id, start_point) {
             other_active.push(id);
         } else {
             other_inactive.push(id);
@@ -530,7 +523,6 @@ fn lazy_compute_inactive(
     interval_tree: &AVLTree<(IntId, usize)>,
     active: &[IntId],
     _prev_inactive: &[IntId],
-    fragments: &Fragments,
     cur_id: IntId,
     inactive_intersecting: &mut Vec<(IntId, InstPoint)>,
 ) {
@@ -554,15 +546,13 @@ fn lazy_compute_inactive(
 
         debug_assert!(other_int.location.reg().is_some());
         if other_int.is_fixed() {
-            if let Some(intersect_at) = intervals.intersects_with(id, cur_id, fragments) {
+            if let Some(intersect_at) = intervals.intersects_with(id, cur_id) {
                 inactive_intersecting.push((id, intersect_at));
             }
         } else {
             // cur_start < frag.start, otherwise the interval would be active.
             debug_assert!(other_int.start <= cur_end);
-            debug_assert!(
-                intervals.intersects_with(id, cur_id, fragments) == Some(other_int.start)
-            );
+            debug_assert!(intervals.intersects_with(id, cur_id) == Some(other_int.start));
             inactive_intersecting.push((id, other_int.start));
         }
     }
@@ -575,7 +565,7 @@ fn lazy_compute_inactive(
                 if intervals.get(id).reg_class != reg_class {
                     continue;
                 }
-                if let Some(pos) = intervals.intersects_with(id, cur_id, fragments) {
+                if let Some(pos) = intervals.intersects_with(id, cur_id) {
                     inactive.push((id, pos));
                 }
             }
@@ -648,8 +638,7 @@ fn update_state<'a, F: Function>(
     mem::swap(&mut state.inactive, &mut next_inactive);
     next_inactive.clear();
 
-    let fragments = &state.fragments;
-    let comparator = |left, right| cmp_interval_tree(left, right, intervals, fragments);
+    let comparator = |left, right| cmp_interval_tree(left, right, intervals);
 
     #[cfg(debug_assertions)]
     let mut expired = Vec::new();
@@ -673,8 +662,8 @@ fn update_state<'a, F: Function>(
         }
 
         // From this point, start <= int.end.
-        let frag_ixs = &intervals.fragments(int_id);
-        let mut cur_frag = &state.fragments[frag_ixs[last_frag_idx]];
+        let frags = &intervals.fragments(int_id);
+        let mut cur_frag = &frags[last_frag_idx];
 
         // If the current fragment still contains start, it is still active.
         if cur_frag.contains(&start_point) {
@@ -694,15 +683,15 @@ fn update_state<'a, F: Function>(
         // It exists, because start <= int.end.
         let mut new_frag_idx = last_frag_idx + 1;
 
-        while new_frag_idx < frag_ixs.len() {
-            cur_frag = &state.fragments[frag_ixs[new_frag_idx]];
+        while new_frag_idx < frags.len() {
+            cur_frag = &frags[new_frag_idx];
             if start_point <= cur_frag.last {
                 break;
             }
             new_frag_idx += 1;
         }
 
-        debug_assert!(new_frag_idx != frag_ixs.len());
+        debug_assert!(new_frag_idx != frags.len());
 
         // In all the cases, update the interval so its last fragment is now the
         // one we'd expect.
@@ -753,7 +742,6 @@ fn update_state<'a, F: Function>(
         prev_active,
         prev_inactive,
         &state.intervals,
-        &state.fragments
     )
     .unwrap());
 
@@ -802,7 +790,6 @@ fn select_naive_reg<F: Function>(
         &state.interval_tree,
         &state.active,
         &state.inactive,
-        &state.fragments,
         id,
         inactive_intersecting,
     );
@@ -877,7 +864,6 @@ fn allocate_blocked_reg<F: Function>(
         cur_id,
         InstPoint::min_value(),
         &state.reg_uses,
-        &state.fragments,
     ) {
         Some(u) => u,
         None => {
@@ -931,7 +917,6 @@ fn allocate_blocked_reg<F: Function>(
                         id,
                         start_pos,
                         &state.reg_uses,
-                        &state.fragments,
                     ) {
                         next_use_pos[reg] = InstPoint::min(next_use_pos[reg], next_use);
                     }
@@ -947,7 +932,6 @@ fn allocate_blocked_reg<F: Function>(
             &state.interval_tree,
             &state.active,
             &state.inactive,
-            &state.fragments,
             cur_id,
             &mut inactive_intersecting,
         );
@@ -974,7 +958,6 @@ fn allocate_blocked_reg<F: Function>(
                 id,
                 intersect_pos,
                 &state.reg_uses,
-                &state.fragments,
             ) {
                 next_use_pos[reg] = InstPoint::min(next_use_pos[reg], next_use);
             }
@@ -1123,12 +1106,12 @@ fn find_optimal_split_pos<F: Function>(
         OptimalSplitStrategy::PrevTo => Some(prev_pos(to)),
         OptimalSplitStrategy::PrevPrevTo => Some(prev_pos(prev_pos(to))),
         OptimalSplitStrategy::Mid => Some(InstPoint::new_use(InstIx::new(
-            (from.iix.get() + to.iix.get()) / 2,
+            (from.iix().get() + to.iix().get()) / 2,
         ))),
     };
 
     if let Some(pos) = candidate {
-        if pos >= from && pos <= to && state.intervals.covers(id, pos, &state.fragments) {
+        if pos >= from && pos <= to && state.intervals.covers(id, pos) {
             return pos;
         }
     }
@@ -1137,14 +1120,14 @@ fn find_optimal_split_pos<F: Function>(
 }
 
 fn prev_pos(mut pos: InstPoint) -> InstPoint {
-    match pos.pt {
+    match pos.pt() {
         Point::Def => {
-            pos.pt = Point::Use;
+            pos.set_pt(Point::Use);
             pos
         }
         Point::Use => {
-            pos.iix = pos.iix.minus(1);
-            pos.pt = Point::Def;
+            pos.set_iix(pos.iix().minus(1));
+            pos.set_pt(Point::Def);
             pos
         }
         _ => unreachable!(),
@@ -1152,11 +1135,11 @@ fn prev_pos(mut pos: InstPoint) -> InstPoint {
 }
 
 fn next_pos(mut pos: InstPoint) -> InstPoint {
-    match pos.pt {
-        Point::Use => pos.pt = Point::Def,
+    match pos.pt() {
+        Point::Use => pos.set_pt(Point::Def),
         Point::Def => {
-            pos.pt = Point::Use;
-            pos.iix = pos.iix.plus(1);
+            pos.set_pt(Point::Use);
+            pos.set_iix(pos.iix().plus(1));
         }
         _ => unreachable!(),
     };
@@ -1176,7 +1159,6 @@ fn split_and_spill<F: Function>(state: &mut State<F>, id: IntId, split_pos: Inst
         id,
         split_pos,
         &state.reg_uses,
-        &state.fragments,
     ) {
         Some(last_use) => {
             debug!(
@@ -1215,7 +1197,6 @@ fn split_and_spill<F: Function>(state: &mut State<F>, id: IntId, split_pos: Inst
         child,
         split_pos,
         &state.reg_uses,
-        &state.fragments,
     ) {
         Some(next_use_pos) => {
             debug!(
@@ -1245,10 +1226,7 @@ fn split_and_spill<F: Function>(state: &mut State<F>, id: IntId, split_pos: Inst
 fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> IntId {
     debug!("split {:?} at {:?}", id, at_pos);
     if log_enabled!(Level::Trace) {
-        trace!(
-            "interval: {}",
-            state.intervals.display(id, &state.fragments),
-        );
+        trace!("interval: {}", state.intervals.display(id),);
     }
 
     let parent_start = state.intervals.get(id).start;
@@ -1261,45 +1239,41 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
     {
         // Remove the parent from the interval tree, if it was there.
         let intervals = &state.intervals;
-        let fragments = &state.fragments;
         state.interval_tree.delete(
             (id, state.intervals.get(id).last_frag),
-            Some(&|left, right| cmp_interval_tree(left, right, intervals, fragments)),
+            Some(&|left, right| cmp_interval_tree(left, right, intervals)),
         );
     }
     if state.intervals.get(id).location.reg().is_some() {
         // If the interval was set to a register, reset it to the first fragment.
         state.intervals.get_mut(id).last_frag = 0;
         let intervals = &state.intervals;
-        let fragments = &state.fragments;
         state.interval_tree.insert(
             (id, 0),
-            Some(&|left, right| cmp_interval_tree(left, right, intervals, fragments)),
+            Some(&|left, right| cmp_interval_tree(left, right, intervals)),
         );
     }
 
     let vreg = state.intervals.vreg(id);
-    let fragments = &state.fragments;
     let frags = state.intervals.fragments_mut(id);
 
     // We need to split at the first range that's before or contains the "at"
     // position, reading from the end to the start.
     let split_ranges_at = frags
-        .frag_ixs
+        .frags
         .iter()
         .position(|&frag_id| {
-            let frag = fragments[frag_id];
+            let frag = frag_id;
             frag.first >= at_pos || frag.contains(&at_pos)
         })
         .expect("split would create an empty child");
 
-    let mut child_frag_ixs = smallvec_split_off(&mut frags.frag_ixs, split_ranges_at);
+    let mut child_frags = smallvec_split_off(&mut frags.frags, split_ranges_at);
 
     // The split position is either in the middle of a lifetime hole, in which
     // case we don't need to do anything. Otherwise, we might need to split a
     // range fragment into two parts.
-    if let Some(&frag_ix) = child_frag_ixs.first() {
-        let frag = &fragments[frag_ix];
+    if let Some(&frag) = child_frags.first() {
         if frag.first != at_pos && frag.contains(&at_pos) {
             // We're splitting in the middle of a fragment: [L, R].
             // Split it into two fragments: parent [L, pos[ + child [pos, R].
@@ -1327,21 +1301,17 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
 
             // Parent range.
             let parent_frag = RangeFrag::new(parent_first, parent_last);
-            let parent_frag_ix = RangeFragIx::new(state.fragments.len());
-            state.fragments.push(parent_frag);
 
             // Child range.
             let child_frag = RangeFrag::new(child_first, child_last);
-            let child_frag_ix = RangeFragIx::new(state.fragments.len());
-            state.fragments.push(child_frag);
 
             // Note the sorted order is maintained, by construction.
-            frags.frag_ixs.push(parent_frag_ix);
-            child_frag_ixs[0] = child_frag_ix;
+            frags.frags.push(parent_frag);
+            child_frags[0] = child_frag;
         }
     }
 
-    if frags.frag_ixs.is_empty() {
+    if frags.frags.is_empty() {
         // The only possible way is that we're trying to split [(A;B),...] at A, so
         // creating a unit [A, A] fragment. Otherwise, it's a bug and this assert
         // should catch it.
@@ -1351,17 +1321,12 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
         );
 
         let parent_frag = RangeFrag::new(at_pos, at_pos);
-        let parent_frag_ix = RangeFragIx::new(state.fragments.len());
-        state.fragments.push(parent_frag);
-
-        frags.frag_ixs.push(parent_frag_ix);
+        frags.frags.push(parent_frag);
     }
 
-    debug_assert!(!child_frag_ixs.is_empty(), "no fragments in child interval");
+    debug_assert!(!child_frags.is_empty(), "no fragments in child interval");
 
-    let child_sorted_frags = SortedRangeFragIxs {
-        frag_ixs: child_frag_ixs,
-    };
+    let child_sorted_frags = SortedRangeFrags { frags: child_frags };
 
     let child_int = VirtualRange {
         vreg,
@@ -1373,9 +1338,9 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
         spill_cost: SpillCost::infinite(),
     };
 
-    let child_start = state.fragments[child_int.sorted_frags.frag_ixs[0]].first;
-    let child_end = state.fragments[*child_int.sorted_frags.frag_ixs.last().unwrap()].last;
-    let parent_end = state.fragments[*frags.frag_ixs.last().unwrap()].last;
+    let child_start = child_int.sorted_frags.frags[0].first;
+    let child_end = child_int.sorted_frags.frags.last().unwrap().last;
+    let parent_end = frags.frags.last().unwrap().last;
 
     // Insert child in virtual ranges and live intervals.
     let vreg_ix = VirtualRangeIx::new(state.intervals.virtual_ranges.len());
@@ -1401,8 +1366,8 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
 
     if log_enabled!(Level::Trace) {
         trace!("split results:");
-        trace!("- {}", state.intervals.display(id, &state.fragments));
-        trace!("- {}", state.intervals.display(child_id, &state.fragments));
+        trace!("- {}", state.intervals.display(id));
+        trace!("- {}", state.intervals.display(child_id));
     }
 
     child_id
@@ -1450,12 +1415,11 @@ fn cmp_interval_tree(
     left_id: (IntId, usize),
     right_id: (IntId, usize),
     intervals: &Intervals,
-    fragments: &Fragments,
 ) -> Option<Ordering> {
     let left_frags = &intervals.fragments(left_id.0);
-    let left = fragments[left_frags[left_id.1]].first;
+    let left = left_frags[left_id.1].first;
     let right_frags = &intervals.fragments(right_id.0);
-    let right = fragments[right_frags[right_id.1]].first;
+    let right = right_frags[right_id.1].first;
     (left, left_id).partial_cmp(&(right, right_id))
 }
 

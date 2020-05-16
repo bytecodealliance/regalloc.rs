@@ -5,7 +5,7 @@ use log::{debug, info};
 use crate::analysis_control_flow::{CFGInfo, InstIxToBlockIxMap};
 use crate::analysis_data_flow::{
     calc_def_and_use, calc_livein_and_liveout, get_range_frags, get_sanitized_reg_uses_for_func,
-    merge_range_frags, set_virtual_range_metrics,
+    merge_range_frags,
 };
 use crate::data_structures::{
     BlockIx, RangeFrag, RangeFragIx, RangeFragMetrics, RealRange, RealRangeIx, RealReg,
@@ -202,14 +202,12 @@ pub fn run_analysis<F: Function>(
         &reg_universe,
     );
 
-    let (rlr_env, mut vlr_env) =
-        merge_range_frags(&frag_ixs_per_reg, &frag_env, &frag_metrics_env, &cfg_info);
-
-    set_virtual_range_metrics(
-        &mut vlr_env,
+    let (rlr_env, vlr_env) = merge_range_frags(
+        &frag_ixs_per_reg,
         &frag_env,
         &frag_metrics_env,
         &estimated_frequencies,
+        &cfg_info,
     );
 
     debug_assert!(liveout_sets_per_block.len() == estimated_frequencies.len());

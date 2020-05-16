@@ -156,9 +156,7 @@ pub fn do_coalescing_analysis<F: Function>(
       let vreg_no = vreg.get_index();
       let vlrixs = &vreg_to_vlrs_map[vreg_no];
       for vlrix in vlrixs {
-        let frags = &vlr_env[*vlrix].sorted_frags;
-        for fix in &frags.frag_ixs {
-          let frag = &frag_env[*fix];
+        for frag in &vlr_env[*vlrix].sorted_frags.frags {
           if xxIsLastUse {
             // We're checking to see if `vreg` has a last use in this block
             // (well, technically, a fragment end in the block; we don't care if
