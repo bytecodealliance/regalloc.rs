@@ -1125,12 +1125,6 @@ impl RegSets {
     pub fn is_sanitized(&self) -> bool {
         self.sanitized
     }
-
-    fn clear(&mut self) {
-        self.uses.clear();
-        self.defs.clear();
-        self.mods.clear();
-    }
 }
 
 impl RegVecsAndBounds {
@@ -1150,20 +1144,6 @@ impl RegVecsAndBounds {
             regsets.mods.insert(self.vecs.mods[i]);
         }
         regsets
-    }
-
-    pub fn get_reg_sets_for_iix_reuse(&self, iix: InstIx, regsets: &mut RegSets) {
-        regsets.clear();
-        let bounds = &self.bounds[iix];
-        for i in bounds.uses_start as usize..bounds.uses_start as usize + bounds.uses_len as usize {
-            regsets.uses.insert(self.vecs.uses[i]);
-        }
-        for i in bounds.defs_start as usize..bounds.defs_start as usize + bounds.defs_len as usize {
-            regsets.defs.insert(self.vecs.defs[i]);
-        }
-        for i in bounds.mods_start as usize..bounds.mods_start as usize + bounds.mods_len as usize {
-            regsets.mods.insert(self.vecs.mods[i]);
-        }
     }
 }
 

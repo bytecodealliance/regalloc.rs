@@ -364,12 +364,10 @@ pub fn get_sanitized_reg_uses_for_func<F: Function>(
     func: &F,
     reg_universe: &RealRegUniverse,
 ) -> Result<RegVecsAndBounds, RealReg> {
-    let num_insns = func.insns().len();
-
     // These are modified by the per-insn loop.
     let mut reg_vecs = RegVecs::new(false);
     let mut bounds_vec = TypedIxVec::<InstIx, RegVecBounds>::new();
-    bounds_vec.reserve(num_insns);
+    bounds_vec.reserve(func.insns().len());
 
     // For each insn, add their register uses to the ends of the 3 vectors in
     // `reg_vecs`, and create an admin entry to describe the 3 new groups.  Any
@@ -919,9 +917,9 @@ fn get_range_frags_for_block<F: Function>(
                     state.insert(
                         *r,
                         ProtoRangeFrag {
-                            num_mentions: 1,
                             first: new_pt,
                             last: new_pt,
+                            num_mentions: 1,
                         },
                     );
                 }
@@ -936,6 +934,7 @@ fn get_range_frags_for_block<F: Function>(
                     if first == last {
                         debug_assert!(*num_mentions == 1);
                     }
+
                     let (frag, frag_metrics) =
                         RangeFrag::new_with_metrics(func, bix, *first, *last, *num_mentions);
                     tmp_result_vec.push((*r, frag, frag_metrics));
@@ -971,13 +970,13 @@ fn get_range_frags_for_block<F: Function>(
     }
 
     // Finally, round up any remaining ProtoRangeFrags left in `state`.
-    for (r, pf) in state.iter() {
+    for (r, pf) in state.into_iter() {
         if pf.first == pf.last {
             debug_assert!(pf.num_mentions == 1);
         }
         let (frag, frag_metrics) =
             RangeFrag::new_with_metrics(func, bix, pf.first, pf.last, pf.num_mentions);
-        tmp_result_vec.push((*r, frag, frag_metrics));
+        tmp_result_vec.push((r, frag, frag_metrics));
     }
 
     // Copy the entries in `tmp_result_vec` into `out_map` and `outVec`.

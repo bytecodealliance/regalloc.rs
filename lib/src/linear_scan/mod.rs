@@ -1,4 +1,4 @@
-//! Implementation of the linear scan allocator algorithm.
+//! pub(crate) Implementation of the linear scan allocator algorithm.
 //!
 //! This tries to follow the implementation as suggested by:
 //!   Optimized Interval Splitting in a Linear Scan Register Allocator,
@@ -10,14 +10,16 @@ use std::default;
 use std::env;
 use std::fmt;
 
-use crate::analysis_main::{run_analysis, AnalysisInfo};
-use crate::data_structures::*;
+use crate::data_structures::{BlockIx, InstIx, InstPoint, Point, RealReg, RegVecsAndBounds};
 use crate::inst_stream::{add_spills_reloads_and_moves, InstToInsertAndPoint};
 use crate::{
-    checker::CheckerContext, reg_maps::MentionRegUsageMapper, Function, RegAllocError,
-    RegAllocResult,
+    checker::CheckerContext, reg_maps::MentionRegUsageMapper, Function, RealRegUniverse,
+    RegAllocError, RegAllocResult, RegClass, Set, SpillSlot, VirtualReg, NUM_REG_CLASSES,
 };
 
+use analysis::{AnalysisInfo, RangeFrag};
+
+mod analysis;
 mod assign_registers;
 mod resolve_moves;
 
@@ -104,14 +106,11 @@ impl fmt::Debug for LinearScanOptions {
 }
 
 // Local shorthands.
-type Fragments = TypedIxVec<RangeFragIx, RangeFrag>;
-type VirtualRanges = TypedIxVec<VirtualRangeIx, VirtualRange>;
-type RealRanges = TypedIxVec<RealRangeIx, RealRange>;
 type RegUses = RegVecsAndBounds;
 
 /// A unique identifier for an interval.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct IntId(usize);
+struct IntId(pub(crate) usize);
 
 impl fmt::Debug for IntId {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -138,8 +137,57 @@ impl fmt::Display for FixedInterval {
     }
 }
 
-#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
-pub(crate) struct Mention(u8);
+#[derive(Clone)]
+pub(crate) struct VirtualInterval {
+    id: IntId,
+    vreg: VirtualReg,
+
+    /// Parent interval in the split tree.
+    parent: Option<IntId>,
+    /// Child interval, if it has one, in the split tree.
+    child: Option<IntId>,
+
+    /// Location assigned to this live interval.
+    location: Location,
+
+    mentions: MentionMap,
+    start: InstPoint,
+    end: InstPoint,
+}
+
+impl fmt::Display for VirtualInterval {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(fmt, "virtual {:?}", self.id)?;
+        if let Some(ref p) = self.parent {
+            write!(fmt, " (parent={:?})", p)?;
+        }
+        write!(
+            fmt,
+            ": {:?} {} [{:?}; {:?}]",
+            self.vreg, self.location, self.start, self.end
+        )
+    }
+}
+
+impl VirtualInterval {
+    fn mentions(&self) -> &MentionMap {
+        &self.mentions
+    }
+    fn covers(&self, pos: InstPoint) -> bool {
+        self.start <= pos && pos <= self.end
+    }
+    fn ancestor(&self, virtuals: &[VirtualInterval]) -> IntId {
+        let mut int = self;
+        while let Some(id) = int.parent {
+            int = &virtuals[id.0];
+        }
+        int.id
+    }
+}
+
+// TODO comment
+#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub struct Mention(u8);
 
 impl fmt::Debug for Mention {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -203,29 +251,29 @@ impl Mention {
     }
 }
 
-pub(crate) type MentionMap = Vec<(InstIx, Mention)>;
+pub type MentionMap = Vec<(InstIx, Mention)>;
 
 #[derive(Debug, Clone, Copy)]
-enum Location {
+pub(crate) enum Location {
     None,
     Reg(RealReg),
     Stack(SpillSlot),
 }
 
 impl Location {
-    fn reg(&self) -> Option<RealReg> {
+    pub(crate) fn reg(&self) -> Option<RealReg> {
         match self {
             Location::Reg(reg) => Some(*reg),
             _ => None,
         }
     }
-    fn spill(&self) -> Option<SpillSlot> {
+    pub(crate) fn spill(&self) -> Option<SpillSlot> {
         match self {
             Location::Stack(slot) => Some(*slot),
             _ => None,
         }
     }
-    fn is_none(&self) -> bool {
+    pub(crate) fn is_none(&self) -> bool {
         match self {
             Location::None => true,
             _ => false,
@@ -243,164 +291,13 @@ impl fmt::Display for Location {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct VirtualInterval {
-    id: IntId,
-    vix: VirtualRangeIx,
-    vreg: VirtualReg,
-
-    /// Parent interval in the split tree.
-    parent: Option<IntId>,
-    child: Option<IntId>,
-
-    /// Location assigned to this live interval.
-    location: Location,
-
-    mentions: MentionMap,
-    start: InstPoint,
-    end: InstPoint,
-}
-
-impl fmt::Display for VirtualInterval {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(fmt, "virtual {:?}", self.id)?;
-        if let Some(ref p) = self.parent {
-            write!(fmt, " (parent={:?})", p)?;
-        }
-        write!(
-            fmt,
-            ": {:?} {} [{:?}; {:?}]",
-            self.vreg, self.location, self.start, self.end
-        )
-    }
-}
-
-impl VirtualInterval {
-    fn virtual_range_ix(&self) -> VirtualRangeIx {
-        self.vix
-    }
-    fn mentions(&self) -> &MentionMap {
-        &self.mentions
-    }
-    fn covers(&self, pos: InstPoint) -> bool {
-        self.start <= pos && pos <= self.end
-    }
-}
-
 /// A group of live intervals.
-pub(crate) struct Intervals {
+pub struct Intervals {
     virtuals: Vec<VirtualInterval>,
     fixeds: Vec<FixedInterval>,
 }
 
 impl Intervals {
-    fn new(
-        reg_universe: &RealRegUniverse,
-        reg_uses: &RegUses,
-        real_ranges: &RealRanges,
-        virtual_ranges: VirtualRanges,
-        fragments: &Fragments,
-        stats: &mut Option<Statistics>,
-    ) -> Self {
-        let mut virtual_ints = Vec::with_capacity(virtual_ranges.len() as usize);
-        let mut fixed_ints = Vec::with_capacity(reg_universe.regs.len() as usize);
-
-        // Create fixed intervals first.
-        for rreg in reg_universe.regs.iter() {
-            stats.as_mut().map(|stats| stats.num_fixed += 1);
-            fixed_ints.push(FixedInterval {
-                reg: rreg.0,
-                frags: Vec::new(),
-            });
-        }
-
-        for rlr in real_ranges.iter() {
-            let i = rlr.rreg.get_index();
-            fixed_ints[i].frags.extend(
-                rlr.sorted_frags
-                    .frag_ixs
-                    .iter()
-                    .map(|fix| fragments[*fix].clone()),
-            );
-            fixed_ints[i].frags.sort_unstable_by_key(|frag| frag.first);
-        }
-
-        // Create virtual intervals then.
-        let mut int_id = 0;
-
-        let mut regsets = RegSets::new(true);
-        for (vlr_ix, vlr) in virtual_ranges.iter().enumerate() {
-            let vreg = vlr.vreg;
-            let reg = vreg.to_reg();
-
-            stats.as_mut().map(|stats| {
-                stats.num_virtual_ranges += 1;
-                stats.num_vregs = usize::max(stats.num_vregs, vreg.get_index());
-            });
-
-            // Compute mentions.
-            // TODO this is probably quite expensive, and could be done earlier during analysis.
-            let mut mentions = MentionMap::new();
-
-            let vlr_frags = &vlr.sorted_frags.frags;
-            for frag in vlr_frags {
-                for iix in frag
-                    .first
-                    .iix()
-                    .dotdot(InstIx::new(frag.last.iix().get() + 1))
-                {
-                    reg_uses.get_reg_sets_for_iix_reuse(iix, &mut regsets);
-
-                    debug_assert!(regsets.is_sanitized());
-                    if (iix != frag.first.iix() || frag.first.pt() == Point::Use)
-                        && regsets.uses.contains(reg)
-                    {
-                        if mentions.is_empty() || mentions.last().unwrap().0 != iix {
-                            mentions.push((iix, Mention::new()));
-                        }
-                        mentions.last_mut().unwrap().1.add_use();
-                    }
-                    if regsets.mods.contains(reg) {
-                        if mentions.is_empty() || mentions.last().unwrap().0 != iix {
-                            mentions.push((iix, Mention::new()));
-                        }
-                        mentions.last_mut().unwrap().1.add_mod();
-                    }
-                    if iix == frag.last.iix() && frag.last.pt() == Point::Use {
-                        continue;
-                    }
-                    if regsets.defs.contains(reg) {
-                        if mentions.is_empty() || mentions.last().unwrap().0 != iix {
-                            mentions.push((iix, Mention::new()));
-                        }
-                        mentions.last_mut().unwrap().1.add_def();
-                    }
-                }
-            }
-
-            let start = vlr_frags[0].first;
-            let end = vlr_frags.last().unwrap().last;
-
-            virtual_ints.push(VirtualInterval {
-                id: IntId(int_id),
-                vix: VirtualRangeIx::new(vlr_ix as u32),
-                vreg,
-                mentions,
-                start,
-                end,
-                parent: None,
-                child: None,
-                location: Location::None,
-            });
-            int_id += 1;
-        }
-
-        Self {
-            virtuals: virtual_ints,
-            fixeds: fixed_ints,
-        }
-    }
-
     fn get(&self, int_id: IntId) -> &VirtualInterval {
         &self.virtuals[int_id.0]
     }
@@ -614,30 +511,27 @@ pub(crate) fn run<F: Function>(
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     let AnalysisInfo {
         reg_vecs_and_bounds: reg_uses,
-        real_ranges: rlrs,
-        virtual_ranges: vlrs,
-        range_frags: fragments,
+        intervals,
         liveins,
         liveouts,
         ..
-    } = run_analysis(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
+    } = analysis::run(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
 
     let scratches_by_rc = compute_scratches(reg_universe)?;
 
-    let mut stats = if opts.stats {
-        Some(Statistics::default())
+    let stats = if opts.stats {
+        let mut stats = Statistics::default();
+        stats.num_fixed = intervals.fixeds.len();
+        stats.num_virtual_ranges = intervals.virtuals.len();
+        stats.num_vregs = intervals
+            .virtuals
+            .iter()
+            .map(|virt| virt.vreg.get_index())
+            .fold(0, |a, b| usize::max(a, b));
+        Some(stats)
     } else {
         None
     };
-
-    let intervals = Intervals::new(
-        &reg_universe,
-        &reg_uses,
-        &rlrs,
-        vlrs,
-        &fragments,
-        &mut stats,
-    );
 
     if log_enabled!(Level::Trace) {
         trace!("fixed intervals:");

@@ -9,7 +9,7 @@ use crate::analysis_data_flow::{
 };
 use crate::data_structures::{
     BlockIx, RangeFrag, RangeFragIx, RangeFragMetrics, RealRange, RealRangeIx, RealReg,
-    RealRegUniverse, Reg, RegVecsAndBounds, TypedIxVec, VirtualRange, VirtualRangeIx,
+    RealRegUniverse, RegVecsAndBounds, TypedIxVec, VirtualRange, VirtualRangeIx,
 };
 use crate::sparse_set::SparseSet;
 use crate::Function;
@@ -83,10 +83,6 @@ pub struct AnalysisInfo {
     pub(crate) range_frags: TypedIxVec<RangeFragIx, RangeFrag>,
     /// The fragment metrics table
     pub(crate) range_metrics: TypedIxVec<RangeFragIx, RangeFragMetrics>,
-    /// Liveins per block
-    pub(crate) liveins: TypedIxVec<BlockIx, SparseSet<Reg>>,
-    /// Liveouts per block
-    pub(crate) liveouts: TypedIxVec<BlockIx, SparseSet<Reg>>,
     /// Estimated execution frequency per block
     pub(crate) estimated_frequencies: TypedIxVec<BlockIx, u32>,
     /// Maps InstIxs to BlockIxs
@@ -118,10 +114,7 @@ pub fn run_analysis<F: Function>(
     let mut estimated_frequencies = TypedIxVec::new();
     for bix in func.blocks() {
         let mut estimated_frequency = 1;
-        let mut depth = cfg_info.depth_map[bix];
-        if depth > 3 {
-            depth = 3;
-        }
+        let depth = u32::min(cfg_info.depth_map[bix], 3);
         for _ in 0..depth {
             estimated_frequency *= 10;
         }
@@ -240,8 +233,6 @@ pub fn run_analysis<F: Function>(
         virtual_ranges: vlr_env,
         range_frags: frag_env,
         range_metrics: frag_metrics_env,
-        liveins: livein_sets_per_block,
-        liveouts: liveout_sets_per_block,
         estimated_frequencies,
         inst_to_block_map,
     })
