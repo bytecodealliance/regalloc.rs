@@ -32,7 +32,7 @@ use crate::data_structures::{
 // For working with such trees we will supply our own comparison function;
 // hence PartialOrd here serves only to placate the typechecker.  It should
 // never actually be used.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RangeFragAndVLRIx {
     pub frag: RangeFrag,
     pub mb_vlrix: Option<VirtualRangeIx>,
@@ -105,7 +105,7 @@ impl CommitmentMap {
         to_add_mb_vlrix: Option<VirtualRangeIx>,
     ) {
         for frag in &to_add_frags.frags {
-            let to_add = RangeFragAndVLRIx::new(*frag, to_add_mb_vlrix);
+            let to_add = RangeFragAndVLRIx::new(frag.clone(), to_add_mb_vlrix);
             let added = self.tree.insert(
                 to_add,
                 Some(&|pair1: RangeFragAndVLRIx, pair2: RangeFragAndVLRIx| {
@@ -125,7 +125,7 @@ impl CommitmentMap {
         frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     ) {
         for fix in &to_add_frags.frag_ixs {
-            let to_add = RangeFragAndVLRIx::new(frag_env[*fix], to_add_mb_vlrix);
+            let to_add = RangeFragAndVLRIx::new(frag_env[*fix].clone(), to_add_mb_vlrix);
             let added = self.tree.insert(
                 to_add,
                 Some(&|pair1: RangeFragAndVLRIx, pair2: RangeFragAndVLRIx| {
@@ -142,7 +142,7 @@ impl CommitmentMap {
         for frag in &to_del_frags.frags {
             // re None: we don't care what the VLRIx is, since we're deleting by
             // RangeFrags alone.
-            let to_del = RangeFragAndVLRIx::new(*frag, None);
+            let to_del = RangeFragAndVLRIx::new(frag.clone(), None);
             let deleted = self.tree.delete(
                 to_del,
                 Some(&|pair1: RangeFragAndVLRIx, pair2: RangeFragAndVLRIx| {

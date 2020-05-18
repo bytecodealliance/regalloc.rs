@@ -1585,7 +1585,7 @@ impl fmt::Debug for InstPoint {
 // that InstPoint values have a total ordering, at least within a single basic
 // block: the insn number is used as the primary key, and the Point part is
 // the secondary key, with Reload < Use < Def < Spill.
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RangeFrag {
     pub first: InstPoint,
     pub last: InstPoint,

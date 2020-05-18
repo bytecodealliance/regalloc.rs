@@ -1135,7 +1135,7 @@ fn deref_and_compress_sorted_range_frag_ixs(
 
     if num_frags == 1 {
         // Nothing we can do.  Shortcut.
-        res.frags.push(frag_env[frag_ixs[0]]);
+        res.frags.push(frag_env[frag_ixs[0]].clone());
         *stats_num_vfrags_compressed += 1;
         return res;
     }
@@ -1163,7 +1163,7 @@ fn deref_and_compress_sorted_range_frag_ixs(
         // emit (s, e)
         if s == e {
             // Can't compress this one
-            res.frags.push(frag_env[frag_ixs[s]]);
+            res.frags.push(frag_env[frag_ixs[s]].clone());
         } else {
             let compressed_frag = RangeFrag {
                 first: frag_env[frag_ixs[s]].first,

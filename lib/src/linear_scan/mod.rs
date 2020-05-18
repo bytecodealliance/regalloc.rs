@@ -316,9 +316,12 @@ impl Intervals {
 
         for rlr in real_ranges.iter() {
             let i = rlr.rreg.get_index();
-            fixed_ints[i]
-                .frags
-                .extend(rlr.sorted_frags.frag_ixs.iter().map(|fix| fragments[*fix]));
+            fixed_ints[i].frags.extend(
+                rlr.sorted_frags
+                    .frag_ixs
+                    .iter()
+                    .map(|fix| fragments[*fix].clone()),
+            );
             fixed_ints[i].frags.sort_unstable_by_key(|frag| frag.first);
         }
 
@@ -340,7 +343,7 @@ impl Intervals {
             let mut mentions = MentionMap::new();
 
             let vlr_frags = &vlr.sorted_frags.frags;
-            for &frag in vlr_frags {
+            for frag in vlr_frags {
                 for iix in frag
                     .first
                     .iix()
