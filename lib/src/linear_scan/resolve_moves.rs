@@ -210,7 +210,7 @@ fn resolve_moves_accross_blocks<F: Function>(
 
             seen_successors.clear();
 
-            let mut maybe_cur_id = None;
+            let mut maybe_cur_id: Option<IntId> = None;
 
             let last_inst = func.block_insns(block).last();
             let cur_last_inst = InstPoint::new_def(last_inst);
@@ -226,6 +226,13 @@ fn resolve_moves_accross_blocks<F: Function>(
 
                 // Find the interval for this (vreg, inst) pair.
                 let succ_first_inst = InstPoint::new_use(func.block_insns(succ).first());
+
+                if let Some(cur_id) = maybe_cur_id {
+                    if intervals[cur_id.0].covers(succ_first_inst) {
+                        continue;
+                    }
+                }
+
                 let succ_id = find_enclosing_interval(vreg, succ_first_inst, sorted_intervals)
                     .expect("variable should have been live in successor");
 
@@ -250,9 +257,9 @@ fn resolve_moves_accross_blocks<F: Function>(
                     Some(id) => id,
                 };
 
-                // The move is only needed when the two intervals relate to the same initial
-                // virtual range; otherwise, these are independent.
-                if intervals[cur_id.0].vix != intervals[succ_id.0].vix {
+                if intervals[cur_id.0].ancestor(&intervals)
+                    != intervals[succ_id.0].ancestor(&intervals)
+                {
                     continue;
                 }
 
@@ -432,36 +439,27 @@ fn find_enclosing_interval(
     inst: InstPoint,
     virtual_intervals: &Vec<VirtualInterval>,
 ) -> Option<IntId> {
-    // The list of virtual intervals is sorted by vreg; find one interval for this
-    // vreg.
+    // The list of virtual intervals is sorted by vreg; find one interval for this vreg.
     let index = virtual_intervals
         .binary_search_by_key(&vreg, |int| int.vreg)
         .expect("should find at least one virtual interval for this vreg");
 
-    // Rewind back to the first interval for this vreg, since there might be
-    // several ones.
+    // Rewind back to the first interval for this vreg, since there might be several ones.
     let mut index = index;
     while index > 0 && virtual_intervals[index - 1].vreg == vreg {
         index -= 1;
     }
 
-    // Now iterates on all the intervals for this virtual register, until one
-    // works.
+    // Now iterates on all the intervals for this virtual register, until one works.
     let mut int = &virtual_intervals[index];
     loop {
         if int.start <= inst && inst <= int.end {
             return Some(int.id);
         }
-        // TODO reenable this if there are several fragments per interval again.
-        //if intervals.covers(int_id, inst, fragments) {
-        //return Some(int_id);
-        //}
-
         index += 1;
         if index == virtual_intervals.len() {
             return None;
         }
-
         int = &virtual_intervals[index];
         if int.vreg != vreg {
             return None;

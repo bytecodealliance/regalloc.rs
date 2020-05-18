@@ -1089,8 +1089,6 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
     debug_assert!(parent_end <= child_start);
     debug_assert!(child_start <= child_end);
 
-    let vreg_ix = int.virtual_range_ix();
-
     // TODO avoid the clone here, use slices!
     let mut parent_mentions = state.intervals.get(id).mentions().clone();
 
@@ -1156,9 +1154,8 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
     let child_id = IntId(state.intervals.num_virtual_intervals());
     let child_int = VirtualInterval {
         id: child_id,
-        vix: vreg_ix,
         vreg: int.vreg,
-        mentions: child_mentions,
+        mentions: child_mentions.into(),
         start: child_start,
         end: child_end,
         parent: Some(id),
@@ -1168,7 +1165,7 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
     state.intervals.push_interval(child_int);
 
     state.intervals.get_mut(id).end = parent_end;
-    state.intervals.get_mut(id).mentions = parent_mentions;
+    state.intervals.get_mut(id).mentions = parent_mentions.into();
     state.intervals.set_child(id, child_id);
 
     if log_enabled!(Level::Trace) {
