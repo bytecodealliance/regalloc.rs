@@ -1399,7 +1399,7 @@ pub fn alloc_main<F: Function>(
             // to be mapped to the real reg `i`
             // .. collect up all its constituent RangeFrags.
             for frag in &sorted_frags.frags {
-                frag_map.push((*frag, *vreg, rreg));
+                frag_map.push((frag.clone(), *vreg, rreg));
             }
         }
     }

@@ -88,7 +88,7 @@ fn ssal_is_add_possible(tree: &AVLTree<RangeFrag>, frags: &SortedRangeFrags) -> 
         let mut root = tree.root;
         while root != AVL_NULL {
             let root_node = &tree.pool[root as usize];
-            let root_frag = root_node.item;
+            let root_frag = root_node.item.clone();
             if frag.last < root_frag.first {
                 // `frag` is entirely to the left of the `root`.  So there's no
                 // overlap with root.  Continue by inspecting the left subtree.
@@ -119,7 +119,10 @@ fn ssal_add_if_possible(tree: &mut AVLTree<RangeFrag>, frags: &SortedRangeFrags)
     }
     // They will.  So now insert them.
     for frag in &frags.frags {
-        let inserted = tree.insert(*frag, Some(&|frag1, frag2| cmp_range_frags(&frag1, &frag2)));
+        let inserted = tree.insert(
+            frag.clone(),
+            Some(&|frag1, frag2| cmp_range_frags(&frag1, &frag2)),
+        );
         // This can't fail
         assert!(inserted);
     }
