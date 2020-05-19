@@ -82,7 +82,7 @@ impl RI {
             RI::Imm { .. } => {}
         }
     }
-    fn apply_uses(&mut self, mapper: &RegUsageMapper) {
+    fn apply_uses<RUM: RegUsageMapper>(&mut self, mapper: &RUM) {
         match self {
             RI::Reg { ref mut reg } => {
                 reg.apply_uses(mapper);
@@ -143,7 +143,7 @@ impl AM {
         }
     }
 
-    fn apply_uses(&mut self, mapper: &RegUsageMapper) {
+    fn apply_uses<RUM: RegUsageMapper>(&mut self, mapper: &RUM) {
         match self {
             AM::RI { ref mut base, .. } => {
                 base.apply_uses(mapper);
@@ -948,7 +948,7 @@ impl Inst {
     }
 
     /// Apply the specified VirtualReg->RealReg mappings to the instruction,
-    pub fn map_regs(&mut self, mapper: &RegUsageMapper) {
+    pub fn map_regs<RUM: RegUsageMapper>(&mut self, mapper: &RUM) {
         match self {
             Inst::NopZ {} => {}
             Inst::Imm { dst, imm: _ } => {
@@ -2201,7 +2201,7 @@ impl regalloc::Function for Func {
     /// to the instruction's effect) and defs (which semantically occur
     /// just after the instruction's effect). Regs that were "modified"
     /// can use either map; the vreg should be the same in both.
-    fn map_regs(insn: &mut Self::Inst, maps: &RegUsageMapper) {
+    fn map_regs<RUM: RegUsageMapper>(insn: &mut Self::Inst, maps: &RUM) {
         insn.map_regs(maps);
     }
 

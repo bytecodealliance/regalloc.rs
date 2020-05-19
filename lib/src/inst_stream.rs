@@ -1,10 +1,10 @@
 use crate::checker::Inst as CheckerInst;
 use crate::checker::{CheckerContext, CheckerErrors};
 use crate::data_structures::{
-    BlockIx, InstIx, InstPoint, RangeFrag, RealReg, RealRegUniverse, RegUsageMapper, SpillSlot,
-    TypedIxVec, VirtualReg, Writable,
+    BlockIx, InstIx, InstPoint, RangeFrag, RealReg, RealRegUniverse, SpillSlot, TypedIxVec,
+    VirtualReg, Writable,
 };
-use crate::{Function, RegAllocError};
+use crate::{reg_maps::VrangeRegUsageMapper, Function, RegAllocError};
 use log::trace;
 
 use std::result::Result;
@@ -146,7 +146,7 @@ fn map_vregs_to_rregs<F: Function>(
 
     // Allocate the "mapper" data structure that we update incrementally and
     // pass to instruction reg-mapping routines to query.
-    let mut mapper = RegUsageMapper::new(vreg_estimate);
+    let mut mapper = VrangeRegUsageMapper::new(vreg_estimate);
 
     fn is_sane(frag: &RangeFrag) -> bool {
         // "Normal" frag (unrelated to spilling).  No normal frag may start or

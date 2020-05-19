@@ -57,11 +57,11 @@
 
 use crate::analysis_data_flow::get_san_reg_sets_for_insn;
 use crate::data_structures::{
-    BlockIx, InstIx, InstPoint, Map, Point, RealReg, RealRegUniverse, Reg, RegSets, RegUsageMapper,
-    SpillSlot, VirtualReg, Writable,
+    BlockIx, InstIx, InstPoint, Map, Point, RealReg, RealRegUniverse, Reg, RegSets, SpillSlot,
+    VirtualReg, Writable,
 };
 use crate::inst_stream::InstToInsertAndPoint;
-use crate::Function;
+use crate::{Function, RegUsageMapper};
 
 use std::collections::VecDeque;
 use std::default::Default;
@@ -375,12 +375,12 @@ impl Checker {
     /// registers. The `SanitizedInstRegUses` must be the pre-allocation state;
     /// the `mapper` must be provided to give the virtual -> real mappings at
     /// the program points immediately before and after this instruction.
-    pub(crate) fn add_op(
+    pub(crate) fn add_op<RUM: RegUsageMapper>(
         &mut self,
         block: BlockIx,
         inst_ix: InstIx,
         regsets: &RegSets,
-        mapper: &RegUsageMapper,
+        mapper: &RUM,
     ) -> Result<(), CheckerErrors> {
         debug!(
             "add_op: block {} inst {} regsets {:?}",
@@ -512,13 +512,13 @@ impl CheckerContext {
 
     /// Update the checker with the given instruction and the given pre- and post-maps. Instructions
     /// within a block must be visited in program order.
-    pub(crate) fn handle_insn<F: Function>(
+    pub(crate) fn handle_insn<F: Function, RUM: RegUsageMapper>(
         &mut self,
         ru: &RealRegUniverse,
         func: &F,
         bix: BlockIx,
         iix: InstIx,
-        mapper: &RegUsageMapper,
+        mapper: &RUM,
     ) -> Result<(), CheckerErrors> {
         let empty = vec![];
         let pre_point = InstPoint::new(iix, Point::Reload);
