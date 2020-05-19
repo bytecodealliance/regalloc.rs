@@ -691,7 +691,7 @@ pub(crate) fn run<F: Function>(
 
     apply_registers(
         func,
-        &sorted_virtuals,
+        &virtuals,
         memory_moves,
         reg_universe,
         num_spill_slots,
