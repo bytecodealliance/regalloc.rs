@@ -25,6 +25,7 @@ mod checker;
 mod data_structures;
 mod inst_stream;
 mod linear_scan;
+mod reg_maps;
 mod sparse_set;
 mod union_find;
 
@@ -148,9 +149,24 @@ pub use crate::data_structures::RegClassInfo;
 
 pub use crate::data_structures::RegUsageCollector;
 
-// A structure for providing mapping results for a given instruction.
+/// A trait for providing mapping results for a given instruction.
+///
+/// This provides virtual to real register mappings for every mention in an instruction: use, mod
+/// or def. The main purpose of this trait is to be used when re-writing the instruction stream
+/// after register allocation happened; see also `Function::map_regs`.
+pub trait RegUsageMapper: fmt::Debug {
+    /// Return the `RealReg` if mapped, or `None`, for `vreg` occuring as a use
+    /// on the current instruction.
+    fn get_use(&self, vreg: VirtualReg) -> Option<RealReg>;
 
-pub use crate::data_structures::RegUsageMapper;
+    /// Return the `RealReg` if mapped, or `None`, for `vreg` occuring as a def
+    /// on the current instruction.
+    fn get_def(&self, vreg: VirtualReg) -> Option<RealReg>;
+
+    /// Return the `RealReg` if mapped, or `None`, for a `vreg` occuring as a
+    /// mod on the current instruction.
+    fn get_mod(&self, vreg: VirtualReg) -> Option<RealReg>;
+}
 
 // TypedIxVector, so that the interface can speak about vectors of blocks and
 // instructions.
@@ -220,7 +236,7 @@ pub trait Function {
     /// Note that this does not take a `self`, because we want to allow the
     /// regalloc to have a mutable borrow of an insn (which borrows the whole
     /// Function in turn) outstanding while calling this.
-    fn map_regs(insn: &mut Self::Inst, maps: &RegUsageMapper);
+    fn map_regs<RUM: RegUsageMapper>(insn: &mut Self::Inst, maps: &RUM);
 
     /// Allow the regalloc to query whether this is a move. Returns (dst, src).
     fn is_move(&self, insn: &Self::Inst) -> Option<(Writable<Reg>, Reg)>;
