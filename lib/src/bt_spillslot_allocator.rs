@@ -3,8 +3,6 @@
 
 //! Allocation of spill slots for the backtracking allocator.
 
-use log::debug;
-
 use crate::avl_tree::{AVLTree, AVL_NULL};
 use crate::data_structures::{
     cmp_range_frags, RangeFrag, SortedRangeFrags, SpillSlot, TypedIxVec, VirtualRange,
@@ -22,6 +20,13 @@ use crate::Function;
 //
 // All of the `size` metrics in this bit are in terms of "logical spill slot
 // units", per the interface's description for `get_spillslot_size`.
+
+// *** Important: to fully understand this allocator and how it interacts with
+// coalescing analysis, you need to read the big block comment at the top of
+// bt_coalescing_analysis.rs.
+
+//=============================================================================
+// Logical spill slots
 
 // We keep one of these for every "logical spill slot" in use.
 enum LogicalSpillSlot {
@@ -164,7 +169,7 @@ impl SpillSlotAllocator {
             self.slots.push(LogicalSpillSlot::Unavail);
         }
         assert!(self.slots.len() % (req_size as usize) == 0);
-        //println!("QQQQ   add_new_slot {} for size {}", res, req_size);
+
         res
     }
 
@@ -183,10 +188,10 @@ impl SpillSlotAllocator {
         vlrEquivClasses: &UnionFindEquivClasses<VirtualRangeIx>,
         vlrix: VirtualRangeIx,
     ) {
-        //println!("QQQQ alloc_spill_slots: BEGIN");
         for cand_vlrix in vlrEquivClasses.equiv_class_elems_iter(vlrix) {
             assert!(vlr_slot_env[cand_vlrix].is_none());
         }
+
         // Do this in two passes.  It's a bit cumbersome.
         //
         // In the first pass, find a spill slot which can take all of the
@@ -194,18 +199,38 @@ impl SpillSlotAllocator {
         // yet.  We will always find such a slot, because if none of the existing
         // slots can do it, we can always start a new one.
         //
-        // Now, that doesn't guarantee that all the candidates can *together* can
-        // be assigned to the chosen slot.  That's only possible when they are
-        // non-overlapping.  Rather than laboriously try to determine that, simply
-        // proceed with the second pass, the assignment pass, as follows.  For
-        // each candidate, try to allocate it to our chosen slot.  If it goes in
-        // without interference, fine.  If not, that means it overlaps with some
-        // other member of the class -- in which case we must find some other slot
-        // for it.  It's too bad.
+        // Now, that doesn't guarantee that all the candidates can *together*
+        // can be assigned to the chosen slot.  That's only possible when they
+        // are non-overlapping.  Rather than laboriously try to determine
+        // that, simply proceed with the second pass, the assignment pass, as
+        // follows.  For each candidate, try to allocate it to the slot chosen
+        // in the first pass.  If it goes in without interference, fine.  If
+        // not, that means it overlaps with some other member of the class --
+        // in which case we must find some other slot for it.  It's too bad.
         //
         // The result is: all members will get a valid spill slot.  And if they
         // were all non overlapping then we are guaranteed that they all get the
         // same slot.  Which is as good as we can hope for.
+        //
+        // In both passes, only the highest-numbered 8 slots are checked for
+        // availability.  This is a heuristic hack which both reduces
+        // allocation time and reduces the eventual resulting spilling:
+        //
+        // - It avoids lots of pointless repeated checking of low-numbered
+        //   spill slots, that long ago became full(ish) and are unlikely to be
+        //   able to take any new VirtualRanges
+        //
+        // - More subtly, it interacts with the question of whether or not
+        //   each VirtualRange equivalence class is internally overlapping.
+        //   When no overlaps are present, the spill slot allocator guarantees
+        //   to find a slot which is free for the entire equivalence class,
+        //   which is the ideal solution.  When there are overlaps present, the
+        //   allocator is forced to allocate at least some of the VirtualRanges
+        //   in the class to different slots.  By restricting the number of
+        //   slots it can choose to 8 (+ extras if it needs them), we reduce the
+        //   tendency for the VirtualRanges to be assigned a large number of
+        //   different slots, which in turn reduces the amount of spilling in
+        //   the end.
 
         // We need to know what regclass, and hence what slot size, we're looking
         // for.  Just look at the representative; all VirtualRanges in the eclass
@@ -215,18 +240,29 @@ impl SpillSlotAllocator {
         let req_size = func.get_spillslot_size(vlrix_vreg.get_class(), vlrix_vreg);
         assert!(req_size == 1 || req_size == 2 || req_size == 4 || req_size == 8);
 
-        // Pass 1: find a slot which can take VirtualRange when tested
-        // individually.
+        // Pass 1: find a slot which can take all VirtualRanges in `vlrix`s
+        // eclass when tested individually.
         //
-        // 1a: search existing slots
+        // Pass 1a: search existing slots
+        let search_start_slotno: u32 = {
+            // We will only search from `search_start_slotno` upwards.  See
+            // block comment above for significance of the value `8`.
+            let window = 8;
+            if self.slots.len() >= window {
+                (self.slots.len() - window) as u32
+            } else {
+                0
+            }
+        };
         let mut mb_chosen_slotno: Option<u32> = None;
-        'pass1_search_existing_slots: for cand_slot_no in 0..self.slots.len() as u32 {
+        // BEGIN search existing slots
+        for cand_slot_no in search_start_slotno..self.slots.len() as u32 {
             let cand_slot = &self.slots[cand_slot_no as usize];
             if !cand_slot.is_InUse() {
-                continue 'pass1_search_existing_slots;
+                continue;
             }
             if cand_slot.get_size() != req_size {
-                continue 'pass1_search_existing_slots;
+                continue;
             }
             let tree = &cand_slot.get_tree();
             assert!(mb_chosen_slotno.is_none());
@@ -243,24 +279,21 @@ impl SpillSlotAllocator {
             }
             // END see if `cand_slot` can hold all eclass members individually
             if !all_cands_fit_individually {
-                continue 'pass1_search_existing_slots;
+                continue;
             }
 
             // Ok.  All eclass members will fit individually in `cand_slot_no`.
             mb_chosen_slotno = Some(cand_slot_no);
             break;
-        } /* 'pass1_search_existing_slots */
-        // 1b. If we didn't find a usable slot, allocate a new one.
+        }
+        // END search existing slots
+
+        // Pass 1b. If we didn't find a usable slot, allocate a new one.
         let chosen_slotno: u32 = if mb_chosen_slotno.is_none() {
-            //println!(
-            //    "QQQQ   alloc_spill_slots: no existing slot works.  Alloc new.");
             self.add_new_slot(req_size)
         } else {
-            //println!("QQQQ   alloc_spill_slots: use existing {} (for eclass)",
-            //         mb_chosen_slotno.unwrap());
             mb_chosen_slotno.unwrap()
         };
-        //println!("QQQQ   alloc_spill_slots: chosen = {}", chosen_slotno);
 
         // Pass 2.  Try to allocate each eclass member individually to the chosen
         // slot.  If that fails, just allocate them anywhere.
@@ -273,8 +306,9 @@ impl SpillSlotAllocator {
                 vlr_slot_env[cand_vlrix] = Some(SpillSlot::new(chosen_slotno));
                 continue 'pass2_per_equiv_class;
             }
+            _all_in_chosen = false;
             // It won't fit in `chosen_slotno`, so try somewhere (anywhere) else.
-            for alt_slotno in 0..self.slots.len() as u32 {
+            for alt_slotno in search_start_slotno..self.slots.len() as u32 {
                 let alt_slot = &self.slots[alt_slotno as usize];
                 if !alt_slot.is_InUse() {
                     continue;
@@ -295,7 +329,6 @@ impl SpillSlotAllocator {
             }
             // If we get here, it means it won't fit in any slot we currently have.
             // So allocate a new one and use that.
-            _all_in_chosen = false;
             let new_slotno = self.add_new_slot(req_size);
             let mut tree = self.slots[new_slotno as usize].get_mut_tree();
             let added = ssal_add_if_possible(&mut tree, &cand_vlr.sorted_frags);
@@ -307,17 +340,5 @@ impl SpillSlotAllocator {
             panic!("SpillSlotAllocator: alloc_spill_slots: failed?!?!");
             /*NOTREACHED*/
         } /* 'pass2_per_equiv_class */
-
-        for eclass_vlrix in vlrEquivClasses.equiv_class_elems_iter(vlrix) {
-            assert!(vlr_slot_env[eclass_vlrix].is_some());
-            debug!(
-                "--     alloc_spill_sls  {:?} -> {:?}",
-                eclass_vlrix,
-                vlr_slot_env[eclass_vlrix].unwrap()
-            );
-        }
-        //println!("QQQQ alloc_spill_slots: END, all in same = {}",
-        //         if all_in_chosen { "YES" } else { "no" });
-        //println!("QQQQ");
     }
 }
