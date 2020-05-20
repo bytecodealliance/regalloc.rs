@@ -925,14 +925,17 @@ pub enum SpillSlot {
     SpillSlot(u32),
 }
 impl SpillSlot {
+    #[inline(always)]
     pub fn new(n: u32) -> Self {
         SpillSlot::SpillSlot(n)
     }
+    #[inline(always)]
     pub fn get(self) -> u32 {
         match self {
             SpillSlot::SpillSlot(n) => n,
         }
     }
+    #[inline(always)]
     pub fn get_usize(self) -> usize {
         self.get() as usize
     }
@@ -1964,6 +1967,37 @@ impl SortedRangeFrags {
             frags: SmallVec::<[RangeFrag; 4]>::new(),
         }
     }
+
+    pub fn overlaps(&self, other: &Self) -> bool {
+        // Since both vectors are sorted and individually non-overlapping, we
+        // can establish that they are mutually non-overlapping by walking
+        // them simultaneously and checking, at each step, that there is a
+        // unique "next lowest" frag available.
+        let frags1 = &self.frags;
+        let frags2 = &other.frags;
+        let n1 = frags1.len();
+        let n2 = frags2.len();
+        let mut c1 = 0;
+        let mut c2 = 0;
+        loop {
+            if c1 >= n1 || c2 >= n2 {
+                // We made it to the end of one (or both) vectors without
+                // finding any conflicts.
+                return false; // "no overlaps"
+            }
+            let f1 = &frags1[c1];
+            let f2 = &frags2[c2];
+            match cmp_range_frags(f1, f2) {
+                Some(Ordering::Less) => c1 += 1,
+                Some(Ordering::Greater) => c2 += 1,
+                _ => {
+                    // There's no unique "next frag" -- either they are
+                    // identical, or they overlap.  So we're done.
+                    return true; // "there's an overlap"
+                }
+            }
+        }
+    }
 }
 
 //=============================================================================
@@ -2129,6 +2163,12 @@ pub struct VirtualRange {
     pub size: u16,
     pub total_cost: u32,
     pub spill_cost: SpillCost, // == total_cost / size
+}
+
+impl VirtualRange {
+    pub fn overlaps(&self, other: &Self) -> bool {
+        self.sorted_frags.overlaps(&other.sorted_frags)
+    }
 }
 
 impl fmt::Debug for VirtualRange {

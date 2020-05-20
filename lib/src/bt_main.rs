@@ -669,12 +669,21 @@ pub fn alloc_main<F: Function>(
             // At this point, we have in `hinted_regs`, the hint candidates that
             // arise from copies between `curr_vlr` and its immediate neighbouring
             // VLRs or RLRs, in order of declining preference.  And that is a good
-            // start.  However, it may be the case that there is some other VLR
-            // which is in the same equivalence class as `curr_vlr`, but is not a
-            // direct neighbour, and which has already been assigned a register.  We
-            // really ought to take those into account too, as the least-preferred
-            // candidates.  Hence we need to iterate over the equivalence class and
-            // "round up the secondary candidates."
+            // start.
+            //
+            // However, it may be the case that there is some other VLR which
+            // is in the same equivalence class as `curr_vlr`, but is not a
+            // direct neighbour, and which has already been assigned a
+            // register.  We really ought to take those into account too, as
+            // the least-preferred candidates.  Hence we need to iterate over
+            // the equivalence class and "round up the secondary candidates."
+            //
+            // Note that the equivalence class might contain VirtualRanges
+            // that are mutually overlapping.  That is handled correctly,
+            // since we always consult the relevant CommitmentMaps (in the
+            // PerRealRegs) to detect interference.  To more fully understand
+            // this, see the big block comment at the top of
+            // bt_coalescing_analysis.rs.
             let n_primary_cands = hinted_regs.len();
 
             // Find the equivalence class set for `curr_vlrix`.  We'll need it
