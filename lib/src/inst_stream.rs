@@ -409,6 +409,10 @@ pub(crate) fn add_spills_reloads_and_moves<F: Function>(
     //
     // We also need to examine and update Func::blocks.  This is assumed to
     // be arranged in ascending order of the Block::start fields.
+    //
+    // Linear scan relies on the sort being stable here, so make sure to not
+    // use an unstable sort. See the comment in `resolve_moves_across blocks`
+    // in linear scan's code.
 
     insts_to_add.sort_by_key(|mem_move| mem_move.point);
 
