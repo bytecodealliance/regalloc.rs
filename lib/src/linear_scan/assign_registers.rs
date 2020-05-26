@@ -1057,6 +1057,7 @@ fn _try_split_regs<F: Function>(state: &mut State<F>, id: IntId, next_pos: InstP
 ///
 /// The id of the new interval is returned, while the parent interval is mutated
 /// in place. The child interval starts after (including) at_pos.
+#[inline(never)]
 fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> IntId {
     debug!("split {:?} at {:?}", id, at_pos);
     trace!("interval: {}", state.intervals.get(id));
@@ -1089,9 +1090,10 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
     debug_assert!(parent_end <= child_start);
     debug_assert!(child_start <= child_end);
 
-    // TODO avoid the clone here, use slices!
-    let mut parent_mentions = state.intervals.get(id).mentions().clone();
+    let vreg = int.vreg;
+    let ancestor = int.ancestor;
 
+    let parent_mentions = state.intervals.get_mut(id).mentions_mut();
     let index = parent_mentions.binary_search_by(|mention| {
         // The comparator function returns the position of the argument compared to the target.
 
@@ -1153,14 +1155,13 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
 
     let child_id = IntId(state.intervals.num_virtual_intervals());
     let mut child_int =
-        VirtualInterval::new(child_id, int.vreg, child_start, child_end, child_mentions);
+        VirtualInterval::new(child_id, vreg, child_start, child_end, child_mentions);
     child_int.parent = Some(id);
-    child_int.ancestor = int.ancestor;
+    child_int.ancestor = ancestor;
 
     state.intervals.push_interval(child_int);
 
     state.intervals.get_mut(id).end = parent_end;
-    state.intervals.get_mut(id).mentions = parent_mentions.into();
     state.intervals.set_child(id, child_id);
 
     if log_enabled!(Level::Trace) {

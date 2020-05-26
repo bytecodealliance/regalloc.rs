@@ -193,6 +193,9 @@ impl VirtualInterval {
     fn mentions(&self) -> &MentionMap {
         &self.mentions
     }
+    fn mentions_mut(&mut self) -> &mut MentionMap {
+        &mut self.mentions
+    }
     fn covers(&self, pos: InstPoint) -> bool {
         self.start <= pos && pos <= self.end
     }
@@ -416,6 +419,7 @@ fn next_use(interval: &VirtualInterval, pos: InstPoint, _reg_uses: &RegUses) -> 
 /// Finds the last use of a vreg before a given target, including it in possible
 /// return values.
 /// Extends to the right, that is, modified means "def".
+#[inline(never)]
 fn last_use(interval: &VirtualInterval, pos: InstPoint, _reg_uses: &RegUses) -> Option<InstPoint> {
     if log_enabled!(Level::Trace) {
         trace!("searching last use of {} before {:?}", interval, pos,);
