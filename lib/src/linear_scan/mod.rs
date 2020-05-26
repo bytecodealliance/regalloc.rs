@@ -4,7 +4,7 @@
 //!   Optimized Interval Splitting in a Linear Scan Register Allocator,
 //!     by Wimmer et al., 2005
 
-use log::{debug, info, log_enabled, trace, Level};
+use log::{info, log_enabled, trace, Level};
 
 use std::default;
 use std::env;
@@ -144,6 +144,7 @@ pub(crate) struct VirtualInterval {
 
     /// Parent interval in the split tree.
     parent: Option<IntId>,
+    ancestor: Option<IntId>,
     /// Child interval, if it has one, in the split tree.
     child: Option<IntId>,
 
@@ -170,18 +171,30 @@ impl fmt::Display for VirtualInterval {
 }
 
 impl VirtualInterval {
+    fn new(
+        id: IntId,
+        vreg: VirtualReg,
+        start: InstPoint,
+        end: InstPoint,
+        mentions: MentionMap,
+    ) -> Self {
+        Self {
+            id,
+            vreg,
+            parent: None,
+            ancestor: None,
+            child: None,
+            location: Location::None,
+            mentions,
+            start,
+            end,
+        }
+    }
     fn mentions(&self) -> &MentionMap {
         &self.mentions
     }
     fn covers(&self, pos: InstPoint) -> bool {
         self.start <= pos && pos <= self.end
-    }
-    fn ancestor(&self, virtuals: &[VirtualInterval]) -> IntId {
-        let mut int = self;
-        while let Some(id) = int.parent {
-            int = &virtuals[id.0];
-        }
-        int.id
     }
 }
 
@@ -559,27 +572,12 @@ pub(crate) fn run<F: Function>(
         stats,
     )?;
 
-    // TODO avoid this clone.
-    let mut sorted_virtuals = intervals.virtuals.clone();
     let virtuals = intervals.virtuals;
-
-    // Sort by vreg and starting point, so we can plug all the different intervals
-    // together.
-    sorted_virtuals.sort_unstable_by_key(|int| (int.vreg, int.start));
-
-    if log_enabled!(Level::Debug) {
-        debug!("allocation results (by vreg)");
-        for int in sorted_virtuals.iter() {
-            debug!("{}", int);
-        }
-        debug!("");
-    }
 
     let memory_moves = resolve_moves::run(
         func,
         &reg_uses,
         &virtuals,
-        &sorted_virtuals,
         &liveins,
         &liveouts,
         &mut num_spill_slots,
