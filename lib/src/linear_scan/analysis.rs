@@ -169,7 +169,7 @@ pub(crate) fn run<F: Function>(
     //   VirtualRanges and RealRanges.
 
     info!("  run_analysis: begin liveness analysis");
-    let (frag_ixs_per_reg, frag_env, frag_metrics_env) = get_range_frags(
+    let (frag_ixs_per_reg, mut frag_env, frag_metrics_env) = get_range_frags(
         func,
         &livein_sets_per_block,
         &liveout_sets_per_block,
@@ -180,7 +180,7 @@ pub(crate) fn run<F: Function>(
     let (mut fixed_intervals, virtual_intervals) = merge_range_frags(
         &reg_universe,
         &frag_ixs_per_reg,
-        &frag_env,
+        &mut frag_env,
         &frag_metrics_env,
         &cfg_info,
     );
@@ -221,18 +221,22 @@ fn get_range_frags_for_block<F: Function>(
     out_map: &mut Map<Reg, Vec<RangeFragIx>>,
     out_frags: &mut Vec<RangeFrag>,
     out_frag_metrics: &mut Vec<RangeFragMetrics>,
+    state: &mut Map<Reg, RangeFrag>,
 ) {
+    let mut finish_range = |r: Reg, frag: RangeFrag, frag_metrics: RangeFragMetrics| {
+        let fix = RangeFragIx::new(out_frags.len() as u32);
+        out_frags.push(frag);
+        out_frag_metrics.push(frag_metrics);
+        out_map.entry(r).or_insert_with(|| Vec::new()).push(fix);
+    };
+
     // Some handy constants.
     debug_assert!(func.block_insns(bix).len() >= 1);
     let first_pt_in_block = InstPoint::new_use(func.block_insns(bix).first());
     let last_pt_in_block = InstPoint::new_def(func.block_insns(bix).last());
 
-    // The running state.
-    let mut state = Map::<Reg, RangeFrag>::default();
-
-    // The generated RangeFrags are initially are dumped in here. We group them by Reg at the end
-    // of this function.
-    let mut tmp_result_vec = SmallVec::<[(Reg, RangeFrag, RangeFragMetrics); 32]>::new();
+    // Clear the running state.
+    state.clear();
 
     // First, set up `state` as if all of `livein` had been written just prior to the block.
     for r in livein.iter() {
@@ -296,19 +300,15 @@ fn get_range_frags_for_block<F: Function>(
             debug_assert!(pf.last <= new_last);
             pf.last = new_last;
 
-            match pf.mentions.binary_search_by_key(&iix, |tuple| tuple.0) {
-                Ok(index) => pf.mentions[index].1.add_mod(),
-                Err(index) => {
-                    let mut mention_set = Mention::new();
-                    mention_set.add_mod();
-                    // TODO not very efficient.
-                    pf.mentions.insert(index, (iix, mention_set))
-                }
-            }
+            pf.mentions.push((iix, {
+                let mut mention_set = Mention::new();
+                mention_set.add_mod();
+                mention_set
+            }));
         }
 
         // Examine writes (but not writes implied by modifies).  The general idea is that a write
-        // causes us to terminate the existing RangeFrag, if any, add it to `tmp_result_vec`,
+        // causes us to terminate the existing RangeFrag, if any, add it to the results,
         // and start a new frag.
         for i in bounds_for_iix.defs_start as usize
             ..bounds_for_iix.defs_start as usize + bounds_for_iix.defs_len as usize
@@ -343,7 +343,7 @@ fn get_range_frags_for_block<F: Function>(
 
                     let (frag, frag_metrics) =
                         RangeFrag::new(func, bix, *first, *last, stolen_mentions);
-                    tmp_result_vec.push((*r, frag, frag_metrics));
+                    finish_range(*r, frag, frag_metrics);
                     let new_pt = InstPoint::new_def(iix);
 
                     let mut mention_set = Mention::new();
@@ -367,23 +367,19 @@ fn get_range_frags_for_block<F: Function>(
         let pf = state.remove(r).expect("get_range_frags_for_block: fail #3");
         let (frag, frag_metrics) =
             RangeFrag::new(func, bix, pf.first, last_pt_in_block, pf.mentions);
-        tmp_result_vec.push((*r, frag, frag_metrics));
+        finish_range(*r, frag, frag_metrics);
     }
 
     // Finally, round up any remaining RangeFrag left in `state`.
     for (r, pf) in state.into_iter() {
-        let (frag, frag_metrics) = RangeFrag::new(func, bix, pf.first, pf.last, pf.mentions);
-        tmp_result_vec.push((r, frag, frag_metrics));
-    }
-
-    // Copy the entries in `tmp_result_vec` into `out_map` and `outVec`.
-    // TODO: do this as we go along, so as to avoid the use of a temporary vector.
-    assert!(out_frags.len() == out_frag_metrics.len());
-    for (r, frag, frag_metrics) in tmp_result_vec {
-        out_frags.push(frag);
-        out_frag_metrics.push(frag_metrics);
-        let fix = RangeFragIx::new(out_frags.len() as u32 - 1);
-        out_map.entry(r).or_insert_with(|| Vec::new()).push(fix);
+        let (frag, frag_metrics) = RangeFrag::new(
+            func,
+            bix,
+            pf.first,
+            pf.last,
+            mem::replace(&mut pf.mentions, Vec::new()),
+        );
+        finish_range(*r, frag, frag_metrics);
     }
 }
 
@@ -404,6 +400,9 @@ fn get_range_frags<F: Function>(
     debug_assert!(liveouts.len() == func.blocks().len() as u32);
     debug_assert!(rvb.is_sanitized());
 
+    // Reused by the function below.
+    let mut tmp_state = Map::<Reg, RangeFrag>::default();
+
     let mut result_map = Map::<Reg, Vec<RangeFragIx>>::default();
     let mut result_frags = Vec::new();
     let mut result_frag_metrics = Vec::new();
@@ -417,6 +416,7 @@ fn get_range_frags<F: Function>(
             &mut result_map,
             &mut result_frags,
             &mut result_frag_metrics,
+            &mut tmp_state,
         );
     }
 
@@ -444,7 +444,7 @@ fn get_range_frags<F: Function>(
 fn merge_range_frags(
     reg_universe: &RealRegUniverse,
     frag_ix_vec_per_reg: &Map<Reg, Vec<RangeFragIx>>,
-    frag_env: &Vec<RangeFrag>,
+    frag_env: &mut Vec<RangeFrag>,
     frag_metrics_env: &Vec<RangeFragMetrics>,
     cfg_info: &CFGInfo,
 ) -> (Vec<FixedInterval>, Vec<VirtualInterval>) {
@@ -475,6 +475,8 @@ fn merge_range_frags(
 
     let mut result_virtual = Vec::new();
 
+    let mut triples = Vec::<(RangeFragIx, RangeFragKind, BlockIx)>::new();
+
     // BEGIN per_reg_loop
     for (reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
         let num_reg_frags = all_frag_ixs_for_reg.len();
@@ -496,8 +498,7 @@ fn merge_range_frags(
         // BEGIN merge `all_frag_ixs_for_reg` entries as much as possible.
         // but .. if we come across independents (RangeKind::Local), pull them out
         // immediately.
-
-        let mut triples = Vec::<(RangeFragIx, RangeFragKind, BlockIx)>::new();
+        triples.clear();
 
         // Create `triples`.  We will use it to guide the merging phase, but it is immutable there.
         for fix in all_frag_ixs_for_reg {
@@ -512,7 +513,7 @@ fn merge_range_frags(
                     &mut result_fixed,
                     &mut result_virtual,
                     *reg,
-                    &vec![*fix],
+                    &[*fix],
                     frag_env,
                 );
                 continue;
@@ -692,13 +693,20 @@ fn flush_interval(
     result_virtual: &mut Vec<VirtualInterval>,
     reg: Reg,
     frag_ixs: &[RangeFragIx],
-    frags: &Vec<RangeFrag>,
+    frags: &mut Vec<RangeFrag>,
 ) {
     if reg.is_real() {
         // Append all the RangeFrags to this fixed interval. They'll get sorted later.
         result_real[reg.to_real_reg().get_index()]
             .frags
-            .extend(frag_ixs.iter().map(|&i| frags[i.get() as usize].clone()));
+            .extend(frag_ixs.iter().map(|&i| {
+                let frag = &mut frags[i.get() as usize];
+                RangeFrag {
+                    first: frag.first,
+                    last: frag.last,
+                    mentions: mem::replace(&mut frag.mentions, Vec::new()),
+                }
+            }));
         return;
     }
 
