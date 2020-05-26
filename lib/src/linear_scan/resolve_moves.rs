@@ -160,11 +160,158 @@ fn resolve_moves_in_block(
     }
 }
 
-fn resolve_moves_accross_blocks<F: Function>(
+#[derive(Clone, Copy)]
+enum BlockPos {
+    Start,
+    End,
+}
+
+#[derive(Default, Clone)]
+struct BlockInfo {
+    start: SmallVec<[(VirtualReg, IntId); 4]>,
+    end: SmallVec<[(VirtualReg, IntId); 4]>,
+}
+
+static UNSORTED_THRESHOLD: usize = 8;
+
+impl BlockInfo {
+    #[inline(never)]
+    fn insert(&mut self, pos: BlockPos, vreg: VirtualReg, id: IntId) {
+        match pos {
+            BlockPos::Start => {
+                #[cfg(debug_assertions)]
+                debug_assert!(self.start.iter().find(|prev| prev.0 == vreg).is_none());
+                self.start.push((vreg, id));
+            }
+            BlockPos::End => {
+                #[cfg(debug_assertions)]
+                debug_assert!(self.end.iter().find(|prev| prev.0 == vreg).is_none());
+                self.end.push((vreg, id));
+            }
+        }
+    }
+
+    #[inline(never)]
+    fn finish(&mut self) {
+        if self.start.len() >= UNSORTED_THRESHOLD {
+            self.start.sort_unstable_by_key(|pair| pair.0);
+        }
+        if self.end.len() >= UNSORTED_THRESHOLD {
+            self.end.sort_unstable_by_key(|pair| pair.0);
+        }
+    }
+
+    #[inline(never)]
+    fn lookup(&self, pos: BlockPos, vreg: &VirtualReg) -> IntId {
+        let array = match pos {
+            BlockPos::Start => &self.start,
+            BlockPos::End => &self.end,
+        };
+        if array.len() >= UNSORTED_THRESHOLD {
+            array[array.binary_search_by_key(vreg, |pair| pair.0).unwrap()].1
+        } else {
+            array
+                .iter()
+                .find(|el| el.0 == *vreg)
+                .expect("should have found target reg")
+                .1
+        }
+    }
+}
+
+/// For each block, collect a mapping of block_{start, end} -> actual location, to make the
+/// across-blocks fixup phase fast.
+#[inline(never)]
+fn collect_block_infos<F: Function>(
+    func: &F,
+    intervals: &Vec<VirtualInterval>,
+    liveins: &TypedIxVec<BlockIx, SparseSet<Reg>>,
+    liveouts: &TypedIxVec<BlockIx, SparseSet<Reg>>,
+) -> Vec<BlockInfo> {
+    // First, collect the first and last instructions of each block.
+    let mut block_start_and_ends = Vec::with_capacity(2 * func.blocks().len());
+    for bix in func.blocks() {
+        let insts = func.block_insns(bix);
+        block_start_and_ends.push((InstPoint::new_use(insts.first()), BlockPos::Start, bix));
+        block_start_and_ends.push((InstPoint::new_def(insts.last()), BlockPos::End, bix));
+    }
+
+    // Sort this array by instruction point, to be able to do binary search later.
+    block_start_and_ends.sort_unstable_by_key(|pair| pair.0);
+
+    // Preallocate the block information, with the final size of each vector.
+    let mut infos = Vec::with_capacity(func.blocks().len());
+    for bix in func.blocks() {
+        infos.push(BlockInfo {
+            start: SmallVec::with_capacity(liveins[bix].card()),
+            end: SmallVec::with_capacity(liveouts[bix].card()),
+        });
+    }
+
+    // For each interval:
+    // - find the first block start or end instruction that's in the interval, with a binary search
+    // on the previous array.
+    // - add an entry for each livein ou liveout variable in the block info.
+    for int in intervals {
+        let mut i = match block_start_and_ends.binary_search_by_key(&int.start, |pair| pair.0) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+
+        let vreg = int.vreg;
+        let id = int.id;
+
+        while let Some(&(inst, pos, bix)) = block_start_and_ends.get(i) {
+            if inst > int.end {
+                break;
+            }
+
+            #[cfg(debug_assertions)]
+            debug_assert!(int.covers(inst));
+
+            // Skip virtual registers that are not live-in (at start) or live-out (at end).
+            match pos {
+                BlockPos::Start => {
+                    if !liveins[bix].contains(vreg.to_reg()) {
+                        i += 1;
+                        continue;
+                    }
+                }
+                BlockPos::End => {
+                    if !liveouts[bix].contains(vreg.to_reg()) {
+                        i += 1;
+                        continue;
+                    }
+                }
+            }
+
+            infos[bix.get() as usize].insert(pos, vreg, id);
+            i += 1;
+        }
+    }
+
+    for info in infos.iter_mut() {
+        info.finish();
+    }
+
+    infos
+}
+
+/// Figure the sequence of parallel moves to insert at block boundaries:
+/// - for each block
+///  - for each liveout vreg in this block
+///    - for each successor of this block
+///      - if the locations allocated in the block and its successor don't
+///      match, insert a pending move from one location to the other.
+///
+/// Once that's done:
+/// - resolve cycles in the pending moves
+/// - generate real moves from the pending moves.
+#[inline(never)]
+fn resolve_moves_across_blocks<F: Function>(
     func: &F,
     liveins: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     liveouts: &TypedIxVec<BlockIx, SparseSet<Reg>>,
-    sorted_intervals: &Vec<VirtualInterval>,
     intervals: &Vec<VirtualInterval>,
     scratches_by_rc: &[Option<RealReg>],
     spill_slot: &mut u32,
@@ -173,21 +320,9 @@ fn resolve_moves_accross_blocks<F: Function>(
     tmp_stack: &mut Vec<MoveOp>,
 ) {
     let mut parallel_move_map = HashMap::default();
-    enum BlockPos {
-        Start,
-        End,
-    }
 
-    // Figure the sequence of parallel moves to insert at block boundaries:
-    // - for each block
-    //  - for each liveout vreg in this block
-    //    - for each successor of this block
-    //      - if the locations allocated in the block and its successor don't
-    //      match, insert a pending move from one location to the other.
-    //
-    // Once that's done:
-    // - resolve cycles in the pending moves
-    // - generate real moves from the pending moves.
+    let block_info = collect_block_infos(func, intervals, liveins, liveouts);
+
     let mut seen_successors = HashSet::default();
     for block in func.blocks() {
         let successors = func.block_succs(block);
@@ -210,10 +345,9 @@ fn resolve_moves_accross_blocks<F: Function>(
 
             seen_successors.clear();
 
-            let mut maybe_cur_id: Option<IntId> = None;
-
-            let last_inst = func.block_insns(block).last();
-            let cur_last_inst = InstPoint::new_def(last_inst);
+            let cur_id = block_info[block.get() as usize].lookup(BlockPos::End, &vreg);
+            let cur_int = &intervals[cur_id.0];
+            let loc_at_cur_end = cur_int.location;
 
             for &succ in successors.iter() {
                 if !liveins[succ].contains(reg) {
@@ -224,53 +358,23 @@ fn resolve_moves_accross_blocks<F: Function>(
                     continue;
                 }
 
-                // Find the interval for this (vreg, inst) pair.
-                let succ_first_inst = InstPoint::new_use(func.block_insns(succ).first());
+                let succ_id = block_info[succ.get() as usize].lookup(BlockPos::Start, &vreg);
+                let succ_int = &intervals[succ_id.0];
 
-                if let Some(cur_id) = maybe_cur_id {
-                    if intervals[cur_id.0].covers(succ_first_inst) {
-                        continue;
-                    }
-                }
-
-                let succ_id = find_enclosing_interval(vreg, succ_first_inst, sorted_intervals)
-                    .expect("variable should have been live in successor");
-
-                // Fast-path: if the same intervals covers the last instruction, we're within a
-                // single live interval and don't need a move.
-                if intervals[succ_id.0].covers(cur_last_inst) {
+                // If the two intervals aren't related to the same virtual range, then the move is
+                // not required.
+                if cur_int.ancestor != succ_int.ancestor {
                     continue;
                 }
 
-                let cur_id = match maybe_cur_id {
-                    None => {
-                        let id = find_enclosing_interval(vreg, cur_last_inst, &sorted_intervals)
-                            .unwrap_or_else(|| {
-                                panic!(
-                                    "no interval for given {:?}:{:?} pair in current {:?}",
-                                    vreg, cur_last_inst, block
-                                )
-                            });
-                        maybe_cur_id = Some(id);
-                        id
-                    }
-                    Some(id) => id,
-                };
-
-                if intervals[cur_id.0].ancestor(&intervals)
-                    != intervals[succ_id.0].ancestor(&intervals)
-                {
-                    continue;
-                }
+                let loc_at_succ_start = succ_int.location;
 
                 let (at_inst, block_pos) = if cur_has_one_succ {
-                    let mut pos = cur_last_inst;
                     // Before the control flow instruction.
-                    pos.set_pt(Point::Reload);
+                    let pos = InstPoint::new_reload(func.block_insns(block).last());
                     (pos, BlockPos::End)
                 } else {
-                    let mut pos = succ_first_inst;
-                    pos.set_pt(Point::Reload);
+                    let pos = InstPoint::new_reload(func.block_insns(succ).first());
                     (pos, BlockPos::Start)
                 };
 
@@ -278,7 +382,7 @@ fn resolve_moves_accross_blocks<F: Function>(
                     .entry(at_inst)
                     .or_insert((Vec::new(), block_pos));
 
-                match (intervals[cur_id.0].location, intervals[succ_id.0].location) {
+                match (loc_at_cur_end, loc_at_succ_start) {
                     (Location::Reg(cur_rreg), Location::Reg(succ_rreg)) => {
                         if cur_rreg == succ_rreg {
                             continue;
@@ -376,7 +480,6 @@ pub(crate) fn run<F: Function>(
     func: &F,
     reg_uses: &RegUses,
     intervals: &Vec<VirtualInterval>,
-    sorted_intervals: &Vec<VirtualInterval>,
     liveins: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     liveouts: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     spill_slot: &mut u32,
@@ -410,11 +513,10 @@ pub(crate) fn run<F: Function>(
         &mut tmp_stack,
     );
 
-    resolve_moves_accross_blocks(
+    resolve_moves_across_blocks(
         func,
         liveins,
         liveouts,
-        sorted_intervals,
         intervals,
         scratches_by_rc,
         spill_slot,
@@ -431,40 +533,6 @@ pub(crate) fn run<F: Function>(
     }
 
     insts_and_points
-}
-
-#[inline(never)]
-fn find_enclosing_interval(
-    vreg: VirtualReg,
-    inst: InstPoint,
-    virtual_intervals: &Vec<VirtualInterval>,
-) -> Option<IntId> {
-    // The list of virtual intervals is sorted by vreg; find one interval for this vreg.
-    let index = virtual_intervals
-        .binary_search_by_key(&vreg, |int| int.vreg)
-        .expect("should find at least one virtual interval for this vreg");
-
-    // Rewind back to the first interval for this vreg, since there might be several ones.
-    let mut index = index;
-    while index > 0 && virtual_intervals[index - 1].vreg == vreg {
-        index -= 1;
-    }
-
-    // Now iterates on all the intervals for this virtual register, until one works.
-    let mut int = &virtual_intervals[index];
-    loop {
-        if int.start <= inst && inst <= int.end {
-            return Some(int.id);
-        }
-        index += 1;
-        if index == virtual_intervals.len() {
-            return None;
-        }
-        int = &virtual_intervals[index];
-        if int.vreg != vreg {
-            return None;
-        }
-    }
 }
 
 #[derive(PartialEq, Debug)]

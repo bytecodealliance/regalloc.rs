@@ -1,6 +1,6 @@
 use super::{
-    last_use, next_use, IntId, Intervals, Location, Mention, MentionMap, OptimalSplitStrategy,
-    RegUses, Statistics, VirtualInterval,
+    last_use, next_use, IntId, Intervals, Mention, MentionMap, OptimalSplitStrategy, RegUses,
+    Statistics, VirtualInterval,
 };
 use crate::{
     avl_tree::{AVLTree, AVL_NULL},
@@ -1152,16 +1152,11 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
     }
 
     let child_id = IntId(state.intervals.num_virtual_intervals());
-    let child_int = VirtualInterval {
-        id: child_id,
-        vreg: int.vreg,
-        mentions: child_mentions.into(),
-        start: child_start,
-        end: child_end,
-        parent: Some(id),
-        child: None,
-        location: Location::None,
-    };
+    let mut child_int =
+        VirtualInterval::new(child_id, int.vreg, child_start, child_end, child_mentions);
+    child_int.parent = Some(id);
+    child_int.ancestor = int.ancestor;
+
     state.intervals.push_interval(child_int);
 
     state.intervals.get_mut(id).end = parent_end;

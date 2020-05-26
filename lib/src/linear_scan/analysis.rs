@@ -1,4 +1,4 @@
-use super::{FixedInterval, IntId, Intervals, Location, Mention, MentionMap, VirtualInterval};
+use super::{FixedInterval, IntId, Intervals, Mention, MentionMap, VirtualInterval};
 use crate::{
     analysis_control_flow::{CFGInfo, InstIxToBlockIxMap},
     analysis_data_flow::{
@@ -761,14 +761,9 @@ fn flush_interval(
         (start, end, mentions)
     };
 
-    result_virtual.push(VirtualInterval {
-        id: IntId(result_virtual.len()),
-        vreg: reg.to_virtual_reg(),
-        parent: None,
-        child: None,
-        location: Location::None,
-        mentions,
-        start,
-        end,
-    });
+    let id = IntId(result_virtual.len());
+    let mut int = VirtualInterval::new(id, reg.to_virtual_reg(), start, end, mentions);
+    int.ancestor = Some(id);
+
+    result_virtual.push(int);
 }
