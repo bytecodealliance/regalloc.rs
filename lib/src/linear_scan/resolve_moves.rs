@@ -1,6 +1,6 @@
 use super::{next_use, IntId, Location, RegUses, VirtualInterval};
 use crate::{
-    data_structures::{BlockIx, InstIx, InstPoint, Point},
+    data_structures::{BlockIx, InstPoint, Point},
     inst_stream::{InstToInsert, InstToInsertAndPoint},
     sparse_set::SparseSet,
     Function, RealReg, Reg, SpillSlot, TypedIxVec, VirtualReg, Writable,
@@ -11,19 +11,26 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use smallvec::SmallVec;
 use std::fmt;
 
-fn resolve_moves_in_block(
+fn resolve_moves_in_block<F: Function>(
+    func: &F,
     intervals: &Vec<VirtualInterval>,
     reg_uses: &RegUses,
-    block_starts: &HashSet<InstIx>,
-    block_ends: &HashSet<InstIx>,
     scratches_by_rc: &[Option<RealReg>],
     spill_slot: &mut u32,
-    ordered_moves: &mut Vec<MoveOp>,
-    memory_moves: &mut HashMap<InstPoint, SmallVec<[InstToInsert; 8]>>,
+    moves_in_blocks: &mut Vec<InstToInsertAndPoint>,
+    tmp_ordered_moves: &mut Vec<MoveOp>,
     tmp_stack: &mut Vec<MoveOp>,
 ) {
+    let mut block_ends = HashSet::default();
+    let mut block_starts = HashSet::default();
+    for bix in func.blocks() {
+        let insts = func.block_insns(bix);
+        block_ends.insert(insts.last());
+        block_starts.insert(insts.first());
+    }
+
     let mut reloads_at_inst = HashMap::default();
-    let mut spills_at_inst = HashMap::default();
+    let mut spills_at_inst = Vec::new();
 
     for interval in intervals {
         let parent_id = match interval.parent {
@@ -35,6 +42,7 @@ fn resolve_moves_in_block(
                 // In reachable code, the analysis only create intervals for virtual
                 // registers with at least one register use, so a parentless interval (=
                 // hasn't ever been split) can't live in a stack slot.
+                #[cfg(debug_assertions)]
                 debug_assert!(
                     interval.location.spill().is_none()
                         || (next_use(interval, InstPoint::min_value(), reg_uses,).is_none())
@@ -80,7 +88,7 @@ fn resolve_moves_in_block(
                     _ => unreachable!(),
                 }
 
-                let entry = reloads_at_inst.entry(at_inst).or_insert(Vec::new());
+                let entry = reloads_at_inst.entry(at_inst).or_insert_with(|| Vec::new());
 
                 match parent.location {
                     Location::None => unreachable!(),
@@ -124,13 +132,14 @@ fn resolve_moves_in_block(
                             "inblock fixup: {:?} spill {:?} -> {:?} at {:?}",
                             interval.id, rreg, spill, at_inst
                         );
-                        spills_at_inst.entry(at_inst).or_insert(Vec::new()).push(
+                        spills_at_inst.push(InstToInsertAndPoint::new(
                             InstToInsert::Spill {
                                 to_slot: spill,
                                 from_reg: rreg,
                                 for_vreg: vreg,
                             },
-                        );
+                            at_inst,
+                        ));
                     }
 
                     Location::Stack(parent_spill) => {
@@ -147,17 +156,17 @@ fn resolve_moves_in_block(
     // (e.g. if two real regs must be swapped), so process them first. Once all
     // the parallel assignments have been done, push forward all the spills.
     for (at_inst, mut pending_moves) in reloads_at_inst {
-        schedule_moves(&mut pending_moves, ordered_moves, tmp_stack);
-        let move_insts = emit_moves(&ordered_moves, spill_slot, scratches_by_rc);
-        memory_moves.insert(at_inst, move_insts);
+        schedule_moves(&mut pending_moves, tmp_ordered_moves, tmp_stack);
+        emit_moves(
+            at_inst,
+            &tmp_ordered_moves,
+            spill_slot,
+            scratches_by_rc,
+            moves_in_blocks,
+        );
     }
 
-    for (at_inst, spills) in spills_at_inst {
-        memory_moves
-            .entry(at_inst)
-            .or_insert(SmallVec::new())
-            .extend(spills.into_iter());
-    }
+    moves_in_blocks.append(&mut spills_at_inst);
 }
 
 #[derive(Clone, Copy)]
@@ -315,8 +324,9 @@ fn resolve_moves_across_blocks<F: Function>(
     intervals: &Vec<VirtualInterval>,
     scratches_by_rc: &[Option<RealReg>],
     spill_slot: &mut u32,
-    ordered_moves: &mut Vec<MoveOp>,
-    memory_moves: &mut HashMap<InstPoint, SmallVec<[InstToInsert; 8]>>,
+    moves_at_block_starts: &mut Vec<InstToInsertAndPoint>,
+    moves_at_block_ends: &mut Vec<InstToInsertAndPoint>,
+    tmp_ordered_moves: &mut Vec<MoveOp>,
     tmp_stack: &mut Vec<MoveOp>,
 ) {
     let mut parallel_move_map = HashMap::default();
@@ -380,7 +390,7 @@ fn resolve_moves_across_blocks<F: Function>(
 
                 let pending_moves = parallel_move_map
                     .entry(at_inst)
-                    .or_insert((Vec::new(), block_pos));
+                    .or_insert_with(|| (Vec::new(), block_pos));
 
                 match (loc_at_cur_end, loc_at_succ_start) {
                     (Location::Reg(cur_rreg), Location::Reg(succ_rreg)) => {
@@ -450,23 +460,29 @@ fn resolve_moves_across_blocks<F: Function>(
         }
 
         // Flush the memory moves caused by block fixups for this block.
-        for (at_inst, parallel_moves) in parallel_move_map.iter_mut() {
-            schedule_moves(&mut parallel_moves.0, ordered_moves, tmp_stack);
-            let mut move_insts = emit_moves(&ordered_moves, spill_slot, scratches_by_rc);
+        for (at_inst, (move_insts, block_pos)) in parallel_move_map.iter_mut() {
+            schedule_moves(move_insts, tmp_ordered_moves, tmp_stack);
 
-            // If at_inst pointed to a block start, then insert block fixups *before* inblock
-            // fixups; otherwise it pointed to a block end, then insert block fixups *after*
-            // inblock fixups.
-            let entry = memory_moves.entry(*at_inst).or_insert(SmallVec::new());
-            match parallel_moves.1 {
+            match block_pos {
                 BlockPos::Start => {
-                    move_insts.extend(entry.iter().cloned());
-                    *entry = move_insts;
+                    emit_moves(
+                        *at_inst,
+                        &tmp_ordered_moves,
+                        spill_slot,
+                        scratches_by_rc,
+                        moves_at_block_starts,
+                    );
                 }
                 BlockPos::End => {
-                    entry.extend(move_insts);
+                    emit_moves(
+                        *at_inst,
+                        &tmp_ordered_moves,
+                        spill_slot,
+                        scratches_by_rc,
+                        moves_at_block_ends,
+                    );
                 }
-            }
+            };
         }
 
         parallel_move_map.clear();
@@ -487,29 +503,28 @@ pub(crate) fn run<F: Function>(
 ) -> Vec<InstToInsertAndPoint> {
     info!("resolve_moves");
 
-    let mut block_ends = HashSet::default();
-    let mut block_starts = HashSet::default();
-    for bix in func.blocks() {
-        let insts = func.block_insns(bix);
-        block_ends.insert(insts.last());
-        block_starts.insert(insts.first());
-    }
-
-    // A global hash-map of all the moves. Note that it will eventually contain both in-block
-    // moves, and moves between blocks, which may be reordered at the end.
-    let mut memory_moves = HashMap::default();
+    // Keep three lists of moves to insert:
+    // - moves across blocks, that must happen at the start of blocks,
+    // - moves within a given block,
+    // - moves across blocks, that must happen at the end of blocks.
+    //
+    // To maintain the property that these moves are eventually sorted at the end, we'll compute
+    // the final array of moves by concatenating these three arrays. `inst_stream` uses a stable
+    // sort, making sure the at-block-start/within-block/at-block-end will be respected.
+    let mut moves_at_block_starts = Vec::new();
+    let mut moves_at_block_ends = Vec::new();
+    let mut moves_in_blocks = Vec::new();
 
     let mut tmp_stack = Vec::new();
-    let mut ordered_moves = Vec::new();
+    let mut tmp_ordered_moves = Vec::new();
     resolve_moves_in_block(
+        func,
         intervals,
         reg_uses,
-        &block_starts,
-        &block_ends,
         scratches_by_rc,
         spill_slot,
-        &mut ordered_moves,
-        &mut memory_moves,
+        &mut moves_in_blocks,
+        &mut tmp_ordered_moves,
         &mut tmp_stack,
     );
 
@@ -520,17 +535,16 @@ pub(crate) fn run<F: Function>(
         intervals,
         scratches_by_rc,
         spill_slot,
-        &mut ordered_moves,
-        &mut memory_moves,
+        &mut moves_at_block_starts,
+        &mut moves_at_block_ends,
+        &mut tmp_ordered_moves,
         &mut tmp_stack,
     );
 
-    let mut insts_and_points = Vec::new();
-    for (at, insts) in memory_moves {
-        for inst in insts {
-            insts_and_points.push(InstToInsertAndPoint::new(inst, at));
-        }
-    }
+    let mut insts_and_points = moves_at_block_starts;
+    insts_and_points.reserve(moves_in_blocks.len() + moves_at_block_ends.len());
+    insts_and_points.append(&mut moves_in_blocks);
+    insts_and_points.append(&mut moves_at_block_ends);
 
     insts_and_points
 }
@@ -731,14 +745,14 @@ fn schedule_moves(
 
 #[inline(never)]
 fn emit_moves(
+    at_inst: InstPoint,
     ordered_moves: &Vec<MoveOp>,
     num_spill_slots: &mut u32,
     scratches_by_rc: &[Option<RealReg>],
-) -> SmallVec<[InstToInsert; 8]> {
+    moves_in_blocks: &mut Vec<InstToInsertAndPoint>,
+) {
     let mut spill_slot = None;
     let mut in_cycle = false;
-
-    let mut move_insts = SmallVec::new();
 
     trace!("emit_moves");
 
@@ -758,7 +772,7 @@ fn emit_moves(
                         from_slot: spill_slot.expect("should have a cycle spill slot"),
                         for_vreg: mov.vreg,
                     };
-                    move_insts.push(inst);
+                    moves_in_blocks.push(InstToInsertAndPoint::new(inst, at_inst));
                     trace!(
                         "finishing cycle: {:?} -> {:?}",
                         spill_slot.unwrap(),
@@ -773,13 +787,13 @@ fn emit_moves(
                         from_slot: spill_slot.expect("should have a cycle spill slot"),
                         for_vreg: mov.vreg,
                     };
-                    move_insts.push(inst);
+                    moves_in_blocks.push(InstToInsertAndPoint::new(inst, at_inst));
                     let inst = InstToInsert::Spill {
                         to_slot: dst_spill,
                         from_reg: scratch,
                         for_vreg: mov.vreg,
                     };
-                    move_insts.push(inst);
+                    moves_in_blocks.push(InstToInsertAndPoint::new(inst, at_inst));
                     trace!(
                         "finishing cycle: {:?} -> {:?} -> {:?}",
                         spill_slot.unwrap(),
@@ -816,7 +830,7 @@ fn emit_moves(
                         from_reg: src_reg,
                         for_vreg: mov.vreg,
                     };
-                    move_insts.push(inst);
+                    moves_in_blocks.push(InstToInsertAndPoint::new(inst, at_inst));
                     trace!("starting cycle: {:?} -> {:?}", src_reg, spill_slot.unwrap());
                 }
                 MoveOperand::Stack(src_spill) => {
@@ -827,13 +841,13 @@ fn emit_moves(
                         from_slot: src_spill,
                         for_vreg: mov.vreg,
                     };
-                    move_insts.push(inst);
+                    moves_in_blocks.push(InstToInsertAndPoint::new(inst, at_inst));
                     let inst = InstToInsert::Spill {
                         to_slot: spill_slot.expect("should have a cycle spill slot"),
                         from_reg: scratch,
                         for_vreg: mov.vreg,
                     };
-                    move_insts.push(inst);
+                    moves_in_blocks.push(InstToInsertAndPoint::new(inst, at_inst));
                     trace!(
                         "starting cycle: {:?} -> {:?} -> {:?}",
                         src_spill,
@@ -847,9 +861,8 @@ fn emit_moves(
         }
 
         // A normal move which is not part of a cycle.
-        move_insts.push(mov.gen_inst());
+        let inst = mov.gen_inst();
+        moves_in_blocks.push(InstToInsertAndPoint::new(inst, at_inst));
         trace!("moving {:?} -> {:?}", mov.from, mov.to);
     }
-
-    move_insts
 }
