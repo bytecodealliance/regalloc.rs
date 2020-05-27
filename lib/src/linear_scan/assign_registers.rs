@@ -431,8 +431,7 @@ impl UnhandledIntervals {
 struct State<'a, F: Function> {
     func: &'a F,
     reg_uses: &'a RegUses,
-
-    optimal_split_strategy: OptimalSplitStrategy,
+    opts: &'a LinearScanOptions,
 
     intervals: Intervals,
 
@@ -452,7 +451,7 @@ struct State<'a, F: Function> {
 
 impl<'a, F: Function> State<'a, F> {
     fn new(
-        opts: &LinearScanOptions,
+        opts: &'a LinearScanOptions,
         func: &'a F,
         reg_uses: &'a RegUses,
         intervals: Intervals,
@@ -468,7 +467,7 @@ impl<'a, F: Function> State<'a, F> {
         Self {
             func,
             reg_uses,
-            optimal_split_strategy: opts.split_strategy,
+            opts,
             intervals,
             unhandled,
             next_spill_slot: SpillSlot::new(0),
@@ -613,6 +612,9 @@ fn select_naive_reg<F: Function>(
 
     // Shortcut: if all the registers are taken, don't even bother.
     if num_free == 0 {
+        lsra_assert!(!free_until_pos
+            .iter()
+            .any(|pair| pair.1 != InstPoint::min_value()));
         return None;
     }
 
@@ -668,14 +670,9 @@ fn try_allocate_reg<F: Function>(
     );
 
     if best_pos <= state.intervals.get(id).end {
-        // TODO Here, it should be possible to split the interval between the start
-        // (or more precisely, the last use before best_pos) and the best_pos value.
-        // See also issue #32.
-        state
-            .stats
-            .as_mut()
-            .map(|stats| stats.num_try_allocate_reg_partial += 1);
-        return false;
+        if !state.opts.partial_split || !try_split_regs(state, id, best_pos) {
+            return false;
+        }
     }
 
     // At least a partial match: allocate.
@@ -849,9 +846,9 @@ fn allocate_blocked_reg<F: Function>(
                 block_pos[best_reg], int_end
             );
 
-            // TODO Here, it should be possible to only split the interval, and not
-            // spill it. See also issue #32.
-            split_and_spill(state, cur_id, block_pos[best_reg]);
+            if !state.opts.partial_split || !try_split_regs(state, cur_id, block_pos[best_reg]) {
+                split_and_spill(state, cur_id, block_pos[best_reg]);
+            }
         }
 
         for &aid in &state.activity.active {
@@ -915,7 +912,7 @@ fn find_optimal_split_pos<F: Function>(
         return from;
     }
 
-    let candidate = match state.optimal_split_strategy {
+    let candidate = match state.opts.split_strategy {
         OptimalSplitStrategy::To => Some(to),
         OptimalSplitStrategy::NextFrom => Some(next_pos(from)),
         OptimalSplitStrategy::NextNextFrom => Some(next_pos(next_pos(from))),
@@ -1023,29 +1020,56 @@ fn split_and_spill<F: Function>(state: &mut State<F>, id: IntId, split_pos: Inst
     debug!("spilled split child {:?} silently expires", child);
 }
 
-fn _try_split_regs<F: Function>(state: &mut State<F>, id: IntId, next_pos: InstPoint) -> bool {
-    //state.stats.num_reg_splits += 1;
+/// Try to find a (use) position where to split the interval until the next point at which it
+/// becomes unavailable, and put it back into the queue of intervals to allocate later on.  Returns
+/// true if it succeeded in finding such a position, false otherwise.
+fn try_split_regs<F: Function>(
+    state: &mut State<F>,
+    id: IntId,
+    available_until: InstPoint,
+) -> bool {
+    state.stats.as_mut().map(|stats| stats.num_reg_splits += 1);
 
-    // Find a position for the split: we'll iterate backwards from the furthest next use, down the
-    // previous use.
-    let prev_use = match last_use(&state.intervals.get(id), next_pos, &state.reg_uses) {
+    // Find a position for the split: we'll iterate backwards from the point until the register is
+    // available, down to the previous use of the current interval.
+    let prev_use = match last_use(&state.intervals.get(id), available_until, &state.reg_uses) {
         Some(prev_use) => prev_use,
         None => state.intervals.get(id).start,
     };
 
-    let mut split_pos = next_pos;
-
-    while split_pos.pt() != Point::Use && prev_use < split_pos {
-        split_pos = prev_pos(split_pos);
-    }
-
-    if prev_use > split_pos || split_pos.pt() != Point::Use {
-        return false;
-    }
+    let split_pos = if state.opts.partial_split_near_end {
+        // Split at the position closest to the available_until position.
+        let pos = match available_until.pt() {
+            Point::Use => prev_pos(prev_pos(available_until)),
+            Point::Def => prev_pos(available_until),
+            _ => unreachable!(),
+        };
+        if pos <= prev_use {
+            return false;
+        }
+        pos
+    } else {
+        // Split at the position closest to the prev_use position. If it was a def, we can split
+        // just thereafter, if it was at a use, go to the next use.
+        let pos = match prev_use.pt() {
+            Point::Use => next_pos(next_pos(prev_use)),
+            Point::Def => next_pos(prev_use),
+            _ => unreachable!(),
+        };
+        if pos >= available_until {
+            return false;
+        }
+        pos
+    };
 
     let child = split(state, id, split_pos);
     state.insert_unhandled(child);
-    //state.stats.num_reg_splits_success += 1;
+
+    state
+        .stats
+        .as_mut()
+        .map(|stats| stats.num_reg_splits_success += 1);
+
     true
 }
 

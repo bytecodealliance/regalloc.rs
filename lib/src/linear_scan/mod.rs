@@ -25,6 +25,8 @@ mod resolve_moves;
 
 #[derive(Default)]
 pub(crate) struct Statistics {
+    only_large: bool,
+
     num_fixed: usize,
     num_vregs: usize,
     num_virtual_ranges: usize,
@@ -33,22 +35,28 @@ pub(crate) struct Statistics {
     peak_inactive: usize,
 
     num_try_allocate_reg: usize,
-    num_try_allocate_reg_partial: usize,
     num_try_allocate_reg_success: usize,
+
+    num_reg_splits: usize,
+    num_reg_splits_success: usize,
 }
 
 impl Drop for Statistics {
     fn drop(&mut self) {
+        if self.only_large && self.num_vregs < 1000 {
+            return;
+        }
         println!(
-            "stats: {} fixed / {} vreg / {} vranges, peak active {} / inactive {}, 1st try alloc: {}+{}/{}",
+            "stats: {} fixed; {} vreg; {} vranges; {} peak-active; {} peak-inactive, {} direct-alloc; {} total-alloc; {} partial-splits; {} partial-splits-attempts",
             self.num_fixed,
             self.num_vregs,
             self.num_virtual_ranges,
             self.peak_active,
             self.peak_inactive,
             self.num_try_allocate_reg_success,
-            self.num_try_allocate_reg_partial,
-            self.num_try_allocate_reg
+            self.num_try_allocate_reg,
+            self.num_reg_splits_success,
+            self.num_reg_splits,
         );
     }
 }
@@ -70,13 +78,16 @@ enum OptimalSplitStrategy {
 #[derive(Clone)]
 pub struct LinearScanOptions {
     split_strategy: OptimalSplitStrategy,
+    partial_split: bool,
+    partial_split_near_end: bool,
     stats: bool,
+    large_stats: bool,
 }
 
 impl default::Default for LinearScanOptions {
     fn default() -> Self {
         // Useful for debugging.
-        let optimal_split_strategy = match env::var("SPLIT") {
+        let optimal_split_strategy = match env::var("LSRA_SPLIT") {
             Ok(s) => match s.as_str() {
                 "t" | "to" => OptimalSplitStrategy::To,
                 "n" => OptimalSplitStrategy::NextFrom,
@@ -89,11 +100,18 @@ impl default::Default for LinearScanOptions {
             Err(_) => OptimalSplitStrategy::From,
         };
 
-        let stats = env::var("STATS").is_ok();
+        let large_stats = env::var("LSRA_LARGE_STATS").is_ok();
+        let stats = env::var("LSRA_STATS").is_ok() || large_stats;
+
+        let partial_split = env::var("LSRA_PARTIAL").is_ok();
+        let partial_split_near_end = env::var("LSRA_PARTIAL_END").is_ok();
 
         Self {
             split_strategy: optimal_split_strategy,
+            partial_split,
+            partial_split_near_end,
             stats,
+            large_stats,
         }
     }
 }
@@ -545,6 +563,7 @@ pub(crate) fn run<F: Function>(
             .iter()
             .map(|virt| virt.vreg.get_index())
             .fold(0, |a, b| usize::max(a, b));
+        stats.only_large = opts.large_stats;
         Some(stats)
     } else {
         None
