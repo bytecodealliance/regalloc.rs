@@ -120,7 +120,7 @@ impl PerRealReg {
 // adding their spill costs to `running_cost`.  Return false if, for one of
 // the 4 reasons documented below, the traversal has been abandoned, and true
 // if the search completed successfully.
-fn search_commitment_tree(
+fn search_commitment_tree<IsAllowedToEvict>(
     // The running state, threaded through the tree traversal.  These
     // accumulate ranges and costs as we traverse the tree.  These are mutable
     // because our caller (`find_evict_set`) will want to try and allocate
@@ -134,9 +134,12 @@ fn search_commitment_tree(
     // The RangeFrag we want to accommodate.
     pair_frag: &RangeFrag,
     spill_cost_budget: &SpillCost,
-    do_not_evict: &SparseSetU<[VirtualRangeIx; 16]>,
+    allowed_to_evict: &IsAllowedToEvict,
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
-) -> bool {
+) -> bool
+where
+    IsAllowedToEvict: Fn(VirtualRangeIx) -> bool,
+{
     let mut stack = SmallVec::<[u32; 32]>::new();
     assert!(tree.root != AVL_NULL);
     stack.push(tree.root);
@@ -173,8 +176,8 @@ fn search_commitment_tree(
             if !vlr_to_evict.spill_cost.is_less_than(spill_cost_budget) {
                 return false;
             }
-            // Maybe our caller asked us not to evict this one.
-            if do_not_evict.contains(vlrix_to_evict) {
+            // Maybe our caller doesn't want us to evict this one.
+            if !allowed_to_evict(vlrix_to_evict) {
                 return false;
             }
             // Ok!  We can evict the current node.  Update the running state
@@ -252,12 +255,15 @@ impl PerRealReg {
     //   non-infinite-cost eviction candidates.  This is by design (so as to
     //   guarantee that we can always allocate spill/reload bridges).
     #[inline(never)]
-    fn find_evict_set(
+    fn find_evict_set<IsAllowedToEvict>(
         &self,
         would_like_to_add: VirtualRangeIx,
-        do_not_evict: &SparseSetU<[VirtualRangeIx; 16]>,
+        allowed_to_evict: &IsAllowedToEvict,
         vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
-    ) -> Option<(SparseSetU<[VirtualRangeIx; 4]>, SpillCost)> {
+    ) -> Option<(SparseSetU<[VirtualRangeIx; 4]>, SpillCost)>
+    where
+        IsAllowedToEvict: Fn(VirtualRangeIx) -> bool,
+    {
         // Firstly, if the commitment tree is for this reg is empty, we can
         // declare success immediately.
         if self.committed.tree.root == AVL_NULL {
@@ -289,7 +295,7 @@ impl PerRealReg {
                 &self.committed.tree,
                 &wlta_frag,
                 &evict_cost_budget,
-                do_not_evict,
+                allowed_to_evict,
                 vlr_env,
             );
             if !wlta_frag_ok {
@@ -577,9 +583,6 @@ pub fn alloc_main<F: Function>(
     debug!("");
     debug!("-- MAIN ALLOCATION LOOP (DI means 'direct', CO means 'coalesced'):");
 
-    // A handy constant
-    let empty_Set_VirtualRangeIx = SparseSetU::<[VirtualRangeIx; 16]>::empty();
-
     info!("alloc_main:   main allocation loop: begin");
 
     // ======== BEGIN Main allocation loop ========
@@ -632,7 +635,6 @@ pub fn alloc_main<F: Function>(
         // that ordering when copying into `hinted_regs`.
         assert!(hints.len() == vlr_env.len());
         let mut hinted_regs = SmallVec::<[RealReg; 8]>::new();
-        let mut mb_curr_vlr_eclass: Option<SparseSetU<[VirtualRangeIx; 16]>> = None;
 
         // === BEGIN collect all hints for `curr_vlr` ===
         // `hints` has one entry per VLR, but only for VLRs which existed
@@ -683,18 +685,10 @@ pub fn alloc_main<F: Function>(
             // bt_coalescing_analysis.rs.
             let n_primary_cands = hinted_regs.len();
 
-            // Find the equivalence class set for `curr_vlrix`.  We'll need it
-            // later.  Equivalence class info exists for only the "initial"
-            // VLRs, though.
+            // Work the equivalence class set for `curr_vlrix` to pick up any
+            // rreg hints.  Equivalence class info exists only for "initial" VLRs.
             if curr_vlrix.get() < num_vlrs_initial {
-                let mut curr_vlr_eclass = SparseSetU::<[VirtualRangeIx; 16]>::empty();
-                for vlrix in vlrEquivClasses.equiv_class_elems_iter(curr_vlrix) {
-                    curr_vlr_eclass.insert(vlrix);
-                }
-                assert!(curr_vlr_eclass.contains(curr_vlrix));
-                mb_curr_vlr_eclass = Some(curr_vlr_eclass);
-
-                // And work through it to pick up any rreg hints now.
+                // `curr_vlrix` is an "initial" VLR.
                 for vlrix in vlrEquivClasses.equiv_class_elems_iter(curr_vlrix) {
                     if vlrix != curr_vlrix {
                         if let Some(rreg) = vlr_env[vlrix].rreg {
@@ -749,15 +743,19 @@ pub fn alloc_main<F: Function>(
             // `curr_vlr` via V-V copies, and so evicting any of them would be
             // counterproductive from the point of view of removing copies.
 
-            let do_not_evict = if let Some(ref curr_vlr_eclass) = mb_curr_vlr_eclass {
-                curr_vlr_eclass
-            } else {
-                &empty_Set_VirtualRangeIx
-            };
             let mb_evict_info: Option<(SparseSetU<[VirtualRangeIx; 4]>, SpillCost)> =
                 per_real_reg[rregNo].find_evict_set(
                     curr_vlrix,
-                    do_not_evict, // these are not to be considered for eviction
+                    &|vlrix_to_evict| {
+                        // What this means is: don't evict `vlrix_to_evict` if
+                        // it is in the same equivalence class as `curr_vlrix`
+                        // (the VLR which we're trying to allocate) AND we
+                        // actually know the equivalence classes for both
+                        // (hence the `Some`).  Spill/reload ("non-original")
+                        // VLRS don't have entries in `vlrEquivClasses`.
+                        vlrEquivClasses.in_same_equivalence_class(vlrix_to_evict, curr_vlrix)
+                            != Some(true)
+                    },
                     &vlr_env,
                 );
             if let Some((vlrixs_to_evict, total_evict_cost)) = mb_evict_info {
@@ -773,7 +771,10 @@ pub fn alloc_main<F: Function>(
                 for vlrix_to_evict in vlrixs_to_evict.iter() {
                     // Ensure we're not evicting anything in `curr_vlrix`'s eclass.
                     // This should be guaranteed us by find_evict_set.
-                    assert!(!do_not_evict.contains(*vlrix_to_evict));
+                    assert!(
+                        vlrEquivClasses.in_same_equivalence_class(*vlrix_to_evict, curr_vlrix)
+                            != Some(true)
+                    );
                     // Evict ..
                     debug!(
                         "--   CO evict          {:?}:  {:?}",
@@ -828,9 +829,15 @@ pub fn alloc_main<F: Function>(
             //debug!("--   Cand              {} ...",
             //       reg_universe.regs[rregNo].1);
 
-            let mb_evict_info: Option<(SparseSetU<[VirtualRangeIx; 4]>, SpillCost)> = per_real_reg
-                [rregNo]
-                .find_evict_set(curr_vlrix, &empty_Set_VirtualRangeIx, &vlr_env);
+            let mb_evict_info: Option<(SparseSetU<[VirtualRangeIx; 4]>, SpillCost)> =
+                per_real_reg[rregNo].find_evict_set(
+                    curr_vlrix,
+                    // We pass a closure that ignores its arg and returns `true`.
+                    // Meaning, "we are not specifying any particular
+                    // can't-be-evicted VLRs in this call."
+                    &|_vlrix_to_evict| true,
+                    &vlr_env,
+                );
             //
             //match mb_evict_info {
             //  None => debug!("--   Cand              {}: Unavail",

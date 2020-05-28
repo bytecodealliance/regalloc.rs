@@ -1882,12 +1882,15 @@ impl fmt::Debug for SpillCost {
 }
 
 impl SpillCost {
+    #[inline(always)]
     pub fn zero() -> Self {
         SpillCost::Finite(0.0)
     }
+    #[inline(always)]
     pub fn infinite() -> Self {
         SpillCost::Infinite
     }
+    #[inline(always)]
     pub fn finite(cost: f32) -> Self {
         // "`is_normal` returns true if the number is neither zero, infinite,
         // subnormal, or NaN."
@@ -1898,21 +1901,25 @@ impl SpillCost {
         assert!(cost < 1e18);
         SpillCost::Finite(cost)
     }
+    #[inline(always)]
     pub fn is_zero(&self) -> bool {
         match self {
             SpillCost::Infinite => false,
             SpillCost::Finite(c) => *c == 0.0,
         }
     }
+    #[inline(always)]
     pub fn is_infinite(&self) -> bool {
         match self {
             SpillCost::Infinite => true,
             SpillCost::Finite(_) => false,
         }
     }
+    #[inline(always)]
     pub fn is_finite(&self) -> bool {
         !self.is_infinite()
     }
+    #[inline(always)]
     pub fn is_less_than(&self, other: &Self) -> bool {
         match (self, other) {
             // Dubious .. both are infinity
@@ -1925,6 +1932,7 @@ impl SpillCost {
             (SpillCost::Finite(c1), SpillCost::Finite(c2)) => c1 < c2,
         }
     }
+    #[inline(always)]
     pub fn add(&mut self, other: &Self) {
         match (*self, other) {
             (SpillCost::Finite(c1), SpillCost::Finite(c2)) => {
