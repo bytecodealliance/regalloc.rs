@@ -37,6 +37,8 @@ jobs:
       run: cargo +nightly fuzz run bt ./fuzz/corpus_example.bin
     - name: Test bt_differential fuzzing target
       run: cargo +nightly fuzz run bt_differential ./fuzz/corpus_example.bin
+    - name: Test lsra fuzzing target
+      run: cargo +nightly fuzz run lsra ./fuzz/corpus_example.bin
     - name: Test lsra_differential fuzzing target
       run: cargo +nightly fuzz run lsra_differential ./fuzz/corpus_example.bin
     - name: Test parser fuzzing target

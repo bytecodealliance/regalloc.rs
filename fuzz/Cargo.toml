@@ -26,6 +26,10 @@ name = "bt_differential"
 path = "fuzz_bt_differential.rs"
 
 [[bin]]
+name = "lsra"
+path = "fuzz_lsra.rs"
+
+[[bin]]
 name = "lsra_differential"
 path = "fuzz_lsra_differential.rs"
 
