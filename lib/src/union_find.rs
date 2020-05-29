@@ -97,21 +97,100 @@ impl<T: ToFromU32> UnionFind<T> {
     // Find, with path compression.  Returns the index of tree root for the
     // given element.  This is not for external use.  There's no boundary
     // checking since Rust will do that anyway.
-    /*priv*/
-    fn find(&mut self, elem: u32) -> u32 {
-        let elem_parent_or_size: i32 = self.parent_or_size[elem as usize];
-        if elem_parent_or_size < 0 {
+    //
+    // This was initially implemented using a recursive function.  However,
+    // this function gets called a lot, and the recursion led to significant
+    // expense.  Attempts to replace the recursion with an explicit stack
+    // didn't give much speedup.  Hence the following scheme, which retains
+    // the recursion but unrolls the function.  To avoid performance problems
+    // caused by the interaction of inlining and recursion, it is split into
+    // two functions: `find` and `find_slow`.
+    //
+    // This is the main function.  It is hot, so it is unrolled 4 times.  If
+    // those 4 iterations don't complete the traversal back to the root, it
+    // calls onwards to `find_slow`, which recurses.  The idea is that `find`
+    // handles the majority of the cases and can always be inlined, and we
+    // hand off the remaining cases to `find_slow` which will never be inlined
+    // (and hence will not interfere with the inlining of this function).
+    //
+    // As a reminder of the comments above:
+    //
+    // * A `parent_or_size` value that is negative means that this node is a
+    //   tree root.
+    //
+    // * A `parent_or_size` that is non-negative indicates that this tree is a
+    //   subtree, and its parent has the given index in `parent_or_size`.
+    #[inline(always)]
+    fn find(&mut self, elem0: u32) -> u32 {
+        // Handle up to 4 steps up the tree in-line.
+        let elem0_parent_or_size: i32 = self.parent_or_size[elem0 as usize];
+        if elem0_parent_or_size < 0 {
             // We're at a tree root.
-            return elem;
-        } else {
-            // Recurse up to the root.  On the way back out, make all nodes point
-            // directly at the root index.
-            let elem_parent = elem_parent_or_size as u32;
-            let res = self.find(elem_parent);
-            assert!(res < UF_MAX_SIZE);
-            self.parent_or_size[elem as usize] = res as i32;
-            return res;
+            return elem0;
         }
+
+        let elem1 = elem0_parent_or_size as u32;
+        let elem1_parent_or_size: i32 = self.parent_or_size[elem1 as usize];
+        if elem1_parent_or_size < 0 {
+            self.parent_or_size[elem0 as usize] = elem1 as i32;
+            return elem1;
+        }
+
+        let elem2 = elem1_parent_or_size as u32;
+        let elem2_parent_or_size: i32 = self.parent_or_size[elem2 as usize];
+        if elem2_parent_or_size < 0 {
+            self.parent_or_size[elem1 as usize] = elem2 as i32;
+            self.parent_or_size[elem0 as usize] = elem2 as i32;
+            return elem2;
+        }
+
+        let elem3 = elem2_parent_or_size as u32;
+        let elem3_parent_or_size: i32 = self.parent_or_size[elem3 as usize];
+        if elem3_parent_or_size < 0 {
+            self.parent_or_size[elem2 as usize] = elem3 as i32;
+            self.parent_or_size[elem1 as usize] = elem3 as i32;
+            self.parent_or_size[elem0 as usize] = elem3 as i32;
+            return elem3;
+        }
+
+        // Hand off to `find_slow` to deal with all the remaining steps.
+        let elem4 = elem3_parent_or_size as u32;
+        let root = self.find_slow(elem4);
+        assert!(root < UF_MAX_SIZE);
+        self.parent_or_size[elem3 as usize] = root as i32;
+        self.parent_or_size[elem2 as usize] = root as i32;
+        self.parent_or_size[elem1 as usize] = root as i32;
+        self.parent_or_size[elem0 as usize] = root as i32;
+        return root;
+    }
+
+    // This is the same as `find`, except with unroll factor of 2 rather than
+    // 4, and self-recursive.  Don't call it directly.  It is intended only as
+    // a fallback for `find`.
+    #[inline(never)]
+    fn find_slow(&mut self, elem0: u32) -> u32 {
+        // Recurse up to the root.  On the way back out, make all nodes point
+        // directly at the root index.
+
+        let elem0_parent_or_size: i32 = self.parent_or_size[elem0 as usize];
+        if elem0_parent_or_size < 0 {
+            // We're at a tree root.
+            return elem0;
+        }
+
+        let elem1 = elem0_parent_or_size as u32;
+        let elem1_parent_or_size: i32 = self.parent_or_size[elem1 as usize];
+        if elem1_parent_or_size < 0 {
+            self.parent_or_size[elem0 as usize] = elem1 as i32;
+            return elem1;
+        }
+
+        let elem2 = elem1_parent_or_size as u32;
+        let root = self.find_slow(elem2);
+        assert!(root < UF_MAX_SIZE);
+        self.parent_or_size[elem1 as usize] = root as i32;
+        self.parent_or_size[elem0 as usize] = root as i32;
+        return root;
     }
 
     // Union, by size (weight).  This is publicly visible.
