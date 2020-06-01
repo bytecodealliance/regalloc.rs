@@ -33,6 +33,7 @@ pub type Map<K, V> = FxHashMap<K, V>;
 // Sets of things
 
 // Same comment as above for FxHashMap.
+#[derive(Clone)]
 pub struct Set<T> {
     set: FxHashSet<T>,
 }
@@ -197,17 +198,6 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> fmt::Debug for Set<T> {
         }
         s = s + &"}".to_string();
         write!(fmt, "{}", s)
-    }
-}
-
-impl<T: Eq + Ord + Hash + Copy + Clone + fmt::Debug> Clone for Set<T> {
-    #[inline(never)]
-    fn clone(&self) -> Self {
-        let mut res = Set::<T>::empty();
-        for item in self.set.iter() {
-            res.set.insert(item.clone());
-        }
-        res
     }
 }
 
