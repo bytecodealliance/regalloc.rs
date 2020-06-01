@@ -765,6 +765,45 @@ pub fn calc_livein_and_liveout<F: Function>(
 // handle (1) live-in and live-out Regs, (2) dead writes, and (3) instructions
 // that modify registers rather than merely reading or writing them.
 
+/// A ProtoRangeFrag carries information about a [write .. read] range, within a Block, which
+/// we will later turn into a fully-fledged RangeFrag.  It basically records the first and
+/// last-known InstPoints for appearances of a Reg.
+///
+/// ProtoRangeFrag also keeps count of the number of appearances of the Reg to which it
+/// pertains, using `uses`.  The counts get rolled into the resulting RangeFrags, and later are
+/// used to calculate spill costs.
+///
+/// The running state of this function is a map from Reg to ProtoRangeFrag.  Only Regs that
+/// actually appear in the Block (or are live-in to it) are mapped.  This has the advantage of
+/// economy, since most Regs will not appear in (or be live-in to) most Blocks.
+struct ProtoRangeFrag {
+    /// The InstPoint in this Block at which the associated Reg most recently became live (when
+    /// moving forwards though the Block).  If this value is the first InstPoint for the Block
+    /// (the U point for the Block's lowest InstIx), that indicates the associated Reg is
+    /// live-in to the Block.
+    first: InstPoint,
+
+    /// This is the InstPoint which is the end point (most recently observed read, in general)
+    /// for the current RangeFrag under construction.  In general we will move `last` forwards
+    /// as we discover reads of the associated Reg.  If this is the last InstPoint for the
+    /// Block (the D point for the Block's highest InstInx), that indicates that the associated
+    /// reg is live-out from the Block.
+    last: InstPoint,
+
+    /// Number of mentions of the associated Reg in this ProtoRangeFrag.
+    num_mentions: u16,
+}
+
+impl fmt::Debug for ProtoRangeFrag {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            fmt,
+            "{:?}x {:?} - {:?}",
+            self.num_mentions, self.first, self.last
+        )
+    }
+}
+
 /// Calculate all the RangeFrags for `bix`.  Add them to `out_frags` and
 /// corresponding metrics data to `out_frag_metrics`.  Add to `out_map`, the
 /// associated RangeFragIxs, segregated by Reg.  `bix`, `livein`, `liveout` and
@@ -779,46 +818,8 @@ fn get_range_frags_for_block<F: Function>(
     out_map: &mut Map<Reg, Vec<RangeFragIx>>,
     out_frags: &mut TypedIxVec<RangeFragIx, RangeFrag>,
     out_frag_metrics: &mut TypedIxVec<RangeFragIx, RangeFragMetrics>,
+    state: &mut Map<Reg, ProtoRangeFrag>,
 ) {
-    /// A ProtoRangeFrag carries information about a [write .. read] range, within a Block, which
-    /// we will later turn into a fully-fledged RangeFrag.  It basically records the first and
-    /// last-known InstPoints for appearances of a Reg.
-    ///
-    /// ProtoRangeFrag also keeps count of the number of appearances of the Reg to which it
-    /// pertains, using `uses`.  The counts get rolled into the resulting RangeFrags, and later are
-    /// used to calculate spill costs.
-    ///
-    /// The running state of this function is a map from Reg to ProtoRangeFrag.  Only Regs that
-    /// actually appear in the Block (or are live-in to it) are mapped.  This has the advantage of
-    /// economy, since most Regs will not appear in (or be live-in to) most Blocks.
-    struct ProtoRangeFrag {
-        /// The InstPoint in this Block at which the associated Reg most recently became live (when
-        /// moving forwards though the Block).  If this value is the first InstPoint for the Block
-        /// (the U point for the Block's lowest InstIx), that indicates the associated Reg is
-        /// live-in to the Block.
-        first: InstPoint,
-
-        /// This is the InstPoint which is the end point (most recently observed read, in general)
-        /// for the current RangeFrag under construction.  In general we will move `last` forwards
-        /// as we discover reads of the associated Reg.  If this is the last InstPoint for the
-        /// Block (the D point for the Block's highest InstInx), that indicates that the associated
-        /// reg is live-out from the Block.
-        last: InstPoint,
-
-        /// Number of mentions of the associated Reg in this ProtoRangeFrag.
-        num_mentions: u16,
-    }
-
-    impl fmt::Debug for ProtoRangeFrag {
-        fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-            write!(
-                fmt,
-                "{:?}x {:?} - {:?}",
-                self.num_mentions, self.first, self.last
-            )
-        }
-    }
-
     fn plus1(n: u16) -> u16 {
         if n == 0xFFFFu16 {
             n
@@ -827,6 +828,38 @@ fn get_range_frags_for_block<F: Function>(
         }
     }
 
+    // A closure capturing the out-parameters, flushing one range fragment at a time.
+    let mut flush_one = |r: Reg, frag: RangeFrag, frag_metrics: RangeFragMetrics| {
+        // Allocate a new RangeFragIx for `frag`, except, make some minimal effort to avoid huge
+        // numbers of duplicates by inspecting the previous two entries, and using them if
+        // possible.
+        let mut new_fix = None;
+
+        let num_out_frags = out_frags.len();
+        if num_out_frags >= 2 {
+            let back_0 = RangeFragIx::new(num_out_frags - 1);
+            let back_1 = RangeFragIx::new(num_out_frags - 2);
+            if out_frags[back_0] == frag && out_frag_metrics[back_0] == frag_metrics {
+                new_fix = Some(back_0);
+            } else if out_frags[back_1] == frag && out_frag_metrics[back_1] == frag_metrics {
+                new_fix = Some(back_1);
+            }
+        }
+
+        let new_fix = match new_fix {
+            Some(fix) => fix,
+            None => {
+                // We can't look back or there was no match; create a new one.
+                out_frags.push(frag);
+                out_frag_metrics.push(frag_metrics);
+                RangeFragIx::new(out_frags.len() as u32 - 1)
+            }
+        };
+
+        // And use the new RangeFragIx.
+        out_map.entry(r).or_insert_with(|| Vec::new()).push(new_fix);
+    };
+
     // Some handy constants.
     debug_assert!(func.block_insns(bix).len() >= 1);
     let first_iix_in_block = func.block_insns(bix).first();
@@ -834,12 +867,8 @@ fn get_range_frags_for_block<F: Function>(
     let first_pt_in_block = InstPoint::new_use(first_iix_in_block);
     let last_pt_in_block = InstPoint::new_def(last_iix_in_block);
 
-    // The running state.
-    let mut state = Map::<Reg, ProtoRangeFrag>::default();
-
-    // The generated RangeFrags are initially are dumped in here.  We
-    // group them by Reg at the end of this function.
-    let mut tmp_result_vec = SmallVec::<[(Reg, RangeFrag, RangeFragMetrics); 32]>::new();
+    // Clear the running state.
+    state.clear();
 
     // First, set up `state` as if all of `livein` had been written just
     // prior to the block.
@@ -937,7 +966,7 @@ fn get_range_frags_for_block<F: Function>(
 
                     let (frag, frag_metrics) =
                         RangeFrag::new_with_metrics(func, bix, *first, *last, *num_mentions);
-                    tmp_result_vec.push((*r, frag, frag_metrics));
+                    flush_one(*r, frag, frag_metrics);
                     let new_pt = InstPoint::new_def(iix);
 
                     // Reuse the previous entry for this new definition of the same vreg.
@@ -966,7 +995,7 @@ fn get_range_frags_for_block<F: Function>(
         // read "after" the block.  Create a `LiveOut` or `Thru` frag accordingly.
         let (frag, frag_metrics) =
             RangeFrag::new_with_metrics(func, bix, pf.first, last_pt_in_block, pf.num_mentions);
-        tmp_result_vec.push((*r, frag, frag_metrics));
+        flush_one(*r, frag, frag_metrics);
     }
 
     // Finally, round up any remaining ProtoRangeFrags left in `state`.
@@ -976,41 +1005,7 @@ fn get_range_frags_for_block<F: Function>(
         }
         let (frag, frag_metrics) =
             RangeFrag::new_with_metrics(func, bix, pf.first, pf.last, pf.num_mentions);
-        tmp_result_vec.push((r, frag, frag_metrics));
-    }
-
-    // Copy the entries in `tmp_result_vec` into `out_map` and `outVec`.
-    // TODO: do this as we go along, so as to avoid the use of a temporary vector.
-    assert!(out_frags.len() == out_frag_metrics.len());
-    for (r, frag, frag_metrics) in tmp_result_vec {
-        // Allocate a new RangeFragIx for `frag`, except, make some minimal effort to avoid huge
-        // numbers of duplicates by inspecting the previous two entries, and using them if
-        // possible.
-        let mut new_fix = None;
-
-        let num_out_frags = out_frags.len();
-        if num_out_frags >= 2 {
-            let back_0 = RangeFragIx::new(num_out_frags - 1);
-            let back_1 = RangeFragIx::new(num_out_frags - 2);
-            if out_frags[back_0] == frag && out_frag_metrics[back_0] == frag_metrics {
-                new_fix = Some(back_0);
-            } else if out_frags[back_1] == frag && out_frag_metrics[back_1] == frag_metrics {
-                new_fix = Some(back_1);
-            }
-        }
-
-        let new_fix = match new_fix {
-            Some(fix) => fix,
-            None => {
-                // We can't look back or there was no match; create a new one.
-                out_frags.push(frag);
-                out_frag_metrics.push(frag_metrics);
-                RangeFragIx::new(out_frags.len() as u32 - 1)
-            }
-        };
-
-        // And use the new RangeFragIx.
-        out_map.entry(r).or_insert_with(|| Vec::new()).push(new_fix);
+        flush_one(*r, frag, frag_metrics);
     }
 }
 
@@ -1033,6 +1028,9 @@ pub fn get_range_frags<F: Function>(
     let mut result_map = Map::<Reg, Vec<RangeFragIx>>::default();
     let mut result_frags = TypedIxVec::<RangeFragIx, RangeFrag>::new();
     let mut result_frag_metrics = TypedIxVec::<RangeFragIx, RangeFragMetrics>::new();
+
+    // A state variable that's reused across iterations.
+    let mut tmp_state = Map::default();
     for bix in func.blocks() {
         get_range_frags_for_block(
             func,
@@ -1043,6 +1041,7 @@ pub fn get_range_frags<F: Function>(
             &mut result_map,
             &mut result_frags,
             &mut result_frag_metrics,
+            &mut tmp_state,
         );
     }
 
