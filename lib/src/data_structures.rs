@@ -956,6 +956,7 @@ impl fmt::Debug for SpillSlot {
 pub struct RegUsageCollector<'a> {
     pub reg_vecs: &'a mut RegVecs,
 }
+
 impl<'a> RegUsageCollector<'a> {
     pub fn new(reg_vecs: &'a mut RegVecs) -> Self {
         Self { reg_vecs }
@@ -963,27 +964,28 @@ impl<'a> RegUsageCollector<'a> {
     pub fn add_use(&mut self, r: Reg) {
         self.reg_vecs.uses.push(r);
     }
-    pub fn add_uses(&mut self, regs: &Set<Reg>) {
-        for reg in regs.iter() {
-            self.add_use(*reg);
-        }
+    pub fn add_uses(&mut self, regs: &[Reg]) {
+        self.reg_vecs.uses.extend(regs.iter());
     }
     pub fn add_def(&mut self, r: Writable<Reg>) {
         self.reg_vecs.defs.push(r.to_reg());
     }
-    pub fn add_defs(&mut self, regs: &Set<Writable<Reg>>) {
-        for reg in regs.iter() {
-            self.add_def(*reg);
+    pub fn add_defs(&mut self, regs: &[Writable<Reg>]) {
+        self.reg_vecs.defs.reserve(regs.len());
+        for r in regs {
+            self.reg_vecs.defs.push(r.to_reg());
         }
     }
     pub fn add_mod(&mut self, r: Writable<Reg>) {
         self.reg_vecs.mods.push(r.to_reg());
     }
-    pub fn add_mods(&mut self, regs: &Set<Writable<Reg>>) {
-        for reg in regs.iter() {
-            self.add_mod(*reg);
+    pub fn add_mods(&mut self, regs: &[Writable<Reg>]) {
+        self.reg_vecs.mods.reserve(regs.len());
+        for r in regs {
+            self.reg_vecs.mods.push(r.to_reg());
         }
     }
+
     // The presence of the following two is a hack, needed to support fuzzing
     // in the test framework.  Real clients should not call them.
     pub fn get_use_def_mod_vecs_test_framework_only(&self) -> (Vec<Reg>, Vec<Reg>, Vec<Reg>) {
@@ -993,6 +995,7 @@ impl<'a> RegUsageCollector<'a> {
             self.reg_vecs.mods.clone(),
         )
     }
+
     pub fn get_empty_reg_vecs_test_framework_only(sanitized: bool) -> RegVecs {
         RegVecs::new(sanitized)
     }
