@@ -1373,7 +1373,10 @@ pub fn merge_range_frags(
         // but .. if we come across independents (RangeKind::Local), pull them out
         // immediately.
 
-        let mut triples = Vec::<(RangeFragIx, RangeFragKind, BlockIx)>::new();
+        // Try to avoid heap allocation if at all possible.  Up to 100 entries are very
+        // common, so this is sized large to be effective.  Each entry is definitely
+        // 16 bytes at most, so this will use 4KB stack at most, which is reasonable.
+        let mut triples = SmallVec::<[(RangeFragIx, RangeFragKind, BlockIx); 256]>::new();
 
         // Create `triples`.  We will use it to guide the merging phase, but it is immutable there.
         for fix in all_frag_ixs_for_reg {

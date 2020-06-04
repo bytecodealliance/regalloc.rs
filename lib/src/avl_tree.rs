@@ -61,7 +61,9 @@ impl<T: Clone> AVLTree<T> {
     // Create a new tree and its associated storage pool.  This requires knowing
     // the default item value.
     pub fn new(default: T) -> Self {
-        let pool = vec![];
+        // Pre-allocate a few entries so as to save a few reallocs later, on the
+        // assumption that most trees will get quite large.
+        let pool = Vec::with_capacity(16);
         let freelist = AVL_NULL;
         let root = AVL_NULL;
         Self {
