@@ -58,8 +58,8 @@ impl RangeFrag {
         )
     }
 
-    // TODO pass by value, not by ref, here
     #[inline(always)]
+    #[cfg(debug_assertions)]
     pub(crate) fn contains(&self, inst: &InstPoint) -> bool {
         self.first <= *inst && *inst <= self.last
     }
