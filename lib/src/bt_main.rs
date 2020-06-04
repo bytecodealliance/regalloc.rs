@@ -970,7 +970,11 @@ pub fn alloc_main<F: Function>(
             iix: InstIx,      // this is the Inst we are spilling/reloading for
             kind: BridgeKind, // says whether to create a spill or reload or both
         }
-        let mut sri_vec = Vec::<SpillAndOrReloadInfo>::new();
+
+        // Most spills won't require anywhere near 32 entries, so this avoids
+        // almost all heap allocation.
+        let mut sri_vec = SmallVec::<[SpillAndOrReloadInfo; 32]>::new();
+
         let curr_vlr_vreg = curr_vlr.vreg;
         let curr_vlr_reg = curr_vlr_vreg.to_reg();
 
