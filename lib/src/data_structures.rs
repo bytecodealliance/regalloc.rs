@@ -539,11 +539,12 @@ impl<TyIx, Ty: fmt::Debug> fmt::Debug for TypedIxVec<TyIx, Ty> {
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum RegClass {
-    I32,
-    F32,
-    I64,
-    F64,
-    V128,
+    I32 = 0,
+    F32 = 1,
+    I64 = 2,
+    F64 = 3,
+    V128 = 4,
+    INVALID = 5,
 }
 
 /// The number of register classes that exist.
@@ -552,20 +553,17 @@ pub const NUM_REG_CLASSES: usize = 5;
 
 impl RegClass {
     /// Convert a register class to a u32 index.
+    #[inline(always)]
     pub fn rc_to_u32(self) -> u32 {
-        match self {
-            RegClass::I32 => 0,
-            RegClass::F32 => 1,
-            RegClass::I64 => 2,
-            RegClass::F64 => 3,
-            RegClass::V128 => 4,
-        }
+        self as u32
     }
     /// Convert a register class to a usize index.
+    #[inline(always)]
     pub fn rc_to_usize(self) -> usize {
-        self.rc_to_u32() as usize
+        self as usize
     }
     /// Construct a register class from a u32.
+    #[inline(always)]
     pub fn rc_from_u32(rc: u32) -> RegClass {
         match rc {
             0 => RegClass::I32,
@@ -573,7 +571,7 @@ impl RegClass {
             2 => RegClass::I64,
             3 => RegClass::F64,
             4 => RegClass::V128,
-            _ => panic!("rc_from_u32"),
+            _ => panic!("RegClass::rc_from_u32"),
         }
     }
 
@@ -584,6 +582,7 @@ impl RegClass {
             RegClass::F32 => "F",
             RegClass::F64 => "D",
             RegClass::V128 => "V",
+            RegClass::INVALID => panic!("RegClass::short_name"),
         }
     }
 
@@ -594,6 +593,7 @@ impl RegClass {
             RegClass::F32 => "F32",
             RegClass::F64 => "F32",
             RegClass::V128 => "V128",
+            RegClass::INVALID => panic!("RegClass::long_name"),
         }
     }
 }
@@ -637,11 +637,13 @@ pub struct Reg {
 static INVALID_REG: u32 = 0xffffffff;
 
 impl Reg {
+    #[inline(always)]
     pub fn is_virtual(self) -> bool {
         self.is_valid() && (self.bits & 0x8000_0000) != 0
     }
+    #[inline(always)]
     pub fn is_real(self) -> bool {
-        self.is_valid() && !self.is_virtual()
+        self.is_valid() && (self.bits & 0x8000_0000) == 0
     }
     pub fn new_real(rc: RegClass, enc: u8, index: u8) -> Self {
         let n = (0 << 31) | (rc.rc_to_u32() << 28) | ((enc as u32) << 8) | ((index as u32) << 0);
@@ -657,9 +659,11 @@ impl Reg {
     pub fn invalid() -> Reg {
         Reg { bits: INVALID_REG }
     }
+    #[inline(always)]
     pub fn is_invalid(self) -> bool {
         self.bits == INVALID_REG
     }
+    #[inline(always)]
     pub fn is_valid(self) -> bool {
         !self.is_invalid()
     }
@@ -669,10 +673,12 @@ impl Reg {
     pub fn is_real_or_invalid(self) -> bool {
         self.is_real() || self.is_invalid()
     }
+    #[inline(always)]
     pub fn get_class(self) -> RegClass {
         debug_assert!(self.is_valid());
         RegClass::rc_from_u32((self.bits >> 28) & 0x7)
     }
+    #[inline(always)]
     pub fn get_index(self) -> usize {
         debug_assert!(self.is_valid());
         // Return type is usize because typically we will want to use the
@@ -681,6 +687,15 @@ impl Reg {
             (self.bits & ((1 << 28) - 1)) as usize
         } else {
             (self.bits & ((1 << 8) - 1)) as usize
+        }
+    }
+    #[inline(always)]
+    pub fn get_index_u32(self) -> u32 {
+        debug_assert!(self.is_valid());
+        if self.is_virtual() {
+            self.bits & ((1 << 28) - 1)
+        } else {
+            self.bits & ((1 << 8) - 1)
         }
     }
     pub fn get_hw_encoding(self) -> u8 {

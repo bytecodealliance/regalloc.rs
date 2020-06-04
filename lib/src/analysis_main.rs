@@ -188,12 +188,12 @@ pub fn run_analysis<F: Function>(
     // VirtualRanges and RealRanges.
     info!("  run_analysis: begin liveness analysis");
 
-    let (frag_ixs_per_reg, frag_env, frag_metrics_env) = get_range_frags(
+    let (frag_ixs_per_reg, frag_env, frag_metrics_env, vreg_classes) = get_range_frags(
         func,
-        &livein_sets_per_block,
-        &liveout_sets_per_block,
         &reg_vecs_and_bounds,
         &reg_universe,
+        &livein_sets_per_block,
+        &liveout_sets_per_block,
     );
 
     let (rlr_env, vlr_env) = merge_range_frags(
@@ -202,6 +202,8 @@ pub fn run_analysis<F: Function>(
         &frag_metrics_env,
         &estimated_frequencies,
         &cfg_info,
+        &reg_universe,
+        &vreg_classes,
     );
 
     debug_assert!(liveout_sets_per_block.len() == estimated_frequencies.len());
