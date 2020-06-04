@@ -3,7 +3,6 @@ use super::{
     Statistics, VirtualInterval,
 };
 use crate::{
-    avl_tree::{AVLTree, AVL_NULL},
     data_structures::{InstPoint, Point, RegVecsAndBounds},
     Function, InstIx, LinearScanOptions, RealReg, RealRegUniverse, Reg, RegAllocError, SpillSlot,
     VirtualReg, NUM_REG_CLASSES,
@@ -12,7 +11,8 @@ use crate::{
 use log::{debug, info, log_enabled, trace, Level};
 use rustc_hash::FxHashMap as HashMap;
 use smallvec::SmallVec;
-use std::{cmp::Ordering, fmt};
+use std::collections::BinaryHeap;
+use std::{cmp, cmp::Ordering, fmt};
 
 macro_rules! lsra_assert {
     ($arg:expr) => {
@@ -377,52 +377,59 @@ impl ReusableState {
     }
 }
 
+/// A small pair containing the interval id and the instruction point of an interval that is still
+/// to be allocated, to be stored in the unhandled list of intervals.
+struct IntervalStart(IntId, InstPoint);
+
+impl cmp::PartialEq for IntervalStart {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl cmp::Eq for IntervalStart {}
+
+impl cmp::PartialOrd for IntervalStart {
+    #[inline(always)]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // Note: we want a reverse ordering on start positions, so that we have a MinHeap and not a
+        // MaxHeap in UnhandledIntervals.
+        other.1.partial_cmp(&self.1)
+    }
+}
+
+impl cmp::Ord for IntervalStart {
+    #[inline(always)]
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
 struct UnhandledIntervals {
-    tree: AVLTree<IntId>,
+    heap: BinaryHeap<IntervalStart>,
 }
 
 impl UnhandledIntervals {
     fn new() -> Self {
         Self {
-            tree: AVLTree::new(IntId(usize::max_value())),
+            heap: BinaryHeap::with_capacity(16),
         }
     }
 
+    /// Insert a virtual interval that's unallocated in the list of unhandled intervals.
+    ///
+    /// This relies on the fact that unhandled intervals's start positions can't change over time.
     fn insert(&mut self, id: IntId, intervals: &Intervals) {
-        let inserted = self.tree.insert(
-            id,
-            Some(&|left: IntId, right: IntId| {
-                (intervals.get(left).start, left).partial_cmp(&(intervals.get(right).start, right))
-            }),
-        );
-        debug_assert!(inserted);
+        self.heap.push(IntervalStart(id, intervals.get(id).start))
     }
 
-    fn next_unhandled(&mut self, intervals: &Intervals) -> Option<IntId> {
-        // Left-most entry in tree is the next interval to handle.
-        let mut pool_id = self.tree.root;
-        if pool_id == AVL_NULL {
-            return None;
-        }
-
-        loop {
-            let left = self.tree.pool[pool_id as usize].left;
-            if left == AVL_NULL {
-                break;
-            }
-            pool_id = left;
-        }
-        let id = self.tree.pool[pool_id as usize].item;
-
-        let deleted = self.tree.delete(
-            id,
-            Some(&|left: IntId, right: IntId| {
-                (intervals.get(left).start, left).partial_cmp(&(intervals.get(right).start, right))
-            }),
-        );
-        debug_assert!(deleted);
-
-        Some(id)
+    /// Get the new unhandled interval, in start order.
+    fn next_unhandled(&mut self, _intervals: &Intervals) -> Option<IntId> {
+        self.heap.pop().map(|entry| {
+            let ret = entry.0;
+            lsra_assert!(_intervals.get(ret).start == entry.1);
+            ret
+        })
     }
 }
 
@@ -868,11 +875,11 @@ fn allocate_blocked_reg<F: Function>(
                     }
                 }
 
-                ActiveInt::Fixed((reg, fix)) => {
+                ActiveInt::Fixed((_reg, _fix)) => {
                     lsra_assert!(
-                        reg != best_reg
+                        _reg != best_reg
                             || state.intervals.get(cur_id).end
-                                < state.intervals.fixeds[reg.get_index()].frags[fix].first,
+                                < state.intervals.fixeds[_reg.get_index()].frags[_fix].first,
                         "can't split fixed active interval"
                     );
                 }

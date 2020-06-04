@@ -127,7 +127,7 @@ impl fmt::Debug for LinearScanOptions {
 type RegUses = RegVecsAndBounds;
 
 /// A unique identifier for an interval.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct IntId(pub(crate) usize);
 
 impl fmt::Debug for IntId {
@@ -595,12 +595,12 @@ pub(crate) fn run<F: Function>(
         stats,
     )?;
 
-    let virtuals = intervals.virtuals;
+    let virtuals = &intervals.virtuals;
 
     let memory_moves = resolve_moves::run(
         func,
         &reg_uses,
-        &virtuals,
+        virtuals,
         &liveins,
         &liveouts,
         &mut num_spill_slots,
@@ -609,7 +609,7 @@ pub(crate) fn run<F: Function>(
 
     apply_registers(
         func,
-        &virtuals,
+        virtuals,
         memory_moves,
         reg_universe,
         num_spill_slots,
