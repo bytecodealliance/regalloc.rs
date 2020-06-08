@@ -4,7 +4,7 @@ mod test_cases;
 mod test_framework;
 mod validator;
 
-use regalloc::{allocate_registers_with_opts, Algorithm, BacktrackingOptions, Options};
+use regalloc::{allocate_registers_with_opts, Algorithm, BacktrackingOptions, IRSnapshot, Options};
 use test_framework::{make_universe, run_func, RunStage};
 use validator::check_results;
 
@@ -36,7 +36,6 @@ fn main() {
             clap::Arg::with_name("test")
                 .short("t")
                 .takes_value(true)
-                .required(true)
                 .help("test case name"),
         )
         .arg(
@@ -51,10 +50,43 @@ fn main() {
             clap::Arg::with_name("quiet")
             .short("q")
             .takes_value(false)
-            .help("whether to run in quiet mode (i.e. not print the function's body before and after regalloc)")
+            .help("whether to run in quiet mode (i.e. not print the function's body before and after regalloc)"))
+        .arg(
+            clap::Arg::with_name("snapshot")
+            .short("s")
+            .takes_value(true)
+            .help("Path to a snapshot file (.bin) or directory containing snapshot files.")
     );
+
     let matches = app.get_matches();
+    if matches.value_of("snapshot").is_none() && matches.value_of("test").is_none() {
+        println!("Missing test or snapshot parameter, aborting.");
+        println!("Usage: {}", matches.usage());
+        return;
+    }
+
     let quiet = matches.is_present("quiet");
+
+    // Find what the algorithm is going to be.
+    let algorithm = matches.value_of("algorithm").unwrap();
+    let opts = match algorithm {
+        "bt" | "btc" => Options {
+            run_checker: algorithm == "btc",
+            algorithm: Algorithm::Backtracking(BacktrackingOptions {
+                request_block_annotations: true,
+            }),
+        },
+        "lsra" | "lsrac" => Options {
+            run_checker: algorithm == "lsrac",
+            algorithm: Algorithm::LinearScan(Default::default()),
+        },
+        // Unreachable because of defined "possible_values".
+        _ => unreachable!(),
+    };
+
+    if let Some(snapshot_path) = matches.value_of("snapshot") {
+        return run_snapshot(snapshot_path, opts, quiet);
+    }
 
     let func_name = matches.value_of("test").unwrap();
     let mut func = match crate::test_cases::find_func(func_name) {
@@ -80,22 +112,6 @@ fn main() {
         }
     };
 
-    let algorithm = matches.value_of("algorithm").unwrap();
-    let opts = match algorithm {
-        "bt" | "btc" => Options {
-            run_checker: algorithm == "btc",
-            algorithm: Algorithm::Backtracking(BacktrackingOptions {
-                request_block_annotations: true,
-            }),
-        },
-        "lsra" | "lsrac" => Options {
-            run_checker: algorithm == "lsrac",
-            algorithm: Algorithm::LinearScan(Default::default()),
-        },
-        // Unreachable because of defined "possible_values".
-        _ => unreachable!(),
-    };
-
     let reg_universe = make_universe(num_regs_i32, num_regs_f32);
 
     if !quiet {
@@ -105,7 +121,7 @@ fn main() {
     // Just so we can run it later.  Not needed for actual allocation.
     let original_func = func.clone();
 
-    let result = match allocate_registers_with_opts(&mut func, &reg_universe, opts) {
+    let result = match allocate_registers_with_opts(&mut func, &reg_universe, opts.clone()) {
         Err(e) => {
             println!("allocation failed: {}", e);
             return;
@@ -145,6 +161,79 @@ fn main() {
     println!("");
 
     check_results(&before_regalloc_result, &after_regalloc_result);
+
+    println!("Re-running as snapshotted test case...");
+    let mut snapshot = IRSnapshot::from_function(&original_func, &reg_universe);
+    println!("Constructed snapshot, running...");
+    snapshot.allocate(opts).expect("generic allocation failed!");
+    println!("Success!");
+}
+
+fn run_snapshot(path: &str, opts: Options, quiet: bool) {
+    use std::fs;
+    use std::io::{self, Read};
+    use std::path::Path;
+
+    let mut snapshots = Vec::new();
+
+    // First, load all the snapshot files, to not alternate between IO and CPU; then run register
+    // allocation on each.
+
+    let path = Path::new(path);
+
+    let mut deserialize_one = |path: &Path, quiet: bool, snapshots: &mut Vec<IRSnapshot>| {
+        let mut contents = Vec::new();
+        let mut file = fs::File::open(path).expect("couldn't read snapshot path");
+        file.read_to_end(&mut contents)
+            .expect("couldn't read snapshot file");
+        if !quiet {
+            println!("Deserializing snapshot...");
+        }
+        snapshots.push(bincode::deserialize(&contents).expect("couldn't deserialize"));
+    };
+
+    if path.is_dir() {
+        fn visit_dirs<F: FnMut(&Path, bool, &mut Vec<IRSnapshot>)>(
+            path: &Path,
+            quiet: bool,
+            snapshots: &mut Vec<IRSnapshot>,
+            deserialize_one: &mut F,
+        ) -> io::Result<()> {
+            for entry in fs::read_dir(path)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    visit_dirs(&path, quiet, snapshots, deserialize_one)?;
+                } else {
+                    deserialize_one(&path, quiet, snapshots);
+                }
+            }
+            Ok(())
+        };
+
+        visit_dirs(path, quiet, &mut snapshots, &mut deserialize_one)
+            .expect("couldn't read at least one directory entry");
+    } else {
+        deserialize_one(path, quiet, &mut snapshots);
+    }
+
+    for (i, mut snapshot) in snapshots.into_iter().enumerate() {
+        if !quiet {
+            println!("Running regalloc on snapshot {}...", i);
+        }
+        match snapshot.allocate(opts.clone()) {
+            Ok(result) => {
+                if !quiet {
+                    println!("allocation of snapshotted IR {} worked!", i);
+                    println!("num insts: {}", result.insns.len());
+                    println!("num spill slots: {}", result.num_spill_slots);
+                }
+            }
+            Err(err) => {
+                panic!("allocation failed! {}", err);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -173,6 +262,11 @@ mod test_utils {
                 request_block_annotations: false,
             }),
         };
+
+        let mut encoded = IRSnapshot::from_function(&func, &reg_universe);
+        encoded
+            .allocate(opts.clone())
+            .expect("generic allocator failed!");
 
         let before_regalloc_result = run_func(
             &func,
@@ -224,6 +318,12 @@ mod test_utils {
             run_checker: true,
             algorithm: Algorithm::LinearScan(Default::default()),
         };
+
+        let mut encoded = IRSnapshot::from_function(&func, &reg_universe);
+        encoded
+            .allocate(opts.clone())
+            .expect("generic allocator failed!");
+
         let result =
             allocate_registers_with_opts(&mut func, &reg_universe, opts).unwrap_or_else(|err| {
                 panic!("allocation failed: {}", err);
@@ -264,6 +364,11 @@ mod test_utils {
 
             let mut func = func.clone();
             let reg_universe = make_universe(num_gpr, 0);
+
+            let mut encoded = IRSnapshot::from_function(&func, &reg_universe);
+            encoded
+                .allocate(opts.clone())
+                .expect("generic allocator failed!");
 
             let result = allocate_registers_with_opts(&mut func, &reg_universe, opts.clone())
                 .expect("regalloc failure");
