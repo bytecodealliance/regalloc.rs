@@ -26,6 +26,7 @@ mod data_structures;
 mod inst_stream;
 mod linear_scan;
 mod reg_maps;
+mod snapshot;
 mod sparse_set;
 mod union_find;
 
@@ -514,3 +515,6 @@ pub fn allocate_registers<F: Function>(
     };
     allocate_registers_with_opts(func, rreg_universe, opts)
 }
+
+// Facilities to snapshot regalloc inputs and reproduce them in regalloc.rs.
+pub use crate::snapshot::IRSnapshot;

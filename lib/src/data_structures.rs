@@ -15,6 +15,9 @@ use std::slice::{Iter, IterMut};
 
 use crate::{Function, RegUsageMapper};
 
+#[cfg(feature = "enable-serde")]
+use serde::{Deserialize, Serialize};
+
 //=============================================================================
 // Queues
 
@@ -34,7 +37,8 @@ pub type Map<K, V> = FxHashMap<K, V>;
 
 // Same comment as above for FxHashMap.
 #[derive(Clone)]
-pub struct Set<T> {
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
+pub struct Set<T: Eq + Hash> {
     set: FxHashSet<T>,
 }
 
@@ -204,7 +208,7 @@ impl<T: Eq + Ord + Hash + Copy + fmt::Debug> fmt::Debug for Set<T> {
 pub struct SetIter<'a, T> {
     set_iter: std::collections::hash_set::Iter<'a, T>,
 }
-impl<T> Set<T> {
+impl<T: Eq + Hash> Set<T> {
     pub fn iter(&self) -> SetIter<T> {
         SetIter {
             set_iter: self.set.iter(),
@@ -241,6 +245,7 @@ pub trait PlusN {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct Range<T> {
     first: T,
     len: usize,
@@ -417,6 +422,7 @@ where
 macro_rules! generate_boilerplate {
     ($TypeIx:ident, $Type:ident, $PrintingPrefix:expr) => {
         #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+        #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
         // Firstly, the indexing type (TypeIx)
         pub enum $TypeIx {
             $TypeIx(u32),
@@ -538,6 +544,7 @@ impl<TyIx, Ty: fmt::Debug> fmt::Debug for TypedIxVec<TyIx, Ty> {
 // more flexible register-class definition mechanism.
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub enum RegClass {
     I32 = 0,
     F32 = 1,
@@ -630,6 +637,7 @@ impl RegClass {
 // but that doesn't seem important.  AFAIK only ARM32 VFP/Neon has that.
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct Reg {
     bits: u32,
 }
@@ -754,6 +762,7 @@ impl fmt::Debug for Reg {
 // register.
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct RealReg {
     reg: Reg,
 }
@@ -805,6 +814,7 @@ impl fmt::Debug for RealReg {
 }
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct VirtualReg {
     reg: Reg,
 }
@@ -902,6 +912,7 @@ impl Reg {
 /// invocation of this constructor in a machine backend (for example) is an
 /// error.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct Writable<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug> {
     reg: R,
 }
@@ -1173,7 +1184,8 @@ impl RegVecsAndBounds {
 // * gives meaning to Set<RealReg>, which otherwise would merely be a bunch of
 //   bits.
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct RealRegUniverse {
     // The registers themselves.  All must be real registers, and all must
     // have their index number (.get_index()) equal to the array index here,
@@ -1196,6 +1208,7 @@ pub struct RealRegUniverse {
 
 /// Information about a single register class in the `RealRegUniverse`.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct RegClassInfo {
     // Range of allocatable registers in this register class, in terms of
     // register indices.
