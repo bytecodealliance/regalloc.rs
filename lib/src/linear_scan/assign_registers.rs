@@ -1164,7 +1164,12 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
         Err(index) => (index, false),
     };
 
-    let mut child_mentions = parent_mentions.split_off(index);
+    // Emulate split_off for SmallVec here.
+    let mut child_mentions = MentionMap::with_capacity(parent_mentions.len() - index);
+    for mention in parent_mentions.iter().skip(index) {
+        child_mentions.push(mention.clone());
+    }
+    parent_mentions.truncate(index);
 
     // In the situation where we split at the def point of an instruction, and the mention set
     // contains the use point, we need to refine the sets:

@@ -11,7 +11,7 @@ use crate::{
     AnalysisError, Function, RealRegUniverse, RegClass, TypedIxVec,
 };
 use log::{debug, info, log_enabled, Level};
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 use std::{fmt, mem};
 
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -336,7 +336,7 @@ fn get_range_frags_for_block<F: Function>(
                     state[r_state_ix] = Some(RangeFrag {
                         first: new_pt,
                         last: new_pt,
-                        mentions: vec![(iix, mention_set)],
+                        mentions: smallvec![(iix, mention_set)],
                     })
                 }
 
@@ -396,7 +396,7 @@ fn get_range_frags_for_block<F: Function>(
                 bix,
                 pf.first,
                 pf.last,
-                mem::replace(&mut pf.mentions, Vec::new()),
+                mem::replace(&mut pf.mentions, MentionMap::new()),
             );
             emit_range_frag(r, frag, frag_metrics, num_real_regs);
             state[*r_state_ix as usize] = None;
@@ -786,7 +786,7 @@ fn flush_interval(
                 RangeFrag {
                     first: frag.first,
                     last: frag.last,
-                    mentions: mem::replace(&mut frag.mentions, Vec::new()),
+                    mentions: mem::replace(&mut frag.mentions, MentionMap::new()),
                 }
             }));
         return;

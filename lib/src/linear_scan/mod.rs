@@ -18,6 +18,7 @@ use crate::{
 };
 
 use analysis::{AnalysisInfo, RangeFrag};
+use smallvec::SmallVec;
 
 mod analysis;
 mod assign_registers;
@@ -219,7 +220,8 @@ impl VirtualInterval {
     }
 }
 
-// TODO comment
+/// This data structure tracks the mentions of a register (virtual or real) at a precise
+/// instruction point. It's a set encoded as three flags, one for each of use/mod/def.
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct Mention(u8);
 
@@ -285,7 +287,7 @@ impl Mention {
     }
 }
 
-pub type MentionMap = Vec<(InstIx, Mention)>;
+pub type MentionMap = SmallVec<[(InstIx, Mention); 2]>;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Location {
