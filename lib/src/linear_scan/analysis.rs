@@ -2,12 +2,13 @@ use super::{FixedInterval, IntId, Intervals, Mention, MentionMap, VirtualInterva
 use crate::{
     analysis_control_flow::{CFGInfo, InstIxToBlockIxMap},
     analysis_data_flow::{
-        calc_def_and_use, calc_livein_and_liveout, get_sanitized_reg_uses_for_func,
+        calc_def_and_use, calc_livein_and_liveout, get_sanitized_reg_uses_for_func, reg_ix_to_reg,
+        reg_to_reg_ix,
     },
-    data_structures::{BlockIx, InstPoint, Map, RangeFragIx, RangeFragKind, Reg, RegVecsAndBounds},
+    data_structures::{BlockIx, InstPoint, RangeFragIx, RangeFragKind, Reg, RegVecsAndBounds},
     sparse_set::SparseSet,
     union_find::UnionFind,
-    AnalysisError, Function, RealRegUniverse, TypedIxVec,
+    AnalysisError, Function, RealRegUniverse, RegClass, TypedIxVec,
 };
 use log::{debug, info, log_enabled, Level};
 use smallvec::SmallVec;
@@ -161,20 +162,13 @@ pub(crate) fn run<F: Function>(
 
     info!("  run_analysis: end data flow analysis");
 
-    // TODO fix this comment
-    // Dataflow analysis is now complete.  Now compute the virtual and real live ranges, in two
-    // steps:
-    //   (1) compute RangeFrags,
-    //   (2) merge them together, guided by flow and liveness info, so as to create the final
-    //   VirtualRanges and RealRanges.
-
     info!("  run_analysis: begin liveness analysis");
-    let (frag_ixs_per_reg, mut frag_env, frag_metrics_env) = get_range_frags(
+    let (frag_ixs_per_reg, mut frag_env, frag_metrics_env, vreg_classes) = get_range_frags(
         func,
-        &livein_sets_per_block,
-        &liveout_sets_per_block,
         &reg_vecs_and_bounds,
         &reg_universe,
+        &livein_sets_per_block,
+        &liveout_sets_per_block,
     );
 
     let (mut fixed_intervals, virtual_intervals) = merge_range_frags(
@@ -183,6 +177,7 @@ pub(crate) fn run<F: Function>(
         &mut frag_env,
         &frag_metrics_env,
         &cfg_info,
+        &vreg_classes,
     );
     info!("  run_analysis: end liveness analysis");
 
@@ -214,21 +209,29 @@ pub(crate) fn run<F: Function>(
 #[inline(never)]
 fn get_range_frags_for_block<F: Function>(
     func: &F,
+    rvb: &RegVecsAndBounds,
+    reg_universe: &RealRegUniverse,
+    vreg_classes: &Vec<RegClass>,
     bix: BlockIx,
     livein: &SparseSet<Reg>,
     liveout: &SparseSet<Reg>,
-    rvb: &RegVecsAndBounds,
-    out_map: &mut Map<Reg, Vec<RangeFragIx>>,
+    // Temporary state reusable across function calls.
+    visited: &mut Vec<u32>,
+    state: &mut Vec</*rreg index, then vreg index, */ Option<RangeFrag>>,
+    // Effectively results.
+    out_map: &mut Vec<SmallVec<[RangeFragIx; 8]>>,
     out_frags: &mut Vec<RangeFrag>,
     out_frag_metrics: &mut Vec<RangeFragMetrics>,
-    state: &mut Map<Reg, RangeFrag>,
 ) {
-    let mut finish_range = |r: Reg, frag: RangeFrag, frag_metrics: RangeFragMetrics| {
-        let fix = RangeFragIx::new(out_frags.len() as u32);
-        out_frags.push(frag);
-        out_frag_metrics.push(frag_metrics);
-        out_map.entry(r).or_insert_with(|| Vec::new()).push(fix);
-    };
+    let mut emit_range_frag =
+        |r: Reg, frag: RangeFrag, frag_metrics: RangeFragMetrics, num_real_regs: u32| {
+            let fix = RangeFragIx::new(out_frags.len() as u32);
+            out_frags.push(frag);
+            out_frag_metrics.push(frag_metrics);
+
+            let out_map_index = reg_to_reg_ix(num_real_regs, r) as usize;
+            out_map[out_map_index].push(fix);
+        };
 
     // Some handy constants.
     debug_assert!(func.block_insns(bix).len() >= 1);
@@ -236,18 +239,20 @@ fn get_range_frags_for_block<F: Function>(
     let last_pt_in_block = InstPoint::new_def(func.block_insns(bix).last());
 
     // Clear the running state.
-    state.clear();
+    visited.clear();
+
+    let num_real_regs = reg_universe.regs.len() as u32;
 
     // First, set up `state` as if all of `livein` had been written just prior to the block.
     for r in livein.iter() {
-        state.insert(
-            *r,
-            RangeFrag {
-                mentions: MentionMap::new(),
-                first: first_pt_in_block,
-                last: first_pt_in_block,
-            },
-        );
+        let r_state_ix = reg_to_reg_ix(num_real_regs, *r) as usize;
+        debug_assert!(state[r_state_ix].is_none());
+        state[r_state_ix] = Some(RangeFrag {
+            mentions: MentionMap::new(),
+            first: first_pt_in_block,
+            last: first_pt_in_block,
+        });
+        visited.push(r_state_ix as u32);
     }
 
     // Now visit each instruction in turn, examining first the registers it reads, then those it
@@ -261,11 +266,14 @@ fn get_range_frags_for_block<F: Function>(
             ..bounds_for_iix.uses_start as usize + bounds_for_iix.uses_len as usize
         {
             let r = &rvb.vecs.uses[i];
-            let pf = state
-                .get_mut(r)
-                // First event for `r` is a read, but it's not listed in `livein`, since otherwise
-                // `state` would have an entry for it.
-                .expect("get_range_frags_for_block: fail #1");
+            let r_state_ix = reg_to_reg_ix(num_real_regs, *r) as usize;
+
+            // There has to be an entry, otherwise we'd do a read of a register not listed in
+            // liveins.
+            let pf = match &mut state[r_state_ix] {
+                None => panic!("get_range_frags_for_block: fail #1"),
+                Some(ref mut pf) => pf,
+            };
 
             // This the first or subsequent read after a write.  Note that the "write" can be
             // either a real write, or due to the fact that `r` is listed in `livein`.  We don't
@@ -289,11 +297,13 @@ fn get_range_frags_for_block<F: Function>(
             ..bounds_for_iix.mods_start as usize + bounds_for_iix.mods_len as usize
         {
             let r = &rvb.vecs.mods[i];
-            let pf = state
-                .get_mut(r)
-                // First event for `r` is a read (really, since this insn modifies `r`), but it's
-                // not listed in `livein`, since otherwise `state` would have an entry for it.
-                .expect("get_range_frags_for_block: fail #2");
+            let r_state_ix = reg_to_reg_ix(num_real_regs, *r) as usize;
+
+            // There has to be an entry here too.
+            let pf = match &mut state[r_state_ix] {
+                None => panic!("get_range_frags_for_block: fail #2"),
+                Some(ref mut pf) => pf,
+            };
 
             // This the first or subsequent modify after a write.
             let new_last = InstPoint::new_def(iix);
@@ -314,21 +324,20 @@ fn get_range_frags_for_block<F: Function>(
             ..bounds_for_iix.defs_start as usize + bounds_for_iix.defs_len as usize
         {
             let r = &rvb.vecs.defs[i];
-            match state.get_mut(r) {
+            let r_state_ix = reg_to_reg_ix(num_real_regs, *r) as usize;
+
+            match &mut state[r_state_ix] {
                 // First mention of a Reg we've never heard of before.
                 // Start a new RangeFrag for it and keep going.
                 None => {
                     let new_pt = InstPoint::new_def(iix);
                     let mut mention_set = Mention::new();
                     mention_set.add_def();
-                    state.insert(
-                        *r,
-                        RangeFrag {
-                            first: new_pt,
-                            last: new_pt,
-                            mentions: vec![(iix, mention_set)],
-                        },
-                    );
+                    state[r_state_ix] = Some(RangeFrag {
+                        first: new_pt,
+                        last: new_pt,
+                        mentions: vec![(iix, mention_set)],
+                    })
                 }
 
                 // There's already a RangeFrag for `r`.  This write will start a new one, so
@@ -343,18 +352,20 @@ fn get_range_frags_for_block<F: Function>(
 
                     let (frag, frag_metrics) =
                         RangeFrag::new(func, bix, *first, *last, stolen_mentions);
-                    finish_range(*r, frag, frag_metrics);
-                    let new_pt = InstPoint::new_def(iix);
+                    emit_range_frag(*r, frag, frag_metrics, num_real_regs);
 
                     let mut mention_set = Mention::new();
                     mention_set.add_def();
                     mentions.push((iix, mention_set));
 
                     // Reuse the previous entry for this new definition of the same vreg.
+                    let new_pt = InstPoint::new_def(iix);
                     *first = new_pt;
                     *last = new_pt;
                 }
             }
+
+            visited.push(r_state_ix as u32);
         }
     }
 
@@ -364,60 +375,116 @@ fn get_range_frags_for_block<F: Function>(
     // Deal with live-out Regs.  Treat each one as if it is read just after the block.
     for r in liveout.iter() {
         // Remove the entry from `state` so that the following loop doesn't process it again.
-        let pf = state.remove(r).expect("get_range_frags_for_block: fail #3");
-        let (frag, frag_metrics) =
-            RangeFrag::new(func, bix, pf.first, last_pt_in_block, pf.mentions);
-        finish_range(*r, frag, frag_metrics);
+        let r_state_ix = reg_to_reg_ix(num_real_regs, *r) as usize;
+        let entry = mem::replace(&mut state[r_state_ix], None);
+        match entry {
+            None => panic!("get_range_frags_for_block: fail #3"),
+            Some(pf) => {
+                let (frag, frag_metrics) =
+                    RangeFrag::new(func, bix, pf.first, last_pt_in_block, pf.mentions);
+                emit_range_frag(*r, frag, frag_metrics, num_real_regs);
+            }
+        }
     }
 
     // Finally, round up any remaining RangeFrag left in `state`.
-    for (r, pf) in state.into_iter() {
-        let (frag, frag_metrics) = RangeFrag::new(
-            func,
-            bix,
-            pf.first,
-            pf.last,
-            mem::replace(&mut pf.mentions, Vec::new()),
-        );
-        finish_range(*r, frag, frag_metrics);
+    for r_state_ix in visited {
+        if let Some(pf) = &mut state[*r_state_ix as usize] {
+            let r = reg_ix_to_reg(reg_universe, vreg_classes, *r_state_ix);
+            let (frag, frag_metrics) = RangeFrag::new(
+                func,
+                bix,
+                pf.first,
+                pf.last,
+                mem::replace(&mut pf.mentions, Vec::new()),
+            );
+            emit_range_frag(r, frag, frag_metrics, num_real_regs);
+            state[*r_state_ix as usize] = None;
+        }
     }
 }
 
 #[inline(never)]
 fn get_range_frags<F: Function>(
     func: &F,
+    rvb: &RegVecsAndBounds,
+    reg_universe: &RealRegUniverse,
     liveins: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     liveouts: &TypedIxVec<BlockIx, SparseSet<Reg>>,
-    rvb: &RegVecsAndBounds,
-    univ: &RealRegUniverse,
 ) -> (
-    Map<Reg, Vec<RangeFragIx>>,
+    Vec</*rreg index, then vreg index, */ SmallVec<[RangeFragIx; 8]>>,
     Vec<RangeFrag>,
     Vec<RangeFragMetrics>,
+    Vec</*vreg index,*/ RegClass>,
 ) {
     info!("    get_range_frags: begin");
     debug_assert!(liveins.len() == func.blocks().len() as u32);
     debug_assert!(liveouts.len() == func.blocks().len() as u32);
     debug_assert!(rvb.is_sanitized());
 
-    // Reused by the function below.
-    let mut tmp_state = Map::<Reg, RangeFrag>::default();
+    let mut vreg_classes = Vec::</*vreg index,*/ RegClass>::new();
+    let mut num_vregs = 0;
+    for r in rvb
+        .vecs
+        .uses
+        .iter()
+        .chain(rvb.vecs.defs.iter())
+        .chain(rvb.vecs.mods.iter())
+    {
+        if r.is_real() {
+            continue;
+        }
 
-    let mut result_map = Map::<Reg, Vec<RangeFragIx>>::default();
+        let r_ix = r.get_index();
+        if r_ix >= num_vregs {
+            num_vregs = r_ix + 1;
+            vreg_classes.resize(num_vregs, RegClass::INVALID);
+        }
+
+        let vreg_classes_ptr = &mut vreg_classes[r_ix];
+        if *vreg_classes_ptr == RegClass::INVALID {
+            *vreg_classes_ptr = r.get_class();
+        } else {
+            debug_assert_eq!(*vreg_classes_ptr, r.get_class());
+        }
+    }
+    debug_assert!(vreg_classes.len() == num_vregs);
+
+    let num_real_regs = reg_universe.regs.len();
+    let num_virtual_regs = vreg_classes.len();
+    let num_regs = num_real_regs + num_virtual_regs;
+
+    // Reused by the function below.
+    let mut tmp_state = vec![None; num_regs];
+    let mut tmp_visited = Vec::with_capacity(32);
+
+    let mut result_map = vec![SmallVec::new(); num_regs];
     let mut result_frags = Vec::new();
     let mut result_frag_metrics = Vec::new();
     for bix in func.blocks() {
         get_range_frags_for_block(
             func,
+            &rvb,
+            reg_universe,
+            &vreg_classes,
             bix,
             &liveins[bix],
             &liveouts[bix],
-            &rvb,
+            &mut tmp_visited,
+            &mut tmp_state,
             &mut result_map,
             &mut result_frags,
             &mut result_frag_metrics,
-            &mut tmp_state,
         );
+    }
+
+    assert!(tmp_state.len() == num_regs);
+    assert!(result_map.len() == num_regs);
+    assert!(vreg_classes.len() == num_virtual_regs);
+    // This is pretty cheap (once per fn) and any failure will be catastrophic since it means we
+    // may have forgotten some live range fragments.  Hence `assert!` and not `debug_assert!`.
+    for state_elem in &tmp_state {
+        assert!(state_elem.is_none());
     }
 
     if log_enabled!(Level::Debug) {
@@ -429,29 +496,38 @@ fn get_range_frags<F: Function>(
         }
 
         debug!("");
-        for (reg, frag_ixs) in result_map.iter() {
-            debug!("frags for {}   {:?}", reg.show_with_rru(univ), frag_ixs);
+        for (reg_ix, frag_ixs) in result_map.iter().enumerate() {
+            if frag_ixs.len() == 0 {
+                continue;
+            }
+            let reg = reg_ix_to_reg(reg_universe, &vreg_classes, reg_ix as u32);
+            debug!(
+                "frags for {}   {:?}",
+                reg.show_with_rru(reg_universe),
+                frag_ixs
+            );
         }
     }
 
     info!("    get_range_frags: end");
     assert!(result_frags.len() == result_frag_metrics.len());
 
-    (result_map, result_frags, result_frag_metrics)
+    (result_map, result_frags, result_frag_metrics, vreg_classes)
 }
 
 #[inline(never)]
 fn merge_range_frags(
     reg_universe: &RealRegUniverse,
-    frag_ix_vec_per_reg: &Map<Reg, Vec<RangeFragIx>>,
+    frag_ix_vec_per_reg: &[SmallVec<[RangeFragIx; 8]>],
     frag_env: &mut Vec<RangeFrag>,
     frag_metrics_env: &Vec<RangeFragMetrics>,
     cfg_info: &CFGInfo,
+    vreg_classes: &Vec</*vreg index,*/ RegClass>,
 ) -> (Vec<FixedInterval>, Vec<VirtualInterval>) {
     info!("    merge_range_frags: begin");
     if log_enabled!(Level::Info) {
         let mut stats_num_total_incoming_frags = 0;
-        for (_reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
+        for all_frag_ixs_for_reg in frag_ix_vec_per_reg.iter() {
             stats_num_total_incoming_frags += all_frag_ixs_for_reg.len();
         }
         info!("      in: {} in frag_env", frag_env.len());
@@ -478,9 +554,15 @@ fn merge_range_frags(
     let mut triples = Vec::<(RangeFragIx, RangeFragKind, BlockIx)>::new();
 
     // BEGIN per_reg_loop
-    for (reg, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter() {
+    for (reg_ix, all_frag_ixs_for_reg) in frag_ix_vec_per_reg.iter().enumerate() {
+        let reg = reg_ix_to_reg(reg_universe, vreg_classes, reg_ix as u32);
+
         let num_reg_frags = all_frag_ixs_for_reg.len();
-        debug_assert!(num_reg_frags > 0);
+
+        // The reg might never have been mentioned at all, especially if it's a real reg.
+        if num_reg_frags == 0 {
+            continue;
+        }
 
         // Do some shortcutting.  First off, if there's only one frag for this reg, we can directly
         // give it its own live range, and have done.
@@ -488,7 +570,7 @@ fn merge_range_frags(
             flush_interval(
                 &mut result_fixed,
                 &mut result_virtual,
-                *reg,
+                reg,
                 all_frag_ixs_for_reg,
                 frag_env,
             );
@@ -512,7 +594,7 @@ fn merge_range_frags(
                 flush_interval(
                     &mut result_fixed,
                     &mut result_virtual,
-                    *reg,
+                    reg,
                     &[*fix],
                     frag_env,
                 );
@@ -674,7 +756,7 @@ fn merge_range_frags(
             flush_interval(
                 &mut result_fixed,
                 &mut result_virtual,
-                *reg,
+                reg,
                 &frag_ixs,
                 frag_env,
             );

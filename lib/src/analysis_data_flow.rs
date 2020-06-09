@@ -826,16 +826,16 @@ impl fmt::Debug for ProtoRangeFrag {
 // making it feasible to represent sets of registers using bit sets.
 
 #[inline(always)]
-fn reg_to_reg_ix(n_real_regs: u32, r: Reg) -> u32 {
+pub(crate) fn reg_to_reg_ix(num_real_regs: u32, r: Reg) -> u32 {
     if r.is_real() {
         r.get_index_u32()
     } else {
-        n_real_regs + r.get_index_u32()
+        num_real_regs + r.get_index_u32()
     }
 }
 
 #[inline(always)]
-fn reg_ix_to_reg(
+pub(crate) fn reg_ix_to_reg(
     reg_universe: &RealRegUniverse,
     vreg_classes: &Vec</*vreg index,*/ RegClass>,
     reg_ix: u32,
