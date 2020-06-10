@@ -141,12 +141,9 @@ fn map_vregs_to_rregs<F: Function>(
     let mut cursor_ends = 0;
     let mut cursor_nop = 0;
 
-    // Determine how many vregs to expect, for preallocation.
-    let vreg_estimate = func.get_vreg_count_estimate().unwrap_or(16);
-
     // Allocate the "mapper" data structure that we update incrementally and
     // pass to instruction reg-mapping routines to query.
-    let mut mapper = VrangeRegUsageMapper::new(vreg_estimate);
+    let mut mapper = VrangeRegUsageMapper::new(func.get_num_vregs());
 
     fn is_sane(frag: &RangeFrag) -> bool {
         // "Normal" frag (unrelated to spilling).  No normal frag may start or

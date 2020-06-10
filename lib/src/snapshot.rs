@@ -45,6 +45,7 @@ pub struct IRFunction {
     liveins: Set<RealReg>,
     liveouts: Set<RealReg>,
     vreg_spill_slot_sizes: Vec<Option<(u32, RegClass)>>,
+    num_vregs: usize,
 }
 
 #[derive(Clone)]
@@ -151,6 +152,7 @@ impl IRSnapshot {
                 liveins,
                 liveouts,
                 vreg_spill_slot_sizes,
+                num_vregs: func.get_num_vregs(),
             },
         }
     }
@@ -169,6 +171,9 @@ impl Function for IRFunction {
     }
     fn func_liveouts(&self) -> Set<RealReg> {
         self.liveouts.clone()
+    }
+    fn get_num_vregs(&self) -> usize {
+        self.num_vregs
     }
 
     // Instructions.

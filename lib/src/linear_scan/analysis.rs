@@ -422,8 +422,7 @@ fn get_range_frags<F: Function>(
     debug_assert!(liveouts.len() == func.blocks().len() as u32);
     debug_assert!(rvb.is_sanitized());
 
-    let mut vreg_classes = Vec::</*vreg index,*/ RegClass>::new();
-    let mut num_vregs = 0;
+    let mut vreg_classes = vec![RegClass::INVALID; func.get_num_vregs()];
     for r in rvb
         .vecs
         .uses
@@ -434,13 +433,7 @@ fn get_range_frags<F: Function>(
         if r.is_real() {
             continue;
         }
-
         let r_ix = r.get_index();
-        if r_ix >= num_vregs {
-            num_vregs = r_ix + 1;
-            vreg_classes.resize(num_vregs, RegClass::INVALID);
-        }
-
         let vreg_classes_ptr = &mut vreg_classes[r_ix];
         if *vreg_classes_ptr == RegClass::INVALID {
             *vreg_classes_ptr = r.get_class();
@@ -448,7 +441,6 @@ fn get_range_frags<F: Function>(
             debug_assert_eq!(*vreg_classes_ptr, r.get_class());
         }
     }
-    debug_assert!(vreg_classes.len() == num_vregs);
 
     let num_real_regs = reg_universe.regs.len();
     let num_virtual_regs = vreg_classes.len();

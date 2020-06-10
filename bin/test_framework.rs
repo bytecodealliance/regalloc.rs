@@ -2213,8 +2213,8 @@ impl regalloc::Function for Func {
         }
     }
 
-    fn get_vreg_count_estimate(&self) -> Option<usize> {
-        Some(self.num_virtual_regs as usize)
+    fn get_num_vregs(&self) -> usize {
+        self.num_virtual_regs as usize
     }
 
     /// How many logical spill slots does the given regclass require?  E.g., on a
