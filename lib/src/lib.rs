@@ -242,11 +242,10 @@ pub trait Function {
     /// Allow the regalloc to query whether this is a move. Returns (dst, src).
     fn is_move(&self, insn: &Self::Inst) -> Option<(Writable<Reg>, Reg)>;
 
-    /// Get an estimate of how many `VirtualReg` indices are used, if available, to allow
-    /// preallocating data structures.
-    fn get_vreg_count_estimate(&self) -> Option<usize> {
-        None
-    }
+    /// Get the precise number of `VirtualReg` in use in this function, to allow preallocating data
+    /// structures. This number *must* be a correct lower-bound, otherwise invalid index failures
+    /// may happen; it is of course better if it is exact.
+    fn get_num_vregs(&self) -> usize;
 
     // --------------
     // Spills/reloads

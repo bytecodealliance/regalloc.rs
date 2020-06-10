@@ -1157,8 +1157,7 @@ pub fn get_range_frags<F: Function>(
     // (1) how many virtual regs there are and (2) the `RegClass` for each.  That info is
     // collected in a single pass here.  In principle regalloc.rs's user could tell us (1), but
     // as yet the interface does not make that possible.
-    let mut vreg_classes = Vec::</*vreg index,*/ RegClass>::new();
-    let mut num_vregs = 0;
+    let mut vreg_classes = vec![RegClass::INVALID; func.get_num_vregs()];
     for r in rvb
         .vecs
         .uses
@@ -1170,10 +1169,6 @@ pub fn get_range_frags<F: Function>(
             continue;
         }
         let r_ix = r.get_index();
-        if r_ix >= num_vregs {
-            num_vregs = r_ix + 1;
-            vreg_classes.resize(num_vregs, RegClass::INVALID);
-        }
         // rustc 1.43.0 appears to have problems avoiding duplicate bounds checks for
         // `vreg_classes[r_ix]`; hence give it a helping hand here.
         let vreg_classes_ptr = &mut vreg_classes[r_ix];
@@ -1183,7 +1178,6 @@ pub fn get_range_frags<F: Function>(
             assert_eq!(*vreg_classes_ptr, r.get_class());
         }
     }
-    assert!(vreg_classes.len() == num_vregs);
 
     let num_real_regs = reg_universe.regs.len();
     let num_virtual_regs = vreg_classes.len();
