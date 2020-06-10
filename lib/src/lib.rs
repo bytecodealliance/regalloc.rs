@@ -218,6 +218,11 @@ pub trait Function {
     /// Determine whether an instruction is a return instruction.
     fn is_ret(&self, insn: InstIx) -> bool;
 
+    /// Determine whether this instruction is a safepoint. If it is, then all
+    /// reference-typed vregs must be in spillslots during the instruction's
+    /// execution.
+    fn is_safepoint(&self, insn: InstIx) -> bool;
+
     // --------------------------
     // Instruction register slots
     // --------------------------
@@ -367,6 +372,10 @@ pub struct RegAllocResult<F: Function> {
     /// call to `allocate_registers`.  Creating of these annotations is
     /// potentially expensive, so don't request them if you don't need them.
     pub block_annotations: Option<TypedIxVec<BlockIx, Vec<String>>>,
+
+    /// Safepoint data: for each safepoint instruction, a list of spillslots
+    /// that contain reference-typed values.
+    pub safepoint_slots: Vec<(InstIx, Vec<SpillSlot>)>,
 }
 
 /// A choice of register allocation algorithm to run.

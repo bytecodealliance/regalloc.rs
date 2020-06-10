@@ -784,5 +784,6 @@ fn apply_registers<F: Function>(
         clobbered_registers,
         num_spill_slots,
         block_annotations: None,
+        safepoint_slots: vec![],
     })
 }

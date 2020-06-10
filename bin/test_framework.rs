@@ -2190,6 +2190,10 @@ impl regalloc::Function for Func {
         }
     }
 
+    fn is_safepoint(&self, _: InstIx) -> bool {
+        false
+    }
+
     /// Provide the defined, used, and modified registers for an instruction.
     fn get_regs(insn: &Self::Inst, collector: &mut RegUsageCollector) {
         insn.get_reg_usage(collector);

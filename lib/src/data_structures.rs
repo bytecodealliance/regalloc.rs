@@ -601,12 +601,13 @@ impl RegClass {
 // Reg represents both real and virtual registers.  For compactness and speed,
 // these fields are packed into a single u32.  The format is:
 //
-// Virtual Reg:   1  rc:3                index:28
+// Virtual Reg:   1  rc:3  ref:1         index:27
 // Real Reg:      0  rc:3  uu:12  enc:8  index:8
 //
-// `rc` is the register class.  `uu` means "unused".  `enc` is the hardware
-// encoding for the reg.  `index` is a zero based index which has the
-// following meanings:
+// `rc` is the register class. `ref` indicates that the virtual register holds a
+// reference type (see `Function::is_safepoint()` below). `uu` means "unused".
+// `enc` is the hardware encoding for the reg.  `index` is a zero based index
+// which has the following meanings:
 //
 // * for a Virtual Reg, `index` is just the virtual register number.
 // * for a Real Reg, `index` is the entry number in the associated
@@ -616,7 +617,7 @@ impl RegClass {
 //
 // * a compact (32-bit) representation for registers
 // * fast equality tests for registers
-// * ability to handle up to 2^28 (268.4 million) virtual regs per function
+// * ability to handle up to 2^27 (134.2 million) virtual regs per function
 // * ability to handle up to 8 register classes
 // * ability to handle targets with up to 256 real registers
 // * ability to emit instructions containing real regs without having to
@@ -650,11 +651,16 @@ impl Reg {
         Reg { bits: n }
     }
     pub fn new_virtual(rc: RegClass, index: u32) -> Self {
-        if index >= (1 << 28) {
+        if index >= (1 << 27) {
             panic!("new_virtual(): index too large");
         }
         let n = (1 << 31) | (rc.rc_to_u32() << 28) | (index << 0);
         Reg { bits: n }
+    }
+    pub fn new_virtual_ref(rc: RegClass, index: u32) -> Self {
+        Reg {
+            bits: Reg::new_virtual(rc, index).bits | (1 << 27),
+        }
     }
     pub fn invalid() -> Reg {
         Reg { bits: INVALID_REG }
@@ -824,6 +830,9 @@ impl VirtualReg {
     pub fn get_index(self) -> usize {
         self.reg.get_index()
     }
+    pub fn is_ref(self) -> bool {
+        self.reg.bits & (1 << 27) != 0
+    }
     pub fn to_reg(self) -> Reg {
         self.reg
     }
@@ -848,7 +857,11 @@ impl VirtualReg {
 }
 impl fmt::Debug for VirtualReg {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "{:?}", self.reg)
+        write!(fmt, "{:?}", self.reg)?;
+        if self.is_ref() {
+            write!(fmt, "r")?;
+        }
+        Ok(())
     }
 }
 

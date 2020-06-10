@@ -1516,6 +1516,7 @@ pub fn alloc_main<F: Function>(
         clobbered_registers,
         num_spill_slots: spill_slot_allocator.num_slots_in_use() as u32,
         block_annotations,
+        safepoint_slots: vec![],
     };
 
     info!("alloc_main: end");
