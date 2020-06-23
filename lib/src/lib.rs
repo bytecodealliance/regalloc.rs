@@ -496,7 +496,7 @@ pub struct StackmapRequestInfo {
 pub fn allocate_registers_with_opts<F: Function>(
     func: &mut F,
     rreg_universe: &RealRegUniverse,
-    stackmap_info: &Option<StackmapRequestInfo>,
+    stackmap_info: Option<&StackmapRequestInfo>,
     opts: Options,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     info!("");
@@ -510,10 +510,10 @@ pub fn allocate_registers_with_opts<F: Function>(
         }
     }
     // If stackmap support has been requested, perform some initial sanity checks.
-    if let Some(StackmapRequestInfo {
+    if let Some(&StackmapRequestInfo {
         reftype_class,
-        reftyped_vregs,
-        safepoint_insns,
+        ref reftyped_vregs,
+        ref safepoint_insns,
     }) = stackmap_info
     {
         if let Algorithm::LinearScan(_) = opts.algorithm {
@@ -521,7 +521,7 @@ pub fn allocate_registers_with_opts<F: Function>(
                 "stackmap request: not currently available for Linear Scan".to_string(),
             ));
         }
-        if *reftype_class != RegClass::I64 && *reftype_class != RegClass::I32 {
+        if reftype_class != RegClass::I64 && reftype_class != RegClass::I32 {
             return Err(RegAllocError::Other(
                 "stackmap request: invalid reftype_class".to_string(),
             ));
@@ -529,7 +529,7 @@ pub fn allocate_registers_with_opts<F: Function>(
         let num_avail_vregs = func.get_num_vregs();
         for i in 0..reftyped_vregs.len() {
             let vreg = &reftyped_vregs[i];
-            if vreg.get_class() != *reftype_class {
+            if vreg.get_class() != reftype_class {
                 return Err(RegAllocError::Other(
                     "stackmap request: invalid vreg class".to_string(),
                 ));
@@ -596,7 +596,7 @@ pub fn allocate_registers_with_opts<F: Function>(
 pub fn allocate_registers<F: Function>(
     func: &mut F,
     rreg_universe: &RealRegUniverse,
-    stackmap_info: &Option<StackmapRequestInfo>,
+    stackmap_info: Option<&StackmapRequestInfo>,
     algorithm: AlgorithmWithDefaults,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     let algorithm = match algorithm {

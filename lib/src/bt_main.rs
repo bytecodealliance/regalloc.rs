@@ -641,7 +641,7 @@ impl fmt::Debug for EditListItem {
 pub fn alloc_main<F: Function>(
     func: &mut F,
     reg_universe: &RealRegUniverse,
-    stackmap_request: &Option<StackmapRequestInfo>,
+    stackmap_request: Option<&StackmapRequestInfo>,
     use_checker: bool,
     opts: &BacktrackingOptions,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
@@ -650,11 +650,11 @@ pub fn alloc_main<F: Function>(
     let empty_vec_iixs = vec![];
     let (client_wants_stackmaps, reftype_class, reftyped_vregs, safepoint_insns) =
         match stackmap_request {
-            Some(StackmapRequestInfo {
+            Some(&StackmapRequestInfo {
                 reftype_class,
-                reftyped_vregs,
-                safepoint_insns,
-            }) => (true, *reftype_class, reftyped_vregs, safepoint_insns),
+                ref reftyped_vregs,
+                ref safepoint_insns,
+            }) => (true, reftype_class, reftyped_vregs, safepoint_insns),
             None => (false, RegClass::INVALID, &empty_vec_vregs, &empty_vec_iixs),
         };
 

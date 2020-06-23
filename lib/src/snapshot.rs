@@ -161,7 +161,7 @@ impl IRSnapshot {
         allocate_registers_with_opts(
             &mut self.func,
             &self.reg_universe,
-            &None, /*no stackmap request*/
+            None, /*no stackmap request*/
             opts,
         )
     }
