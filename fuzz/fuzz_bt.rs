@@ -49,7 +49,7 @@ fuzz_target!(|func: ir::Func| {
         algorithm: regalloc::Algorithm::Backtracking(Default::default()),
     };
 
-    let ra_result = regalloc::allocate_registers_with_opts(&mut func, &reg_universe, &None, opts);
+    let ra_result = regalloc::allocate_registers_with_opts(&mut func, &reg_universe, None, opts);
 
     match ra_result {
         Ok(result) => {

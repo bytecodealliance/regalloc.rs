@@ -466,7 +466,7 @@ pub struct StackmapRequestInfo {
 
     /// The virtual regs that hold reftyped values.  These must be provided in ascending order
     /// of register index and be duplicate-free.  They must have class `reftype_class`.
-    reftyped_vregs: Vec<VirtualReg>,
+    pub reftyped_vregs: Vec<VirtualReg>,
 
     /// The indices of instructions for which the allocator will construct stackmaps.  These
     /// must be provided in ascending order and be duplicate-free.  The specified instructions
@@ -475,7 +475,7 @@ pub struct StackmapRequestInfo {
     /// though).  The reason is that, at a safepoint, the client's garbage collector may change
     /// the values of all live references, so it would be meaningless for a safepoint
     /// instruction also to attempt to do that -- we'd end up with two competing new values.
-    safepoint_insns: Vec<InstIx>,
+    pub safepoint_insns: Vec<InstIx>,
 }
 
 /// Allocate registers for a function's code, given a universe of real registers that we are

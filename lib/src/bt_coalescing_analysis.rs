@@ -251,6 +251,7 @@ pub fn do_coalescing_analysis<F: Function>(
         src,
         iix,
         est_freq,
+        ..
     } in &move_info.moves
     {
         debug!(

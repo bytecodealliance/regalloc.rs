@@ -453,6 +453,8 @@ fn get_stackmap_artefacts_at(
     }
     let rci = rci.unwrap();
 
+    debug!("computing stackmap info at {:?}", pt);
+
     for rreg_no in rci.first..rci.last + 1 {
         // Get the RangeId, if any, assigned for `rreg_no` at `iix.u`.  From that we can figure
         // out if it is reftyped.
@@ -460,8 +462,18 @@ fn get_stackmap_artefacts_at(
         if let Some(range_id) = mb_range_id {
             // `rreg_no` is live at `iix.u`.
             let is_ref = if range_id.is_real() {
+                debug!(
+                    " real reg {:?} is real-range {:?}",
+                    rreg_no,
+                    rlr_env[range_id.to_real()]
+                );
                 rlr_env[range_id.to_real()].is_ref
             } else {
+                debug!(
+                    " real reg {:?} is virtual-range {:?}",
+                    rreg_no,
+                    vlr_env[range_id.to_virtual()]
+                );
                 vlr_env[range_id.to_virtual()].is_ref
             };
             if is_ref {
@@ -471,6 +483,8 @@ fn get_stackmap_artefacts_at(
             }
         }
     }
+
+    debug!("Sbefore = {:?}", s_before);
 
     // Compute Safter.
 
@@ -489,6 +503,8 @@ fn get_stackmap_artefacts_at(
             s_after.delete(r_defd.to_real_reg());
         }
     }
+
+    debug!("Safter = {:?}", s_before);
 
     // Create the spill insns, as defined by Sbefore.  This has the side effect of recording the
     // spill in `spill_slot_allocator`, so we can later ask it to tell us all the reftyped spill
@@ -532,6 +548,8 @@ fn get_stackmap_artefacts_at(
     // hold values of reftyped regs that are live over this instruction.
 
     let reftyped_spillslots = spill_slot_allocator.get_reftyped_spillslots_at_inst_point(pt);
+
+    debug!("reftyped_spillslots = {:?}", reftyped_spillslots);
 
     // And we're done!
 

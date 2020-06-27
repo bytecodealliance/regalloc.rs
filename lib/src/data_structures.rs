@@ -1794,6 +1794,22 @@ impl SortedRangeFragIxs {
         res.check(fenv);
         res
     }
+
+    /// Does this sorted list of range fragments contain the given instruction point?
+    pub fn contains_pt(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>, pt: InstPoint) -> bool {
+        self.frag_ixs
+            .binary_search_by(|&ix| {
+                let frag = &fenv[ix];
+                if pt < frag.first {
+                    Ordering::Less
+                } else if pt >= frag.first && pt <= frag.last {
+                    Ordering::Equal
+                } else {
+                    Ordering::Greater
+                }
+            })
+            .is_ok()
+    }
 }
 
 //=============================================================================
@@ -1855,6 +1871,21 @@ impl SortedRangeFrags {
                 }
             }
         }
+    }
+
+    /// Does this sorted list of range fragments contain the given instruction point?
+    pub fn contains_pt(&self, pt: InstPoint) -> bool {
+        self.frags
+            .binary_search_by(|frag| {
+                if pt < frag.first {
+                    Ordering::Less
+                } else if pt >= frag.first && pt <= frag.last {
+                    Ordering::Equal
+                } else {
+                    Ordering::Greater
+                }
+            })
+            .is_ok()
     }
 }
 
@@ -2094,7 +2125,9 @@ pub struct RegToRangesMaps {
 
 pub struct MoveInfoElem {
     pub dst: Reg,
+    pub dst_range: RangeId, // possibly RangeId::invalid_value() if not requested
     pub src: Reg,
+    pub src_range: RangeId, // possibly RangeId::invalid_value() if not requested
     pub iix: InstIx,
     pub est_freq: u32,
 }
