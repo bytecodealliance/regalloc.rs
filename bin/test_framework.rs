@@ -2231,7 +2231,7 @@ impl regalloc::Function for Func {
         &self,
         to_slot: SpillSlot,
         from_reg: RealReg,
-        _for_vreg: VirtualReg,
+        _for_vreg: Option<VirtualReg>,
     ) -> Self::Inst {
         match from_reg.get_class() {
             RegClass::I32 => i_spill(to_slot, from_reg),
@@ -2245,7 +2245,7 @@ impl regalloc::Function for Func {
         &self,
         to_reg: Writable<RealReg>,
         from_slot: SpillSlot,
-        _for_vreg: VirtualReg,
+        _for_vreg: Option<VirtualReg>,
     ) -> Self::Inst {
         match to_reg.to_reg().get_class() {
             RegClass::I32 => i_reload(to_reg.to_reg(), from_slot),
