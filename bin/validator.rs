@@ -177,7 +177,17 @@ pub fn validate(func: &Func, real_reg_universe: &RealRegUniverse) -> Result<(), 
         }
     }
 
-    if let Err(err) = regalloc::analysis_main::run_analysis(func, real_reg_universe) {
+    if let Err(err) = regalloc::analysis_main::run_analysis(
+        func,
+        real_reg_universe,
+        // The next four params merely ensure that we get all possible analysis results from
+        // `run_analysis`.  There's no implied claim about which algorithm we're using or
+        // validating.
+        AlgorithmWithDefaults::Backtracking,
+        /*client_wants_stackmaps=*/ true,
+        /*reftype_class=*/ RegClass::I64,
+        /*reftyped_vregs=*/ &vec![],
+    ) {
         return Err(err.to_string());
     }
 
