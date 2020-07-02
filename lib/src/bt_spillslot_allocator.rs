@@ -468,7 +468,7 @@ impl SpillSlotAllocator {
         // must succeed.  Calling recursively is a bit stupid in the sense that we then search
         // again to find the slot we just allocated, but hey.
         self.add_new_slot(1 /*word*/);
-        return self.alloc_reftyped_spillslot_for_frag(frag); // \o/ tailcall \o/
+        self.alloc_reftyped_spillslot_for_frag(frag) // \o/ tailcall \o/
     }
 
     // STACKMAP SUPPORT

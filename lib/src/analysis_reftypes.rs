@@ -6,6 +6,8 @@ use crate::data_structures::{
 };
 use crate::sparse_set::SparseSet;
 
+use log::debug;
+
 pub fn do_reftypes_analysis(
     // From dataflow/liveness analysis.  Modified by setting their is_ref bit.
     rlr_env: &mut TypedIxVec<RealRangeIx, RealRange>,
@@ -27,63 +29,26 @@ pub fn do_reftypes_analysis(
 
     let mut range_pairs = Vec::<(RangeId, RangeId)>::new(); // (DST, SRC)
 
-    for MoveInfoElem {
-        dst: dst_reg,
-        src: src_reg,
-        iix: _,
-        est_freq: _,
+    debug!("do_reftypes_analysis starting");
+
+    for &MoveInfoElem {
+        dst,
+        src,
+        src_range,
+        dst_range,
+        iix,
+        ..
     } in &move_info.moves
     {
-        debug_assert!(dst_reg.get_class() == src_reg.get_class());
-
         // Don't waste time processing moves which can't possibly be of reftyped values.
-        if dst_reg.get_class() != reftype_class {
+        if dst.get_class() != reftype_class {
             continue;
         }
-
-        // This is kinda tiresome because of the differing representations, but .. construct the
-        // cartesian product of the range indicies for both the source and destination of the
-        // move.
-
-        let dst_reg_ix = dst_reg.get_index();
-        let src_reg_ix = src_reg.get_index();
-        match (dst_reg.is_real(), src_reg.is_real()) {
-            (true, true) => {
-                // R <- R
-                for dst_ix in &reg_to_ranges_maps.rreg_to_rlrs_map[dst_reg_ix] {
-                    for src_ix in &reg_to_ranges_maps.rreg_to_rlrs_map[src_reg_ix] {
-                        range_pairs.push((RangeId::new_real(*dst_ix), RangeId::new_real(*src_ix)));
-                    }
-                }
-            }
-            (true, false) => {
-                // R <- V
-                for dst_ix in &reg_to_ranges_maps.rreg_to_rlrs_map[dst_reg_ix] {
-                    for src_ix in &reg_to_ranges_maps.vreg_to_vlrs_map[src_reg_ix] {
-                        range_pairs
-                            .push((RangeId::new_real(*dst_ix), RangeId::new_virtual(*src_ix)));
-                    }
-                }
-            }
-            (false, true) => {
-                // V <- R
-                for dst_ix in &reg_to_ranges_maps.vreg_to_vlrs_map[dst_reg_ix] {
-                    for src_ix in &reg_to_ranges_maps.rreg_to_rlrs_map[src_reg_ix] {
-                        range_pairs
-                            .push((RangeId::new_virtual(*dst_ix), RangeId::new_real(*src_ix)));
-                    }
-                }
-            }
-            (false, false) => {
-                // V <- V
-                for dst_ix in &reg_to_ranges_maps.vreg_to_vlrs_map[dst_reg_ix] {
-                    for src_ix in &reg_to_ranges_maps.vreg_to_vlrs_map[src_reg_ix] {
-                        range_pairs
-                            .push((RangeId::new_virtual(*dst_ix), RangeId::new_virtual(*src_ix)));
-                    }
-                }
-            }
-        }
+        debug!(
+            "move from {:?} (range {:?}) to {:?} (range {:?}) at inst {:?}",
+            src, dst, src_range, dst_range, iix
+        );
+        range_pairs.push((dst_range, src_range));
     }
 
     // We have to hand the range-pairs that must be a superset of the moves that could possibly
@@ -97,6 +62,7 @@ pub fn do_reftypes_analysis(
         // is buggy.
         debug_assert!(vreg.get_class() == reftype_class);
         for vlrix in &reg_to_ranges_maps.vreg_to_vlrs_map[vreg.get_index()] {
+            debug!("range {:?} is reffy due to reffy vreg {:?}", vlrix, vreg);
             reftyped_ranges.insert(RangeId::new_virtual(*vlrix));
         }
     }
@@ -113,6 +79,7 @@ pub fn do_reftypes_analysis(
 
         for (dst_lr_id, src_lr_id) in &range_pairs {
             if reftyped_ranges.contains(*src_lr_id) {
+                debug!("reftyped range {:?} -> {:?}", src_lr_id, dst_lr_id);
                 reftyped_ranges.insert(*dst_lr_id);
             }
         }
@@ -132,10 +99,12 @@ pub fn do_reftypes_analysis(
         if lr_id.is_real() {
             let rrange = &mut rlr_env[lr_id.to_real()];
             debug_assert!(!rrange.is_ref);
+            debug!(" -> rrange {:?} is reffy", lr_id.to_real());
             rrange.is_ref = true;
         } else {
             let vrange = &mut vlr_env[lr_id.to_virtual()];
             debug_assert!(!vrange.is_ref);
+            debug!(" -> rrange {:?} is reffy", lr_id.to_virtual());
             vrange.is_ref = true;
         }
     }

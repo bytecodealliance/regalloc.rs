@@ -121,7 +121,7 @@ fn main() {
     // Just so we can run it later.  Not needed for actual allocation.
     let original_func = func.clone();
 
-    let result = match allocate_registers_with_opts(&mut func, &reg_universe, &None, opts.clone()) {
+    let result = match allocate_registers_with_opts(&mut func, &reg_universe, None, opts.clone()) {
         Err(e) => {
             println!("allocation failed: {}", e);
             return;
@@ -274,7 +274,7 @@ mod test_utils {
             &reg_universe,
             RunStage::BeforeRegalloc,
         );
-        let result = allocate_registers_with_opts(&mut func, &reg_universe, &None, opts)
+        let result = allocate_registers_with_opts(&mut func, &reg_universe, None, opts)
             .unwrap_or_else(|err| {
                 panic!("allocation failed: {}", err);
             });
@@ -301,7 +301,7 @@ mod test_utils {
         allocate_registers(
             &mut func,
             &reg_universe,
-            &None,
+            None,
             AlgorithmWithDefaults::LinearScan,
         )
     }
@@ -329,7 +329,7 @@ mod test_utils {
             .allocate(opts.clone())
             .expect("generic allocator failed!");
 
-        let result = allocate_registers_with_opts(&mut func, &reg_universe, &None, opts)
+        let result = allocate_registers_with_opts(&mut func, &reg_universe, None, opts)
             .unwrap_or_else(|err| {
                 panic!("allocation failed: {}", err);
             });
@@ -375,9 +375,8 @@ mod test_utils {
                 .allocate(opts.clone())
                 .expect("generic allocator failed!");
 
-            let result =
-                allocate_registers_with_opts(&mut func, &reg_universe, &None, opts.clone())
-                    .expect("regalloc failure");
+            let result = allocate_registers_with_opts(&mut func, &reg_universe, None, opts.clone())
+                .expect("regalloc failure");
 
             func.update_from_alloc(result);
             func.print("AFTER", &None);

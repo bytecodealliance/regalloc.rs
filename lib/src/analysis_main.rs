@@ -277,6 +277,11 @@ pub fn run_analysis<F: Function>(
             func,
             &reg_vecs_and_bounds,
             &estimated_frequencies,
+            reg_to_ranges_maps.as_ref().unwrap(),
+            &rlr_env,
+            &vlr_env,
+            &frag_env,
+            /* want_ranges = */ client_wants_stackmaps,
         ))
     } else {
         None
