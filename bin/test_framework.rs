@@ -362,6 +362,15 @@ pub enum Inst {
         addr: AM,
         src: Reg,
     },
+    MakeRef {
+        dst: Reg,
+        src: Reg,
+    },
+    UseRef {
+        dst: Reg,
+        src: Reg,
+    },
+    Safepoint,
     Spill {
         dst: SpillSlot,
         src: RealReg,
@@ -788,6 +797,9 @@ impl fmt::Debug for Inst {
             Inst::LoadF { dst, addr } => write!(fmt, "loadf   {:?}, {:?}", dst, addr),
             Inst::Store { addr, src } => write!(fmt, "store   {:?}, {:?}", addr, src),
             Inst::StoreF { addr, src } => write!(fmt, "storef  {:?}, {:?}", addr, src),
+            Inst::MakeRef { dst, src } => write!(fmt, "makeref {:?}, {:?}", dst, src),
+            Inst::UseRef { dst, src } => write!(fmt, "useref  {:?}, {:?}", dst, src),
+            Inst::Safepoint => write!(fmt, "safepoint"),
             Inst::Spill { dst, src } => write!(fmt, "SPILL   {:?}, {:?}", dst, src),
             Inst::SpillF { dst, src } => write!(fmt, "SPILLF  {:?}, {:?}", dst, src),
             Inst::Reload { dst, src } => write!(fmt, "RELOAD  {:?}, {:?}", dst, src),
@@ -908,6 +920,15 @@ impl Inst {
                 addr.add_reg_reads_to(collector);
                 collector.add_use(*src);
             }
+            Inst::MakeRef { dst, src } => {
+                collector.add_def(Writable::from_reg(*dst));
+                collector.add_use(*src);
+            }
+            Inst::UseRef { dst, src } => {
+                collector.add_def(Writable::from_reg(*dst));
+                collector.add_use(*src);
+            }
+            Inst::Safepoint => {}
             Inst::Load { dst, addr } => {
                 collector.add_def(Writable::from_reg(*dst));
                 addr.add_reg_reads_to(collector);
@@ -993,6 +1014,15 @@ impl Inst {
                 src_left.apply_uses(mapper);
                 src_right.apply_uses(mapper);
             }
+            Inst::MakeRef { dst, src } => {
+                dst.apply_defs(mapper);
+                src.apply_uses(mapper);
+            }
+            Inst::UseRef { dst, src } => {
+                dst.apply_defs(mapper);
+                src.apply_uses(mapper);
+            }
+            Inst::Safepoint => {}
             Inst::Store { addr, src } => {
                 addr.apply_uses(mapper);
                 src.apply_uses(mapper);
@@ -1124,6 +1154,13 @@ impl Inst {
                     && cx.check_reg_rc(src_right, RegRef::Use, F32)
                     && cx.check_reg_rc(dst, RegRef::Def, F32)
             }
+            Inst::MakeRef { .. } | Inst::UseRef { .. } | Inst::Safepoint => {
+                // TODO: the typechecking infra seems to map regclasses and
+                // types; we need to separate these two concepts (both integers
+                // and refs live in I32 regs) before we can add typechecking
+                // support.
+                true
+            }
 
             // These are not user instructions.
             Inst::Spill { .. }
@@ -1143,6 +1180,7 @@ impl Inst {
 pub enum Value {
     U32(u32),
     F32(f32),
+    Ref(u32),
 }
 
 impl PartialEq for Value {
@@ -1150,12 +1188,17 @@ impl PartialEq for Value {
         match self {
             Value::U32(x) => match other {
                 Value::U32(y) => x == y,
-                Value::F32(_) => false,
+                _ => false,
             },
 
             Value::F32(x) => match other {
-                Value::U32(_) => false,
                 Value::F32(y) => (x != x && y != y) || x == y,
+                _ => false,
+            },
+
+            Value::Ref(x) => match other {
+                Value::Ref(y) => x == y,
+                _ => false,
             },
         }
     }
@@ -1166,24 +1209,34 @@ impl Value {
         match self {
             Value::U32(n) => n,
             Value::F32(_) => panic!("Value::toU32: this is a F32"),
+            Value::Ref(_) => panic!("Value::toU32: this is a ref"),
         }
     }
     fn to_f32(self) -> f32 {
         match self {
             Value::U32(_) => panic!("Value::toF32: this is a U32"),
+            Value::Ref(_) => panic!("Value::toF32: this is a ref"),
             Value::F32(n) => n,
+        }
+    }
+    fn to_ref(self) -> u32 {
+        match self {
+            Value::Ref(n) => n,
+            _ => panic!("Value::to_ref: this is not a ref"),
         }
     }
     fn cast_to_u32(self) -> u32 {
         match self {
             Value::U32(n) => n,
             Value::F32(f) => f as u32,
+            Value::Ref(n) => n,
         }
     }
     fn cast_to_f32(self) -> f32 {
         match self {
             Value::U32(n) => n as f32,
             Value::F32(f) => f,
+            Value::Ref(n) => n as f32,
         }
     }
 }
@@ -1193,6 +1246,7 @@ impl fmt::Debug for Value {
         match self {
             Value::U32(n) => write!(fmt, "{}", n),
             Value::F32(n) => write!(fmt, "{}", n),
+            Value::Ref(n) => write!(fmt, "@{}", n),
         }
     }
 }
@@ -1359,6 +1413,14 @@ impl<'a> IState<'a> {
         }
     }
 
+    fn set_reg_ref(&mut self, reg: Reg, val: u32) {
+        if reg.is_virtual() {
+            self.set_virtual_reg(reg.to_virtual_reg(), Value::Ref(val));
+        } else {
+            self.set_real_reg(reg.to_real_reg(), Value::Ref(val));
+        }
+    }
+
     fn get_mem(&self, addr: u32) -> IResult<Value> {
         // No auto resizing of the memory.
         Ok(match self.mem.get(addr as usize) {
@@ -1456,6 +1518,15 @@ impl<'a> IState<'a> {
                 let dst_v = op.calc(src_left_v, src_right_v)?;
                 self.set_reg_f32(*dst, dst_v);
             }
+            Inst::MakeRef { dst, src } => {
+                let src_v = self.get_reg(*src)?.to_u32();
+                self.set_reg_ref(*dst, src_v);
+            }
+            Inst::UseRef { dst, src } => {
+                let src_v = self.get_reg(*src)?.to_ref();
+                self.set_reg_u32(*dst, src_v);
+            }
+            Inst::Safepoint => {}
             Inst::Load { dst, addr } => {
                 let addr_v = self.get_AM(addr)?;
                 let dst_v = self.get_mem(addr_v)?.cast_to_u32();
@@ -1630,6 +1701,7 @@ pub struct Func {
     pub name: String,
     pub entry: Option<Label>,
     pub num_virtual_regs: u32,
+    pub reftype_reg_start: u32, // all vregs >= this index are reftyped.
     pub insns: TypedIxVec<InstIx, Inst>, // indexed by InstIx
 
     // Note that `blocks` must be in order of increasing `Block::start`
@@ -1657,6 +1729,7 @@ impl Func {
             name: name.to_string(),
             entry: None,
             num_virtual_regs: 0,
+            reftype_reg_start: 0,
             insns: TypedIxVec::<InstIx, Inst>::new(),
             blocks: TypedIxVec::<BlockIx, Block>::new(),
         }
@@ -1846,6 +1919,30 @@ impl Func {
                 self.insns.len()
             } - block.start.get();
             i += 1;
+        }
+    }
+
+    pub fn get_stackmap_request(&self) -> Option<StackmapRequestInfo> {
+        if self.reftype_reg_start == self.num_virtual_regs {
+            None
+        } else {
+            let reftyped_vregs = (self.reftype_reg_start..self.num_virtual_regs)
+                .map(|index| Reg::new_virtual(RegClass::I32, index).to_virtual_reg())
+                .collect::<Vec<_>>();
+            let mut safepoint_insns = vec![];
+            for iix in self.insns.range() {
+                match self.insns[iix] {
+                    Inst::Safepoint => {
+                        safepoint_insns.push(iix);
+                    }
+                    _ => {}
+                }
+            }
+            Some(StackmapRequestInfo {
+                reftype_class: RegClass::I32,
+                reftyped_vregs,
+                safepoint_insns,
+            })
         }
     }
 }
