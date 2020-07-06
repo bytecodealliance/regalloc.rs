@@ -1,8 +1,8 @@
 use crate::checker::Inst as CheckerInst;
 use crate::checker::{CheckerContext, CheckerErrors};
 use crate::data_structures::{
-    BlockIx, InstIx, InstPoint, Point, RangeFrag, RealReg, RealRegUniverse, SpillSlot, TypedIxVec,
-    VirtualReg, Writable,
+    BlockIx, InstIx, InstPoint, Point, RangeFrag, RealReg, RealRegUniverse, Reg, SpillSlot,
+    TypedIxVec, VirtualReg, Writable,
 };
 use crate::{reg_maps::VrangeRegUsageMapper, Function, RegAllocError};
 use log::trace;
@@ -29,26 +29,38 @@ pub(crate) enum InstToInsert {
         from_reg: RealReg,
         for_vreg: VirtualReg,
     },
+    /// A spillslot reassignment (to another vreg). In the edited instruction
+    /// stream, this is a nop, but this is needed for the checker to properly
+    /// track the symbolic values in slots. Always originates from a move
+    /// in the original user program whose source and dest vregs are both
+    /// spilled.
+    SSMove {
+        inst_ix: InstIx,
+        slot: SpillSlot,
+        from_reg: Reg,
+        to_reg: Reg,
+    },
 }
 
 impl InstToInsert {
-    pub(crate) fn construct<F: Function>(&self, f: &F) -> F::Inst {
+    pub(crate) fn construct<F: Function>(&self, f: &F) -> Option<F::Inst> {
         match self {
             &InstToInsert::Spill {
                 to_slot,
                 from_reg,
                 for_vreg,
-            } => f.gen_spill(to_slot, from_reg, for_vreg),
+            } => Some(f.gen_spill(to_slot, from_reg, for_vreg)),
             &InstToInsert::Reload {
                 to_reg,
                 from_slot,
                 for_vreg,
-            } => f.gen_reload(to_reg, from_slot, for_vreg),
+            } => Some(f.gen_reload(to_reg, from_slot, for_vreg)),
             &InstToInsert::Move {
                 to_reg,
                 from_reg,
                 for_vreg,
-            } => f.gen_move(to_reg, from_reg, for_vreg),
+            } => Some(f.gen_move(to_reg, from_reg, for_vreg)),
+            &InstToInsert::SSMove { .. } => None,
         }
     }
 
@@ -71,6 +83,17 @@ impl InstToInsert {
             } => CheckerInst::Move {
                 into: to_reg,
                 from: from_reg,
+            },
+            &InstToInsert::SSMove {
+                inst_ix,
+                slot,
+                from_reg,
+                to_reg,
+            } => CheckerInst::SSMove {
+                inst_ix,
+                slot,
+                from_reg,
+                to_reg,
             },
         }
     }
@@ -123,7 +146,7 @@ impl InstToInsert {
 // possibly modified in memory at the safepoint proper, reloaded at RA, and spilled at S.  That
 // is considered to be an unlikely scenario, though.
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ExtPoint {
     Reload = 0,
     SpillBefore = 1,
@@ -150,7 +173,7 @@ impl ExtPoint {
 // contrast to InstPoint, these aren't so performance critical, so there's no fancy bit-packed
 // representation as there is for InstPoint.
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstExtPoint {
     pub iix: InstIx,
     pub extpt: ExtPoint,
@@ -172,7 +195,7 @@ impl InstExtPoint {
 }
 
 // So, finally, we can specify what we want: an instruction to insert, and a place to insert it.
-
+#[derive(Debug)]
 pub(crate) struct InstToInsertAndExtPoint {
     pub(crate) inst: InstToInsert,
     pub(crate) iep: InstExtPoint,
@@ -547,8 +570,10 @@ pub(crate) fn add_spills_reloads_and_moves<F: Function>(
         while cur_inst_to_add < insts_to_add.len()
             && insts_to_add[cur_inst_to_add].iep <= InstExtPoint::new(iix, ExtPoint::SpillBefore)
         {
-            insns.push(insts_to_add[cur_inst_to_add].inst.construct(func));
-            new_to_old_insn_map.push(InstIx::invalid_value());
+            if let Some(inst) = insts_to_add[cur_inst_to_add].inst.construct(func) {
+                insns.push(inst);
+                new_to_old_insn_map.push(InstIx::invalid_value());
+            }
             cur_inst_to_add += 1;
         }
 
@@ -567,8 +592,10 @@ pub(crate) fn add_spills_reloads_and_moves<F: Function>(
         while cur_inst_to_add < insts_to_add.len()
             && insts_to_add[cur_inst_to_add].iep <= InstExtPoint::new(iix, ExtPoint::Spill)
         {
-            insns.push(insts_to_add[cur_inst_to_add].inst.construct(func));
-            new_to_old_insn_map.push(InstIx::invalid_value());
+            if let Some(inst) = insts_to_add[cur_inst_to_add].inst.construct(func) {
+                insns.push(inst);
+                new_to_old_insn_map.push(InstIx::invalid_value());
+            }
             cur_inst_to_add += 1;
         }
 

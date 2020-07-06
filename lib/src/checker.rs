@@ -92,6 +92,17 @@ pub enum CheckerError {
         real_reg: RealReg,
         inst: InstIx,
     },
+    UnknownValueInSlot {
+        slot: SpillSlot,
+        expected: Reg,
+        inst: InstIx,
+    },
+    IncorrectValueInSlot {
+        slot: SpillSlot,
+        expected: Reg,
+        actual: Reg,
+        inst: InstIx,
+    },
 }
 
 /// Abstract state for a storage slot (real register or spill slot).
@@ -224,6 +235,37 @@ impl CheckerState {
                     }
                 }
             }
+            &Inst::SSMove {
+                inst_ix,
+                slot,
+                from_reg,
+                ..
+            } => {
+                let val = self
+                    .spill_slots
+                    .get(&slot)
+                    .cloned()
+                    .unwrap_or(Default::default());
+                debug!("checker: inst {:?}: slot value {:?}", inst, val);
+                match val {
+                    CheckerValue::Unknown | CheckerValue::Conflicted => {
+                        return Err(CheckerError::UnknownValueInSlot {
+                            slot,
+                            expected: from_reg,
+                            inst: inst_ix,
+                        });
+                    }
+                    CheckerValue::Reg(r) if r != from_reg => {
+                        return Err(CheckerError::IncorrectValueInSlot {
+                            slot,
+                            expected: from_reg,
+                            actual: r,
+                            inst: inst_ix,
+                        });
+                    }
+                    _ => {}
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -251,6 +293,9 @@ impl CheckerState {
                     .cloned()
                     .unwrap_or(Default::default());
                 self.reg_values.insert(into.to_reg(), val);
+            }
+            &Inst::SSMove { slot, to_reg, .. } => {
+                self.spill_slots.insert(slot, CheckerValue::Reg(to_reg));
             }
             &Inst::Spill { into, from } => {
                 let val = self
@@ -286,6 +331,15 @@ pub(crate) enum Inst {
     Move {
         into: Writable<RealReg>,
         from: RealReg,
+    },
+    /// A spillslot ghost move (between vregs) resulting from an user-program
+    /// move whose source and destination regs are both vregs that are currently
+    /// spilled.
+    SSMove {
+        inst_ix: InstIx,
+        slot: SpillSlot,
+        from_reg: Reg,
+        to_reg: Reg,
     },
     /// A regular instruction with fixed use and def slots. Contains both
     /// the original registers (as given to the regalloc) and the allocated ones.
@@ -519,21 +573,34 @@ impl CheckerContext {
         let empty = vec![];
         let pre_point = InstExtPoint::new(iix, ExtPoint::Reload);
         let post_point = InstExtPoint::new(iix, ExtPoint::Spill);
+        let mut skip_inst = false;
+
+        debug!(
+            "CheckerContext::handle_insn: inst {:?}, pre = {:?}, post = {:?}",
+            iix, pre_point, post_point
+        );
 
         for checker_inst in self.checker_inst_map.get(&pre_point).unwrap_or(&empty) {
             debug!("at inst {:?}: pre checker_inst: {:?}", iix, checker_inst);
             self.checker.add_inst(bix, checker_inst.clone());
+            if let Inst::SSMove { .. } = checker_inst {
+                // Unlike spills/reloads/moves inserted by the regalloc, SSMove
+                // pseudo-insts replace the instruction itself.
+                skip_inst = true;
+            }
         }
 
-        let regsets = get_san_reg_sets_for_insn::<F>(func.get_insn(iix), ru)
-            .expect("only existing real registers at this point");
-        assert!(regsets.is_sanitized());
+        if !skip_inst {
+            let regsets = get_san_reg_sets_for_insn::<F>(func.get_insn(iix), ru)
+                .expect("only existing real registers at this point");
+            assert!(regsets.is_sanitized());
 
-        debug!(
-            "at inst {:?}: regsets {:?} mapper {:?}",
-            iix, regsets, mapper
-        );
-        self.checker.add_op(bix, iix, &regsets, mapper)?;
+            debug!(
+                "at inst {:?}: regsets {:?} mapper {:?}",
+                iix, regsets, mapper
+            );
+            self.checker.add_op(bix, iix, &regsets, mapper)?;
+        }
 
         for checker_inst in self.checker_inst_map.get(&post_point).unwrap_or(&empty) {
             debug!("at inst {:?}: post checker_inst: {:?}", iix, checker_inst);

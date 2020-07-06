@@ -43,8 +43,7 @@ fuzz_target!(|func: ir::Func| {
     let func_backup = func.clone();
 
     let opts = regalloc::Options {
-        //TODO reenable checking once #47 is fixed.
-        run_checker: false,
+        run_checker: true,
 
         algorithm: regalloc::Algorithm::Backtracking(Default::default()),
     };
