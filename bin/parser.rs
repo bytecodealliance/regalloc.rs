@@ -745,6 +745,24 @@ pub fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
                     insts.push(i_storef(addr, src));
                 }
 
+                "makeref" => {
+                    let dst = parser.read_var()?;
+                    parser.expect_char(',')?;
+                    let src = parser.read_var()?;
+                    insts.push(Inst::MakeRef { dst, src });
+                }
+
+                "useref" => {
+                    let dst = parser.read_var()?;
+                    parser.expect_char(',')?;
+                    let src = parser.read_var()?;
+                    insts.push(Inst::UseRef { dst, src });
+                }
+
+                "safepoint" => {
+                    insts.push(Inst::Safepoint);
+                }
+
                 "sub" => {
                     let dst = parser.read_var()?;
                     parser.expect_char(',')?;

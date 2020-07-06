@@ -1726,6 +1726,8 @@ pub fn alloc_main<F: Function>(
         frag_map,
         &reg_universe,
         use_checker,
+        &stackmaps[..],
+        &reftyped_vregs[..],
     );
 
     // ======== END Create final instruction stream ========

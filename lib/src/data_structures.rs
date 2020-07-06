@@ -939,7 +939,7 @@ impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug> Wr
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SpillSlot {
     SpillSlot(u32),
 }
@@ -2186,6 +2186,9 @@ impl RangeId {
     pub fn invalid_value() -> Self {
         // Real, and inplausibly huge
         Self { bits: 0xFFFF_FFFF }
+    }
+    pub fn is_valid(self) -> bool {
+        self != Self::invalid_value()
     }
 }
 

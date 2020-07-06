@@ -221,12 +221,22 @@ fn map_vregs_to_rregs<F: Function>(
     iixs_to_nop_out: &Vec<InstIx>,
     reg_universe: &RealRegUniverse,
     use_checker: bool,
+    safepoint_insns: &[InstIx],
+    stackmaps: &[Vec<SpillSlot>],
+    reftyped_vregs: &[VirtualReg],
 ) -> Result<(), CheckerErrors> {
     // Set up checker state, if indicated by our configuration.
     let mut checker: Option<CheckerContext> = None;
     let mut insn_blocks: Vec<BlockIx> = vec![];
     if use_checker {
-        checker = Some(CheckerContext::new(func, reg_universe, insts_to_add));
+        checker = Some(CheckerContext::new(
+            func,
+            reg_universe,
+            insts_to_add,
+            safepoint_insns,
+            stackmaps,
+            reftyped_vregs,
+        ));
         insn_blocks.resize(func.insns().len(), BlockIx::new(0));
         for block_ix in func.blocks() {
             for insn_ix in func.block_insns(block_ix) {
@@ -626,6 +636,8 @@ pub(crate) fn edit_inst_stream<F: Function>(
     frag_map: Vec<(RangeFrag, VirtualReg, RealReg)>,
     reg_universe: &RealRegUniverse,
     use_checker: bool,
+    stackmaps: &[Vec<SpillSlot>],
+    reftyped_vregs: &[VirtualReg],
 ) -> Result<
     (
         Vec<F::Inst>,
@@ -642,6 +654,9 @@ pub(crate) fn edit_inst_stream<F: Function>(
         iixs_to_nop_out,
         reg_universe,
         use_checker,
+        &safepoint_insns[..],
+        stackmaps,
+        reftyped_vregs,
     )
     .map_err(|e| RegAllocError::RegChecker(e))?;
     add_spills_reloads_and_moves(func, safepoint_insns, insts_to_add)

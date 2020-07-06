@@ -276,7 +276,8 @@ mod test_utils {
             &reg_universe,
             RunStage::BeforeRegalloc,
         );
-        let result = allocate_registers_with_opts(&mut func, &reg_universe, None, opts)
+        let sri = func.get_stackmap_request();
+        let result = allocate_registers_with_opts(&mut func, &reg_universe, sri.as_ref(), opts)
             .unwrap_or_else(|err| {
                 panic!("allocation failed: {}", err);
             });

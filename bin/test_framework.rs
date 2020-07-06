@@ -9,6 +9,8 @@ use std::{borrow::Cow, fmt};
 
 use crate::validator::{validate, Context as ValidatorContext, RegRef};
 
+use log::debug;
+
 //=============================================================================
 // Definition of: Label, RI (reg-or-immediate operands), AM (address modes),
 // and Inst (instructions).  Also the get-regs and map-regs operations for
@@ -1938,6 +1940,10 @@ impl Func {
                     _ => {}
                 }
             }
+            debug!(
+                "SRI: reftyped_vregs = {:?}, safepoint_insns = {:?}",
+                reftyped_vregs, safepoint_insns
+            );
             Some(StackmapRequestInfo {
                 reftype_class: RegClass::I32,
                 reftyped_vregs,

@@ -29,7 +29,7 @@ fuzz_target!(|func: ir::Func| {
     if false {
         println!("BEGIN INPUT:");
         let mut rendered = String::new();
-        func.render("==== fuzz_bt.rs: failing input:", &mut rendered)
+        func.render("==== fuzz_bt.rs: input:", &mut rendered)
             .unwrap();
         println!("{}", rendered);
         println!("END INPUT:");
@@ -48,7 +48,8 @@ fuzz_target!(|func: ir::Func| {
         algorithm: regalloc::Algorithm::Backtracking(Default::default()),
     };
 
-    let ra_result = regalloc::allocate_registers_with_opts(&mut func, &reg_universe, None, opts);
+    let sri = func.get_stackmap_request();
+    let ra_result = regalloc::allocate_registers_with_opts(&mut func, &reg_universe, sri.as_ref(), opts);
 
     match ra_result {
         Ok(result) => {

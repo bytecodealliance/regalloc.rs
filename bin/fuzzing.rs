@@ -102,8 +102,8 @@ impl FuzzingEnv {
         while self.ref_regs.contains(&index) {
             index = (index + 1) % self.num_ref_regs;
         }
-        let index = index + self.num_virtual_regs;
         self.ref_regs.insert(index);
+        let index = index + self.num_virtual_regs;
         Ok(Reg::new_virtual(RegClass::I32, index as u32))
     }
 
@@ -174,7 +174,6 @@ impl FuzzingEnv {
             StoreF,
             MakeRef,
             UseRef,
-            Safepoint,
         }
 
         let mut allowed_insts = Vec::new();
@@ -207,7 +206,6 @@ impl FuzzingEnv {
         if self.can_use_reftyped_reg() && self.can_def_reg(I32) {
             allowed_insts.push(AllowedInst::UseRef);
         }
-        allowed_insts.push(AllowedInst::Safepoint);
 
         debug_assert!(!allowed_insts.is_empty());
 
@@ -295,7 +293,6 @@ impl FuzzingEnv {
                 dst: self.def_reg(I32, u)?,
                 src: self.get_reftyped_reg(u)?,
             },
-            AllowedInst::Safepoint => Safepoint,
         })
     }
 
@@ -374,6 +371,9 @@ impl Arbitrary for Func {
 
             let mut num_block_insts = 1 + (u8::arbitrary(u)? % NUM_BLOCK_INSTS);
 
+            if bool::arbitrary(u)? {
+                insts.push(Inst::Safepoint);
+            }
             while num_block_insts > 0 {
                 let inst = if num_block_insts == 1 {
                     env.inst_control_flow(u)?
