@@ -1801,11 +1801,11 @@ impl SortedRangeFragIxs {
             .binary_search_by(|&ix| {
                 let frag = &fenv[ix];
                 if pt < frag.first {
-                    Ordering::Less
+                    Ordering::Greater
                 } else if pt >= frag.first && pt <= frag.last {
                     Ordering::Equal
                 } else {
-                    Ordering::Greater
+                    Ordering::Less
                 }
             })
             .is_ok()
@@ -1878,11 +1878,11 @@ impl SortedRangeFrags {
         self.frags
             .binary_search_by(|frag| {
                 if pt < frag.first {
-                    Ordering::Less
+                    Ordering::Greater
                 } else if pt >= frag.first && pt <= frag.last {
                     Ordering::Equal
                 } else {
-                    Ordering::Greater
+                    Ordering::Less
                 }
             })
             .is_ok()
