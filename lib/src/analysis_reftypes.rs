@@ -46,7 +46,7 @@ pub fn do_reftypes_analysis(
         }
         debug!(
             "move from {:?} (range {:?}) to {:?} (range {:?}) at inst {:?}",
-            src, dst, src_range, dst_range, iix
+            src, src_range, dst, dst_range, iix
         );
         range_pairs.push((dst_range, src_range));
     }
