@@ -67,7 +67,7 @@ impl FuzzingEnv {
 
     /// Returns true whenever a reftyped vreg may be defined.
     fn can_def_reftyped_reg(&self) -> bool {
-        self.ref_regs.len() != (self.num_ref_regs as usize)
+        self.can_use_reftyped_reg() || self.ref_regs.len() != (self.num_ref_regs as usize)
     }
 
     fn def_reg(&mut self, rc: RegClass, u: &mut Unstructured) -> Result<Reg> {
@@ -98,13 +98,29 @@ impl FuzzingEnv {
 
     fn def_reftyped_reg(&mut self, u: &mut Unstructured) -> Result<Reg> {
         debug_assert!(self.can_def_reftyped_reg());
-        let mut index = u16::arbitrary(u)? % self.num_ref_regs;
-        while self.ref_regs.contains(&index) {
-            index = (index + 1) % self.num_ref_regs;
+        if self.ref_regs.len() == 0
+            || (self.ref_regs.len() < (self.num_ref_regs as usize) && bool::arbitrary(u)?)
+        {
+            let mut index = u16::arbitrary(u)? % self.num_ref_regs;
+            while self.ref_regs.contains(&index) {
+                index = (index + 1) % self.num_ref_regs;
+            }
+            self.ref_regs.insert(index);
+            let index = index + self.num_virtual_regs;
+            Ok(Reg::new_virtual(RegClass::I32, index as u32))
+        } else {
+            assert!(self.ref_regs.len() > 0);
+            let list_index = usize::arbitrary(u)? % self.ref_regs.len();
+            let reg_index = self
+                .ref_regs
+                .iter()
+                .skip(list_index)
+                .cloned()
+                .next()
+                .unwrap();
+            let reg_index = reg_index + self.num_virtual_regs;
+            Ok(Reg::new_virtual(RegClass::I32, reg_index as u32))
         }
-        self.ref_regs.insert(index);
-        let index = index + self.num_virtual_regs;
-        Ok(Reg::new_virtual(RegClass::I32, index as u32))
     }
 
     fn mod_reg(&mut self, rc: RegClass, u: &mut Unstructured) -> Result<Reg> {
@@ -165,6 +181,7 @@ impl FuzzingEnv {
             ImmF,
             Copy,
             CopyF,
+            CopyRef,
             BinOp,
             BinOpM,
             BinOpF,
@@ -206,6 +223,9 @@ impl FuzzingEnv {
         if self.can_use_reftyped_reg() && self.can_def_reg(I32) {
             allowed_insts.push(AllowedInst::UseRef);
         }
+        if self.can_def_reftyped_reg() && self.can_use_reftyped_reg() {
+            allowed_insts.push(AllowedInst::CopyRef);
+        }
 
         debug_assert!(!allowed_insts.is_empty());
 
@@ -237,6 +257,11 @@ impl FuzzingEnv {
                     dst: self.def_reg(F32, u)?,
                     src,
                 }
+            }
+            AllowedInst::CopyRef => {
+                let dst = self.def_reftyped_reg(u)?;
+                let src = self.get_reftyped_reg(u)?;
+                Copy { dst, src }
             }
             AllowedInst::BinOp => {
                 let src_left = self.get_reg(I32, u)?;

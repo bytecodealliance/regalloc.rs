@@ -1095,7 +1095,10 @@ impl Inst {
             Inst::NopZ {} => true,
             Inst::Imm { dst, imm: _ } => cx.check_reg_rc(dst, RegRef::Def, I32),
             Inst::ImmF { dst, imm: _ } => cx.check_reg_rc(dst, RegRef::Def, F32),
-            Inst::Copy { dst, src } => {
+            // MakeRef and UseRef are like copy instructions; the typecheck only
+            // reasons about register classes, not reffyness, so the
+            // distinctions between the three are irrelevant here.
+            Inst::Copy { dst, src } | Inst::MakeRef { dst, src } | Inst::UseRef { dst, src } => {
                 cx.check_reg_rc(src, RegRef::Use, I32) && cx.check_reg_rc(dst, RegRef::Def, I32)
             }
             Inst::CopyF { dst, src } => {
@@ -1156,13 +1159,7 @@ impl Inst {
                     && cx.check_reg_rc(src_right, RegRef::Use, F32)
                     && cx.check_reg_rc(dst, RegRef::Def, F32)
             }
-            Inst::MakeRef { .. } | Inst::UseRef { .. } | Inst::Safepoint => {
-                // TODO: the typechecking infra seems to map regclasses and
-                // types; we need to separate these two concepts (both integers
-                // and refs live in I32 regs) before we can add typechecking
-                // support.
-                true
-            }
+            Inst::Safepoint => true,
 
             // These are not user instructions.
             Inst::Spill { .. }
@@ -1400,26 +1397,22 @@ impl<'a> IState<'a> {
     }
 
     fn set_reg_u32(&mut self, reg: Reg, val: u32) {
-        if reg.is_virtual() {
-            self.set_virtual_reg(reg.to_virtual_reg(), Value::U32(val));
-        } else {
-            self.set_real_reg(reg.to_real_reg(), Value::U32(val));
-        }
+        self.set_reg(reg, Value::U32(val))
     }
 
     fn set_reg_f32(&mut self, reg: Reg, val: f32) {
-        if reg.is_virtual() {
-            self.set_virtual_reg(reg.to_virtual_reg(), Value::F32(val));
-        } else {
-            self.set_real_reg(reg.to_real_reg(), Value::F32(val));
-        }
+        self.set_reg(reg, Value::F32(val))
     }
 
     fn set_reg_ref(&mut self, reg: Reg, val: u32) {
+        self.set_reg(reg, Value::Ref(val))
+    }
+
+    fn set_reg(&mut self, reg: Reg, val: Value) {
         if reg.is_virtual() {
-            self.set_virtual_reg(reg.to_virtual_reg(), Value::Ref(val));
+            self.set_virtual_reg(reg.to_virtual_reg(), val);
         } else {
-            self.set_real_reg(reg.to_real_reg(), Value::Ref(val));
+            self.set_real_reg(reg.to_real_reg(), val);
         }
     }
 
@@ -1490,7 +1483,7 @@ impl<'a> IState<'a> {
             }
             Inst::Imm { dst, imm } => self.set_reg_u32(*dst, *imm),
             Inst::ImmF { dst, imm } => self.set_reg_f32(*dst, *imm),
-            Inst::Copy { dst, src } => self.set_reg_u32(*dst, self.get_reg(*src)?.to_u32()),
+            Inst::Copy { dst, src } => self.set_reg(*dst, self.get_reg(*src)?),
             Inst::CopyF { dst, src } => self.set_reg_f32(*dst, self.get_reg(*src)?.to_f32()),
             Inst::BinOp {
                 op,
