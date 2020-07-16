@@ -1276,6 +1276,21 @@ pub fn alloc_main<F: Function>(
         }
         let spill_slot_to_use = vlr_slot_env[curr_vlrix].unwrap();
 
+        // If we're spilling a reffy VLR, we'll need to tell the spillslot allocator that.  The
+        // VLR will already have been allocated to some spill slot, and relevant RangeFrags in
+        // the slot should have already been reserved for it, by the above call to
+        // `alloc_spill_slots` (although possibly relating to a prior VLR in the same
+        // equivalence class, and not this one).  However, those RangeFrags will have all been
+        // marked non-reffy, because we don't know, in general, at spillslot-allocation-time,
+        // whether a VLR will actually be spilled, and we don't want the resulting stack maps to
+        // mention stack entries which are dead at the point of the safepoint insn.  Hence the
+        // need to update those RangeFrags pertaining to just this VLR -- now that we *know*
+        // it's going to be spilled.
+        if curr_vlr.is_ref {
+            spill_slot_allocator
+                .notify_spillage_of_reftyped_vlr(spill_slot_to_use, &curr_vlr.sorted_frags);
+        }
+
         for sri in sri_vec {
             let (new_vlr_first_pt, new_vlr_last_pt) = match sri.kind {
                 BridgeKind::RtoU => (Point::Reload, Point::Use),
