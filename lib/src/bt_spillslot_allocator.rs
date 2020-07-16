@@ -168,15 +168,11 @@ fn ssal_is_add_possible(tree: &AVLTree<RangeFragAndRefness>, frags: &SortedRange
 }
 
 // HELPER FUNCTION
-// Try to add all of `frags` to `tree`.  Return `true` if possible, `false` if
-// not possible.  If `false` is returned, `tree` is unchanged (this is
-// important).  This routine relies on the fact that SortedFrags is
-// non-overlapping.
-fn ssal_add_if_possible(
-    tree: &mut AVLTree<RangeFragAndRefness>,
-    frags: &SortedRangeFrags,
-    frags_are_ref: bool,
-) -> bool {
+// Try to add all of `frags` to `tree`.  Return `true` if possible, `false` if not possible.  If
+// `false` is returned, `tree` is unchanged (this is important).  This routine relies on the
+// fact that SortedFrags is non-overlapping.  They are initially all marked as non-reffy.  That
+// may later be changed by calls to `SpillSlotAllocator::notify_spillage_of_reftyped_vlr`.
+fn ssal_add_if_possible(tree: &mut AVLTree<RangeFragAndRefness>, frags: &SortedRangeFrags) -> bool {
     // Check if all the frags will go in.
     if !ssal_is_add_possible(tree, frags) {
         return false;
@@ -184,7 +180,7 @@ fn ssal_add_if_possible(
     // They will.  So now insert them.
     for frag in &frags.frags {
         let inserted = tree.insert(
-            RangeFragAndRefness::new(frag.clone(), frags_are_ref),
+            RangeFragAndRefness::new(frag.clone(), /*is_ref=*/ false),
             Some(&|item1: RangeFragAndRefness, item2: RangeFragAndRefness| {
                 cmp_range_frags(&item1.frag, &item2.frag)
             }),
@@ -193,6 +189,27 @@ fn ssal_add_if_possible(
         assert!(inserted);
     }
     true
+}
+
+// HELPER FUNCTION
+// Let `frags` be the RangeFrags for some VirtualRange, that have already been allocated in
+// `tree`.  Mark each such RangeFrag as reffy.
+fn ssal_mark_frags_as_reftyped(tree: &mut AVLTree<RangeFragAndRefness>, frags: &SortedRangeFrags) {
+    for frag in &frags.frags {
+        // Be paranoid.  (1) `frag` must already exist in `tree`.  (2) it must not be marked as
+        // reffy.
+        let del_this = RangeFragAndRefness::new(frag.clone(), /*is_ref=*/ false);
+        let add_this = RangeFragAndRefness::new(frag.clone(), /*is_ref=*/ true);
+        let replaced_ok = tree.find_and_replace(
+            del_this,
+            add_this,
+            &|item1: RangeFragAndRefness, item2: RangeFragAndRefness| {
+                cmp_range_frags(&item1.frag, &item2.frag)
+            },
+        );
+        // This assertion effectively encompasses both (1) and (2) above.
+        assert!(replaced_ok);
+    }
 }
 
 //=============================================================================
@@ -396,7 +413,7 @@ impl SpillSlotAllocator {
         'pass2_per_equiv_class: for cand_vlrix in vlrEquivClasses.equiv_class_elems_iter(vlrix) {
             let cand_vlr = &vlr_env[cand_vlrix];
             let mut tree = self.slots[chosen_slotno as usize].get_mut_tree();
-            let added = ssal_add_if_possible(&mut tree, &cand_vlr.sorted_frags, is_ref);
+            let added = ssal_add_if_possible(&mut tree, &cand_vlr.sorted_frags);
             if added {
                 vlr_slot_env[cand_vlrix] = Some(SpillSlot::new(chosen_slotno));
                 continue 'pass2_per_equiv_class;
@@ -416,7 +433,7 @@ impl SpillSlotAllocator {
                     continue;
                 }
                 let mut tree = self.slots[alt_slotno as usize].get_mut_tree();
-                let added = ssal_add_if_possible(&mut tree, &cand_vlr.sorted_frags, is_ref);
+                let added = ssal_add_if_possible(&mut tree, &cand_vlr.sorted_frags);
                 if added {
                     vlr_slot_env[cand_vlrix] = Some(SpillSlot::new(alt_slotno));
                     continue 'pass2_per_equiv_class;
@@ -426,7 +443,7 @@ impl SpillSlotAllocator {
             // So allocate a new one and use that.
             let new_slotno = self.add_new_slot(req_size);
             let mut tree = self.slots[new_slotno as usize].get_mut_tree();
-            let added = ssal_add_if_possible(&mut tree, &cand_vlr.sorted_frags, is_ref);
+            let added = ssal_add_if_possible(&mut tree, &cand_vlr.sorted_frags);
             if added {
                 vlr_slot_env[cand_vlrix] = Some(SpillSlot::new(new_slotno));
                 continue 'pass2_per_equiv_class;
@@ -435,6 +452,25 @@ impl SpillSlotAllocator {
             panic!("SpillSlotAllocator: alloc_spill_slots: failed?!?!");
             /*NOTREACHED*/
         } /* 'pass2_per_equiv_class */
+    }
+
+    // STACKMAP SUPPORT
+    // Mark the `frags` for `slot_no` as being reftyped.  They are expected to already exist in
+    // the relevant tree, and not currently be marked as reftyped.
+    pub fn notify_spillage_of_reftyped_vlr(
+        &mut self,
+        slot_no: SpillSlot,
+        frags: &SortedRangeFrags,
+    ) {
+        let slot_ix = slot_no.get_usize();
+        assert!(slot_ix < self.slots.len());
+        let slot = &mut self.slots[slot_ix];
+        match slot {
+            LogicalSpillSlot::InUse { size, tree } if *size == 1 => {
+                ssal_mark_frags_as_reftyped(tree, frags)
+            }
+            _ => panic!("SpillSlotAllocator::notify_spillage_of_reftyped_vlr: invalid slot"),
+        }
     }
 
     // STACKMAP SUPPORT
