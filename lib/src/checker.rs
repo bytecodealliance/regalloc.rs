@@ -248,7 +248,7 @@ impl CheckerState {
                     }
                 }
             }
-            &Inst::SSMove {
+            &Inst::ChangeSpillSlotOwnership {
                 inst_ix,
                 slot,
                 from_reg,
@@ -346,7 +346,7 @@ impl CheckerState {
                     .unwrap_or(Default::default());
                 self.reg_values.insert(into.to_reg(), val);
             }
-            &Inst::SSMove { slot, to_reg, .. } => {
+            &Inst::ChangeSpillSlotOwnership { slot, to_reg, .. } => {
                 let reftyped = if let Some(val) = self.spill_slots.get(&slot) {
                     match val {
                         &CheckerValue::Reg(_, reftyped) => reftyped,
@@ -399,7 +399,7 @@ pub(crate) enum Inst {
     /// A spillslot ghost move (between vregs) resulting from an user-program
     /// move whose source and destination regs are both vregs that are currently
     /// spilled.
-    SSMove {
+    ChangeSpillSlotOwnership {
         inst_ix: InstIx,
         slot: SpillSlot,
         from_reg: Reg,
@@ -679,8 +679,8 @@ impl CheckerContext {
             for checker_inst in self.checker_inst_map.get(&pre_point).unwrap_or(&empty) {
                 debug!("at inst {:?}: pre checker_inst: {:?}", iix, checker_inst);
                 self.checker.add_inst(bix, checker_inst.clone());
-                if let Inst::SSMove { .. } = checker_inst {
-                    // Unlike spills/reloads/moves inserted by the regalloc, SSMove
+                if let Inst::ChangeSpillSlotOwnership { .. } = checker_inst {
+                    // Unlike spills/reloads/moves inserted by the regalloc, ChangeSpillSlotOwnership
                     // pseudo-insts replace the instruction itself.
                     skip_inst = true;
                 }

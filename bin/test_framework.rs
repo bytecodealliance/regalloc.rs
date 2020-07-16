@@ -1191,7 +1191,7 @@ impl PartialEq for Value {
             },
 
             Value::F32(x) => match other {
-                Value::F32(y) => (x != x && y != y) || x == y,
+                Value::F32(y) => (x.is_nan() && y.is_nan()) || x == y,
                 _ => false,
             },
 

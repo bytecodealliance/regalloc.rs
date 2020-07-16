@@ -34,7 +34,7 @@ pub(crate) enum InstToInsert {
     /// track the symbolic values in slots. Always originates from a move
     /// in the original user program whose source and dest vregs are both
     /// spilled.
-    SSMove {
+    ChangeSpillSlotOwnership {
         inst_ix: InstIx,
         slot: SpillSlot,
         from_reg: Reg,
@@ -60,7 +60,7 @@ impl InstToInsert {
                 from_reg,
                 for_vreg,
             } => Some(f.gen_move(to_reg, from_reg, for_vreg)),
-            &InstToInsert::SSMove { .. } => None,
+            &InstToInsert::ChangeSpillSlotOwnership { .. } => None,
         }
     }
 
@@ -84,12 +84,12 @@ impl InstToInsert {
                 into: to_reg,
                 from: from_reg,
             },
-            &InstToInsert::SSMove {
+            &InstToInsert::ChangeSpillSlotOwnership {
                 inst_ix,
                 slot,
                 from_reg,
                 to_reg,
-            } => CheckerInst::SSMove {
+            } => CheckerInst::ChangeSpillSlotOwnership {
                 inst_ix,
                 slot,
                 from_reg,

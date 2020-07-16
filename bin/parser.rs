@@ -431,8 +431,7 @@ pub fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
         if &name == "reftype_start" && c == '=' {
             let index = parser.read_int()?;
             parser.func.reftype_reg_start = index;
-        }
-        else if c == '=' {
+        } else if c == '=' {
             // variable declaration.
             let real_or_class = parser.read_ident()?;
             if real_or_class == "real" {

@@ -2187,9 +2187,6 @@ impl RangeId {
         // Real, and inplausibly huge
         Self { bits: 0xFFFF_FFFF }
     }
-    pub fn is_valid(self) -> bool {
-        self != Self::invalid_value()
-    }
 }
 
 impl fmt::Debug for RangeId {

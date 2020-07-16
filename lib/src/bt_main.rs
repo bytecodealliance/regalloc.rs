@@ -1512,11 +1512,6 @@ pub fn alloc_main<F: Function>(
                 | (Point::Def, Point::Spill, Point::Reload, Point::Use) => {
                     let slot1 = edit_list_move[i_min].slot;
                     let slot2 = edit_list_move[i_max].slot;
-                    let (from_reg, to_reg) = if frag1.last.pt() == Point::Use {
-                        (vlr1.vreg.to_reg(), vlr2.vreg.to_reg())
-                    } else {
-                        (vlr2.vreg.to_reg(), vlr1.vreg.to_reg())
-                    };
                     if slot1 == slot2 {
                         // Yay.  We've found a coalescable pair.  We can just ignore the
                         // two entries and move on.  Except we have to mark the insn
@@ -1526,8 +1521,13 @@ pub fn alloc_main<F: Function>(
                         i_min = i_max + 1;
                         n_edit_list_move_processed += 2;
                         if use_checker {
+                            let (from_reg, to_reg) = if frag1.last.pt() == Point::Use {
+                                (vlr1.vreg.to_reg(), vlr2.vreg.to_reg())
+                            } else {
+                                (vlr2.vreg.to_reg(), vlr1.vreg.to_reg())
+                            };
                             ghost_moves.push(InstToInsertAndExtPoint::new(
-                                InstToInsert::SSMove {
+                                InstToInsert::ChangeSpillSlotOwnership {
                                     inst_ix: i_min_iix,
                                     slot: slot1,
                                     from_reg,
