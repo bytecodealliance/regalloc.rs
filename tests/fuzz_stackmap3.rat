@@ -1,0 +1,41 @@
+v0I = I32
+v1I = I32
+v2I = I32
+v13I = I32
+r0I = real I32 0
+r2I = real I32 2
+r3I = real I32 3
+
+b0:
+    safepoint
+    imm     v0I, 201326459
+    load    v1I, [v0I, 3520188881]
+    if_then_else v0I, b0:b0, b1:b1
+
+b1:
+    store   [v1I, 6636287], v0I
+    makeref v13I, v1I
+    cmp_ge  v1I, v1I, v0I
+    copy    r2I, v1I
+    if_then_else r2I, b2:b2, b2:b2
+
+b2:
+    copy    v0I, r2I
+    load    v0I, [r2I, r2I]
+    load    r0I, [v0I, 269597]
+    cmp_gt  v0I, v1I, v1I
+    cmp_gt  v0I, v1I, v1I
+    cmp_gt  v0I, v1I, v1I
+    goto    b3:b3
+
+b3:
+    safepoint
+    cmp_gt  v2I, v1I, v1I
+    sub     r2I, v2I, v1I
+    copy    v13I, v13I
+    imm     r3I, 4294967295
+    useref  v0I, v13I
+    andm    v0I, v0I
+    store   [r0I, r2I], v1I
+    finish
+

@@ -20,8 +20,11 @@ const NUM_BLOCK_INSTS: u8 = 8;
 struct FuzzingEnv {
     num_blocks: u8,
     num_virtual_regs: u16,
+    num_reftyped_regs: u16, // numbered in vreg space above ordinary vregs.
     /// Map of virtual register index to register class. None means the register hasn't been ever defined.
     vregs: HashMap<u16, RegClass>,
+    /// Set of reftyped vregs that have been defined.
+    reftyped_regs: HashSet<u16>,
     /// Really a hashmap from rc to HashSet<Reg>.
     regs_by_rc: Vec<HashSet<Reg>>,
     vregs_by_rc: Vec<HashSet<u16>>,
@@ -45,6 +48,11 @@ impl FuzzingEnv {
         !self.regs_by_rc[rc as usize].is_empty()
     }
 
+    /// Returns true whenever a reftyped register may be used.
+    fn can_use_reftyped_reg(&self) -> bool {
+        !self.reftyped_regs.is_empty()
+    }
+
     /// Returns true whenever a register of the given register class may be defined.
     fn can_def_reg(&self, rc: RegClass) -> bool {
         // If we can use one with the given reg class, then we can redefine it!
@@ -55,6 +63,11 @@ impl FuzzingEnv {
     fn can_def_vreg(&self, rc: RegClass) -> bool {
         !self.vregs_by_rc[rc as usize].is_empty()
             || self.vregs.len() != (self.num_virtual_regs as usize)
+    }
+
+    /// Returns true whenever a reftyped vreg may be defined.
+    fn can_def_reftyped_reg(&self) -> bool {
+        self.can_use_reftyped_reg() || self.reftyped_regs.len() != (self.num_reftyped_regs as usize)
     }
 
     fn def_reg(&mut self, rc: RegClass, u: &mut Unstructured) -> Result<Reg> {
@@ -83,6 +96,33 @@ impl FuzzingEnv {
         Ok(reg)
     }
 
+    fn def_reftyped_reg(&mut self, u: &mut Unstructured) -> Result<Reg> {
+        debug_assert!(self.can_def_reftyped_reg());
+        if self.reftyped_regs.len() == 0
+            || (self.reftyped_regs.len() < (self.num_reftyped_regs as usize) && bool::arbitrary(u)?)
+        {
+            let mut index = u16::arbitrary(u)? % self.num_reftyped_regs;
+            while self.reftyped_regs.contains(&index) {
+                index = (index + 1) % self.num_reftyped_regs;
+            }
+            self.reftyped_regs.insert(index);
+            let index = index + self.num_virtual_regs;
+            Ok(Reg::new_virtual(RegClass::I32, index as u32))
+        } else {
+            assert!(self.reftyped_regs.len() > 0);
+            let list_index = usize::arbitrary(u)? % self.reftyped_regs.len();
+            let reg_index = self
+                .reftyped_regs
+                .iter()
+                .skip(list_index)
+                .cloned()
+                .next()
+                .unwrap();
+            let reg_index = reg_index + self.num_virtual_regs;
+            Ok(Reg::new_virtual(RegClass::I32, reg_index as u32))
+        }
+    }
+
     fn mod_reg(&mut self, rc: RegClass, u: &mut Unstructured) -> Result<Reg> {
         // No need to handle the def part! If there was such a register, it was inserted in the first
         // place with the same register class.
@@ -94,6 +134,14 @@ impl FuzzingEnv {
         let regs = Vec::from_iter(self.regs_by_rc[rc as usize].iter());
         let reg = *regs[usize::arbitrary(u)? % regs.len()];
         Ok(reg)
+    }
+
+    fn get_reftyped_reg(&self, u: &mut Unstructured) -> Result<Reg> {
+        debug_assert!(self.can_use_reftyped_reg());
+        let regs = Vec::from_iter(self.reftyped_regs.iter());
+        let reg_index = *regs[usize::arbitrary(u)? % regs.len()];
+        let reg_index = reg_index + self.num_virtual_regs;
+        Ok(Reg::new_virtual(RegClass::I32, reg_index as u32))
     }
 
     fn get_ri(&self, u: &mut Unstructured) -> Result<RI> {
@@ -133,6 +181,7 @@ impl FuzzingEnv {
             ImmF,
             Copy,
             CopyF,
+            CopyRef,
             BinOp,
             BinOpM,
             BinOpF,
@@ -140,6 +189,8 @@ impl FuzzingEnv {
             LoadF,
             Store,
             StoreF,
+            MakeRef,
+            UseRef,
         }
 
         let mut allowed_insts = Vec::new();
@@ -165,6 +216,15 @@ impl FuzzingEnv {
         if self.can_use_reg(F32) {
             allowed_insts.push(AllowedInst::CopyF);
             allowed_insts.push(AllowedInst::BinOpF);
+        }
+        if self.can_def_reftyped_reg() && self.can_use_reg(I32) {
+            allowed_insts.push(AllowedInst::MakeRef);
+        }
+        if self.can_use_reftyped_reg() && self.can_def_reg(I32) {
+            allowed_insts.push(AllowedInst::UseRef);
+        }
+        if self.can_def_reftyped_reg() && self.can_use_reftyped_reg() {
+            allowed_insts.push(AllowedInst::CopyRef);
         }
 
         debug_assert!(!allowed_insts.is_empty());
@@ -197,6 +257,11 @@ impl FuzzingEnv {
                     dst: self.def_reg(F32, u)?,
                     src,
                 }
+            }
+            AllowedInst::CopyRef => {
+                let dst = self.def_reftyped_reg(u)?;
+                let src = self.get_reftyped_reg(u)?;
+                Copy { dst, src }
             }
             AllowedInst::BinOp => {
                 let src_left = self.get_reg(I32, u)?;
@@ -244,6 +309,14 @@ impl FuzzingEnv {
             AllowedInst::StoreF => StoreF {
                 addr: self.get_am(u)?,
                 src: self.get_reg(F32, u)?,
+            },
+            AllowedInst::MakeRef => MakeRef {
+                dst: self.def_reftyped_reg(u)?,
+                src: self.get_reg(I32, u)?,
+            },
+            AllowedInst::UseRef => UseRef {
+                dst: self.def_reg(I32, u)?,
+                src: self.get_reftyped_reg(u)?,
             },
         })
     }
@@ -295,12 +368,15 @@ impl FuzzingEnv {
 impl Arbitrary for Func {
     fn arbitrary(u: &mut Unstructured) -> arbitrary::Result<Func> {
         let num_virtual_regs = 1 + (u16::arbitrary(u)? % NUM_VREGS);
+        let num_reftyped_regs = 1 + (u16::arbitrary(u)? % NUM_VREGS);
         let mut num_blocks = 1 + (u8::arbitrary(u)? % NUM_BLOCKS);
 
         let mut env = FuzzingEnv {
             num_blocks,
             num_virtual_regs,
+            num_reftyped_regs,
             vregs: HashMap::new(),
+            reftyped_regs: HashSet::new(),
             regs_by_rc: vec![HashSet::new(); NUM_REG_CLASSES as usize],
             vregs_by_rc: vec![HashSet::new(); NUM_REG_CLASSES as usize],
         };
@@ -320,6 +396,9 @@ impl Arbitrary for Func {
 
             let mut num_block_insts = 1 + (u8::arbitrary(u)? % NUM_BLOCK_INSTS);
 
+            if bool::arbitrary(u)? {
+                insts.push(Inst::Safepoint);
+            }
             while num_block_insts > 0 {
                 let inst = if num_block_insts == 1 {
                     env.inst_control_flow(u)?
@@ -351,7 +430,8 @@ impl Arbitrary for Func {
         Ok(Func {
             name: "funk".to_string(),
             entry,
-            num_virtual_regs: num_virtual_regs as u32,
+            num_virtual_regs: (num_virtual_regs + num_reftyped_regs) as u32,
+            reftype_reg_start: num_virtual_regs as u32,
             insns: insts,
             blocks,
         })

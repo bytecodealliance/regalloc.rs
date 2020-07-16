@@ -939,7 +939,7 @@ impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug> Wr
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SpillSlot {
     SpillSlot(u32),
 }

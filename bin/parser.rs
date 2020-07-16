@@ -428,7 +428,10 @@ pub fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
     loop {
         name = parser.read_ident()?;
         let c = parser.read_char()?;
-        if c == '=' {
+        if &name == "reftype_start" && c == '=' {
+            let index = parser.read_int()?;
+            parser.func.reftype_reg_start = index;
+        } else if c == '=' {
             // variable declaration.
             let real_or_class = parser.read_ident()?;
             if real_or_class == "real" {
@@ -743,6 +746,24 @@ pub fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
                     parser.expect_char(',')?;
                     let src = parser.read_var()?;
                     insts.push(i_storef(addr, src));
+                }
+
+                "makeref" => {
+                    let dst = parser.read_var()?;
+                    parser.expect_char(',')?;
+                    let src = parser.read_var()?;
+                    insts.push(Inst::MakeRef { dst, src });
+                }
+
+                "useref" => {
+                    let dst = parser.read_var()?;
+                    parser.expect_char(',')?;
+                    let src = parser.read_var()?;
+                    insts.push(Inst::UseRef { dst, src });
+                }
+
+                "safepoint" => {
+                    insts.push(Inst::Safepoint);
                 }
 
                 "sub" => {

@@ -1,0 +1,25 @@
+v0I = I32
+v2I = I32
+v4I = I32
+v10I = I32
+v13I = I32
+r2I = real I32 2
+
+b0:
+    imm     v0I, 2459079168
+    makeref v13I, v0I
+    store   [v0I, v0I], v0I
+    load    v10I, [v0I, 3523203583]
+    if_then_else v10I, b1:b1, b2:b2
+
+b1:
+    safepoint
+    if_then_else v10I, b0:b0, b0:b0
+
+b2:
+    safepoint
+    load    v2I, [v10I, 4294967295]
+    load    r2I, [v0I, 24080239]
+    copy    v4I, v0I
+    useref  r2I, v13I
+    if_then_else v10I, b0:b0, b0:b0

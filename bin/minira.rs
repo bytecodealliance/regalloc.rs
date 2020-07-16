@@ -120,14 +120,16 @@ fn main() {
 
     // Just so we can run it later.  Not needed for actual allocation.
     let original_func = func.clone();
+    let sri = func.get_stackmap_request();
 
-    let result = match allocate_registers_with_opts(&mut func, &reg_universe, None, opts.clone()) {
-        Err(e) => {
-            println!("allocation failed: {}", e);
-            return;
-        }
-        Ok(r) => r,
-    };
+    let result =
+        match allocate_registers_with_opts(&mut func, &reg_universe, sri.as_ref(), opts.clone()) {
+            Err(e) => {
+                println!("allocation failed: {}", e);
+                return;
+            }
+            Ok(r) => r,
+        };
 
     let num_spill_slots = result.num_spill_slots;
 
@@ -274,7 +276,8 @@ mod test_utils {
             &reg_universe,
             RunStage::BeforeRegalloc,
         );
-        let result = allocate_registers_with_opts(&mut func, &reg_universe, None, opts)
+        let sri = func.get_stackmap_request();
+        let result = allocate_registers_with_opts(&mut func, &reg_universe, sri.as_ref(), opts)
             .unwrap_or_else(|err| {
                 panic!("allocation failed: {}", err);
             });
