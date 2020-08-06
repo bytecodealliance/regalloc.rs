@@ -2097,7 +2097,7 @@ impl fmt::Debug for VirtualRange {
 }
 
 //=============================================================================
-// Some auxiliary/miscellaneous data structures that are useful.
+// Some auxiliary/miscellaneous data structures that are useful: RegToRangesMaps
 
 // Mappings from RealRegs and VirtualRegs to the sets of RealRanges and VirtualRanges that
 // belong to them.  These are needed for BT's coalescing analysis and for the dataflow analysis
@@ -2116,7 +2116,25 @@ pub struct RegToRangesMaps {
     // most VirtualRegs will have just one VirtualRange, and there are a lot of VirtualRegs in
     // general.  So SmallVec is a definite benefit here.
     pub vreg_to_vlrs_map: Vec</*virtual reg ix, */ SmallVec<[VirtualRangeIx; 3]>>,
+
+    // As an optimisation heuristic for BT's coalescing analysis, these indicate which
+    // real/virtual registers have "many" `RangeFrag`s in their live ranges.  For some
+    // definition of "many", perhaps "200 or more".  This is not important for overall
+    // allocation result or correctness: it merely allows the coalescing analysis to switch
+    // between two search strategies, one of which is fast for regs with few `RangeFrag`s (the
+    // vast majority) and the other of which has better asymptotic behaviour for regs with many
+    // `RangeFrag`s (in order to keep out of trouble on some pathological inputs).  These
+    // vectors are duplicate-free but the elements may be in an arbitrary order.
+    pub rregs_with_many_frags: Vec<u32 /*RealReg index*/>,
+    pub vregs_with_many_frags: Vec<u32 /*VirtualReg index*/>,
+
+    // And this indicates what the thresh is actually set to.  A frag will be in
+    // `r/vregs_with_many_frags` if it has `many_frags_thresh` or more RangeFrags.
+    pub many_frags_thresh: usize,
 }
+
+//=============================================================================
+// Some auxiliary/miscellaneous data structures that are useful: MoveInfo
 
 // MoveInfo holds info about registers connected by moves.  For each, we record the source and
 // destination of the move, the insn performing the move, and the estimated execution frequency
