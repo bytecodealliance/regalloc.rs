@@ -8,10 +8,10 @@ use std::fmt;
 use crate::analysis_control_flow::CFGInfo;
 use crate::data_structures::{
     BlockIx, InstIx, InstPoint, MoveInfo, MoveInfoElem, Point, Queue, RangeFrag, RangeFragIx,
-    RangeFragKind, RangeFragMetrics, RangeId, RealRange, RealRangeIx, RealReg, RealRegUniverse,
-    Reg, RegClass, RegSets, RegToRangesMaps, RegUsageCollector, RegVecBounds, RegVecs,
-    RegVecsAndBounds, SortedRangeFragIxs, SortedRangeFrags, SpillCost, TypedIxVec, VirtualRange,
-    VirtualRangeIx, VirtualReg,
+    RangeFragKind, RangeFragMetrics, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg,
+    RegClass, RegSets, RegToRangesMaps, RegUsageCollector, RegVecBounds, RegVecs, RegVecsAndBounds,
+    SortedRangeFragIxs, SortedRangeFrags, SpillCost, TypedIxVec, VirtualRange, VirtualRangeIx,
+    VirtualReg,
 };
 use crate::sparse_set::SparseSet;
 use crate::union_find::{ToFromU32, UnionFind};
@@ -1924,40 +1924,13 @@ pub fn compute_reg_to_ranges_maps<F: Function>(
     }
 }
 
-// Collect info about registers (and optionally Virtual/RealRanges) that are
-// connected by moves:
+// Collect info about registers that are connected by moves.
 #[inline(never)]
 pub fn collect_move_info<F: Function>(
     func: &F,
     reg_vecs_and_bounds: &RegVecsAndBounds,
     est_freqs: &TypedIxVec<BlockIx, u32>,
-    reg_to_ranges_maps: &RegToRangesMaps,
-    rlr_env: &TypedIxVec<RealRangeIx, RealRange>,
-    vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
-    fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
-    want_ranges: bool,
 ) -> MoveInfo {
-    // Helper: find the RealRange or VirtualRange for a register at an InstPoint.
-    let find_range_for_reg = |pt: InstPoint, reg: Reg| {
-        if !want_ranges {
-            return RangeId::invalid_value();
-        }
-        if reg.is_real() {
-            for &rlrix in &reg_to_ranges_maps.rreg_to_rlrs_map[reg.get_index() as usize] {
-                if rlr_env[rlrix].sorted_frags.contains_pt(fenv, pt) {
-                    return RangeId::new_real(rlrix);
-                }
-            }
-        } else {
-            for &vlrix in &reg_to_ranges_maps.vreg_to_vlrs_map[reg.get_index() as usize] {
-                if vlr_env[vlrix].sorted_frags.contains_pt(pt) {
-                    return RangeId::new_virtual(vlrix);
-                }
-            }
-        }
-        RangeId::invalid_value()
-    };
-
     let mut moves = Vec::<MoveInfoElem>::new();
     for b in func.blocks() {
         let block_eef = est_freqs[b];
@@ -1989,18 +1962,9 @@ pub fn collect_move_info<F: Function>(
                         let dst = wreg.to_reg();
                         let src = reg;
                         let est_freq = block_eef;
-
-                        // Find the ranges for source and dest, if requested.
-                        let (src_range, dst_range) = (
-                            find_range_for_reg(InstPoint::new(iix, Point::Use), src),
-                            find_range_for_reg(InstPoint::new(iix, Point::Def), dst),
-                        );
-
                         moves.push(MoveInfoElem {
                             dst,
-                            dst_range,
                             src,
-                            src_range,
                             iix,
                             est_freq,
                         });
