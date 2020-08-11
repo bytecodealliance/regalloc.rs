@@ -2136,16 +2136,14 @@ pub struct RegToRangesMaps {
 //=============================================================================
 // Some auxiliary/miscellaneous data structures that are useful: MoveInfo
 
-// MoveInfo holds info about registers connected by moves.  For each, we record the source and
-// destination of the move, the insn performing the move, and the estimated execution frequency
-// of the containing block.  The moves are not presented in any particular order, but they are
-// duplicate-free in that each such instruction will be listed only once.
+// `MoveInfoElem` holds info about the two registers connected a move: the source and destination
+// of the move, the insn performing the move, and the estimated execution frequency of the
+// containing block.  In `MoveInfo`, the moves are not presented in any particular order, but
+// they are duplicate-free in that each such instruction will be listed only once.
 
 pub struct MoveInfoElem {
     pub dst: Reg,
-    pub dst_range: RangeId, // possibly RangeId::invalid_value() if not requested
     pub src: Reg,
-    pub src_range: RangeId, // possibly RangeId::invalid_value() if not requested
     pub iix: InstIx,
     pub est_freq: u32,
 }

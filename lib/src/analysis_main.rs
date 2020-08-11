@@ -280,11 +280,6 @@ pub fn run_analysis<F: Function>(
             func,
             &reg_vecs_and_bounds,
             &estimated_frequencies,
-            reg_to_ranges_maps.as_ref().unwrap(),
-            &rlr_env,
-            &vlr_env,
-            &frag_env,
-            /* want_ranges = */ client_wants_stackmaps,
         ))
     } else {
         None
@@ -297,6 +292,7 @@ pub fn run_analysis<F: Function>(
         do_reftypes_analysis(
             &mut rlr_env,
             &mut vlr_env,
+            &frag_env,
             reg_to_ranges_maps.as_ref().unwrap(), /* safe because of logic just above */
             &move_info.as_ref().unwrap(),         /* ditto */
             reftype_class,
