@@ -11,7 +11,10 @@ use std::hash::Hash;
 //=============================================================================
 // SparseSet
 
+// Handy wrappers around `SparseSetU`, if you don't want to have to guess at an "optimal"
+// in-line size.
 pub type SparseSet<T> = SparseSetU<[T; 12]>;
+//pub type SparseSetIter<'a, T> = SparseSetUIter<'a, [T; 12]>; // No use case yet
 
 // Implementation: for small, unordered but no dups
 
