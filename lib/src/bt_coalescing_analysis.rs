@@ -105,6 +105,7 @@ fn show_hint(h: &Hint, univ: &RealRegUniverse) -> String {
     }
 }
 impl Hint {
+    #[inline(always)]
     fn get_weight(&self) -> u32 {
         match self {
             Hint::SameAs(_vlrix, weight) => *weight,

@@ -207,7 +207,7 @@ where
         }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         match self {
             SparseSetU::Small { card, .. } => *card == 0,
