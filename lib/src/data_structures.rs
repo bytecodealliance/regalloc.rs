@@ -779,12 +779,14 @@ impl RealReg {
     pub fn get_class(self) -> RegClass {
         self.reg.get_class()
     }
+    #[inline(always)]
     pub fn get_index(self) -> usize {
         self.reg.get_index()
     }
     pub fn get_hw_encoding(self) -> usize {
         self.reg.get_hw_encoding() as usize
     }
+    #[inline(always)]
     pub fn to_reg(self) -> Reg {
         self.reg
     }
@@ -819,6 +821,7 @@ pub struct VirtualReg {
     reg: Reg,
 }
 impl Reg /* !!not VirtualReg!! */ {
+    #[inline(always)]
     pub fn to_virtual_reg(self) -> VirtualReg {
         if self.is_virtual() {
             VirtualReg { reg: self }
@@ -831,9 +834,11 @@ impl VirtualReg {
     pub fn get_class(self) -> RegClass {
         self.reg.get_class()
     }
+    #[inline(always)]
     pub fn get_index(self) -> usize {
         self.reg.get_index()
     }
+    #[inline(always)]
     pub fn to_reg(self) -> Reg {
         self.reg
     }
@@ -921,6 +926,7 @@ impl<R: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug> Wr
     /// Create a Writable<R> from an R. The client should carefully audit where
     /// it calls this constructor to ensure correctness (see `Writable<..>`
     /// struct documentation).
+    #[inline(always)]
     pub fn from_reg(reg: R) -> Writable<R> {
         Writable { reg }
     }
@@ -1413,30 +1419,35 @@ pub enum Point {
 }
 
 impl Point {
+    #[inline(always)]
     pub fn is_reload(self) -> bool {
         match self {
             Point::Reload => true,
             _ => false,
         }
     }
+    #[inline(always)]
     pub fn is_use(self) -> bool {
         match self {
             Point::Use => true,
             _ => false,
         }
     }
+    #[inline(always)]
     pub fn is_def(self) -> bool {
         match self {
             Point::Def => true,
             _ => false,
         }
     }
+    #[inline(always)]
     pub fn is_spill(self) -> bool {
         match self {
             Point::Spill => true,
             _ => false,
         }
     }
+    #[inline(always)]
     pub fn is_use_or_def(self) -> bool {
         self.is_use() || self.is_def()
     }
