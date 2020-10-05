@@ -26,6 +26,7 @@ mod checker;
 mod data_structures;
 mod inst_stream;
 mod linear_scan;
+mod pretty_print;
 mod reg_maps;
 mod snapshot;
 mod sparse_set;
@@ -36,6 +37,9 @@ use std::default;
 use std::{borrow::Cow, fmt};
 
 // Stuff that is defined by the library
+
+// Pretty-printing utilities.
+pub use crate::pretty_print::*;
 
 // Sets and maps of things.  We can refine these later; but for now the
 // interface needs some way to speak about them, so let's use the
@@ -55,7 +59,7 @@ pub use crate::data_structures::Reg;
 pub use crate::data_structures::RealReg;
 pub use crate::data_structures::VirtualReg;
 
-pub use crate::data_structures::{Writable, WritableBase};
+pub use crate::data_structures::Writable;
 
 pub use crate::data_structures::NUM_REG_CLASSES;
 
