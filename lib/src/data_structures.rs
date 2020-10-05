@@ -902,9 +902,9 @@ impl Reg {
 /// create a distinction, at the Rust type level, between a plain "register"
 /// and a "writable register".
 ///
-/// There is nothing that ensures that Writable<..> is only wrapped around Reg
-/// and its variants (`RealReg`, `VirtualReg`).  That however is its intended
-/// and currently its only use.
+/// Only structs that implement the `WritableBase` trait can be wrapped with
+/// `Writable`. These are the Reg, RealReg and VirtualReg data structures only,
+/// since `WritableBase` is not exposed to end users.
 ///
 /// Writable<..> can be used by the client to ensure that, internally, it only
 /// generates instructions that write to registers that should be written. The
