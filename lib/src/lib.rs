@@ -224,6 +224,25 @@ pub trait Function {
     /// Determine whether an instruction is a return instruction.
     fn is_ret(&self, insn: InstIx) -> bool;
 
+    /// Determine whether an instruction should be considered while computing
+    /// the set of registers that need to be saved/restored in the function's
+    /// prologue/epilogue, that is, the registers returned in
+    /// `clobbered_registers` in `RegAllocResult`.  computation. Only
+    /// instructions for which this function returns `true` will be used to
+    /// compute that set.
+    ///
+    /// One reason that a client might *not* want an instruction to be included
+    /// would be if it can handle the clobbers some other way: for example,
+    /// ABI-support code might exclude call instructions' defs and mods from the
+    /// clobber set, because (given the callee has same ABI as the caller) the
+    /// registers possibly written by the callee are all registers that the
+    /// caller is also allowed to clobber (not save/restore in
+    /// prologue/epilogue).
+    fn is_included_in_clobbers(&self, _insn: &Self::Inst) -> bool {
+        // Default impl includes all instructions.
+        true
+    }
+
     // --------------------------
     // Instruction register slots
     // --------------------------
