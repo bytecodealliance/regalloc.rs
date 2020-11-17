@@ -10,7 +10,7 @@ use crate::sparse_set::{SparseSet, SparseSetU};
 use log::debug;
 use smallvec::SmallVec;
 
-pub fn do_reftypes_analysis(
+pub(crate) fn do_reftypes_analysis(
     // From dataflow/liveness analysis.  Modified by setting their is_ref bit.
     rlr_env: &mut TypedIxVec<RealRangeIx, RealRange>,
     vlr_env: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
@@ -62,7 +62,7 @@ pub fn do_reftypes_analysis(
     // Each entry in `succ` maps from `src` to a `SparseSet<dsts>`, so to speak.  That is, for
     // `d1`, `d2`, etc, in `dsts`, the function contains moves `d1 := src`, `d2 := src`, etc.
     let mut succ = Map::<RangeId, SparseSetU<[RangeId; 4]>>::default();
-    for &MoveInfoElem { dst, src, iix, .. } in &move_info.moves {
+    for &MoveInfoElem { dst, src, iix, .. } in move_info.iter() {
         // Don't waste time processing moves which can't possibly be of reftyped values.
         debug_assert!(dst.get_class() == src.get_class());
         if dst.get_class() != reftype_class {

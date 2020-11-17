@@ -2161,23 +2161,32 @@ pub struct RegToRangesMaps {
     pub many_frags_thresh: usize,
 }
 
-//=============================================================================
-// Some auxiliary/miscellaneous data structures that are useful: MoveInfo
-
-// `MoveInfoElem` holds info about the two registers connected a move: the source and destination
-// of the move, the insn performing the move, and the estimated execution frequency of the
-// containing block.  In `MoveInfo`, the moves are not presented in any particular order, but
-// they are duplicate-free in that each such instruction will be listed only once.
-
-pub struct MoveInfoElem {
-    pub dst: Reg,
-    pub src: Reg,
-    pub iix: InstIx,
-    pub est_freq: u32,
+/// `MoveInfoElem` holds info about the two registers connected a move: the source and destination
+/// of the move, the instruction performing the move, and the estimated execution frequency of the
+/// containing block.
+pub(crate) struct MoveInfoElem {
+    pub(crate) dst: Reg,
+    pub(crate) src: Reg,
+    pub(crate) iix: InstIx,
+    pub(crate) est_freq: u32,
 }
 
-pub struct MoveInfo {
-    pub moves: Vec<MoveInfoElem>,
+/// Vector of `MoveInfoElem`, presented in no particular order, but duplicate-free in that each
+/// move instruction will be listed only once.
+pub(crate) struct MoveInfo(Vec<MoveInfoElem>);
+
+impl MoveInfo {
+    pub(crate) fn new(move_info: Vec<MoveInfoElem>) -> Self {
+        Self(move_info)
+    }
+}
+
+impl Deref for MoveInfo {
+    type Target = Vec<MoveInfoElem>;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 // Something that can be either a VirtualRangeIx or a RealRangeIx, whilst still being 32 bits

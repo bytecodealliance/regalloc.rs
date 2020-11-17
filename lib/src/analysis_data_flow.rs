@@ -1926,55 +1926,43 @@ pub(crate) fn compute_reg_to_ranges_maps<F: Function>(
     }
 }
 
-// Collect info about registers that are connected by moves.
+/// Collect info about registers that are connected by moves.
 #[inline(never)]
-pub fn collect_move_info<F: Function>(
+pub(crate) fn collect_move_info<F: Function>(
     func: &F,
     reg_vecs_and_bounds: &RegVecsAndBounds,
-    est_freqs: &TypedIxVec<BlockIx, u32>,
+    estimated_frequencies: &TypedIxVec<BlockIx, u32>,
 ) -> MoveInfo {
-    let mut moves = Vec::<MoveInfoElem>::new();
+    let mut moves = Vec::new();
     for b in func.blocks() {
-        let block_eef = est_freqs[b];
-        for iix in func.block_insns(b) {
-            let insn = &func.get_insn(iix);
-            let im = func.is_move(insn);
-            match im {
-                None => {}
-                Some((wreg, reg)) => {
-                    let iix_bounds = &reg_vecs_and_bounds.bounds[iix];
-                    // It might seem strange to assert that `defs_len` and/or
-                    // `uses_len` is <= 1 rather than == 1.  The reason is
-                    // that either or even both registers might be ones which
-                    // are not available to the allocator.  Hence they will
-                    // have been removed by the sanitisation machinery before
-                    // we get to this point.  If either is missing, we
-                    // unfortunately can't coalesce the move away, and just
-                    // have to live with it.
-                    //
-                    // If any of the following five assertions fail, the
-                    // client's `is_move` is probably lying to us.
-                    assert!(iix_bounds.uses_len <= 1);
-                    assert!(iix_bounds.defs_len <= 1);
-                    assert!(iix_bounds.mods_len == 0);
-                    if iix_bounds.uses_len == 1 && iix_bounds.defs_len == 1 {
-                        let reg_vecs = &reg_vecs_and_bounds.vecs;
-                        assert!(reg_vecs.uses[iix_bounds.uses_start as usize] == reg);
-                        assert!(reg_vecs.defs[iix_bounds.defs_start as usize] == wreg.to_reg());
-                        let dst = wreg.to_reg();
-                        let src = reg;
-                        let est_freq = block_eef;
-                        moves.push(MoveInfoElem {
-                            dst,
-                            src,
-                            iix,
-                            est_freq,
-                        });
-                    }
+        let block_estimated_frequency = estimated_frequencies[b];
+        for inst_ix in func.block_insns(b) {
+            if let Some((dst, src)) = func.is_move(func.get_insn(inst_ix)) {
+                let iix_bounds = &reg_vecs_and_bounds.bounds[inst_ix];
+                // It might seem strange to assert that `defs_len` and/or `uses_len` is <= 1 rather
+                // than == 1.  The reason is that either or even both registers might be ones which
+                // are not available to the allocator.  Hence they will have been removed by the
+                // sanitisation machinery before we get to this point.  If either is missing, we
+                // unfortunately can't coalesce the move away, and just have to live with it.
+                //
+                // If any of the following five assertions fail, the client's `is_move` is probably
+                // lying to us.
+                assert!(iix_bounds.uses_len <= 1);
+                assert!(iix_bounds.defs_len <= 1);
+                assert!(iix_bounds.mods_len == 0);
+                if iix_bounds.uses_len == 1 && iix_bounds.defs_len == 1 {
+                    let reg_vecs = &reg_vecs_and_bounds.vecs;
+                    assert!(reg_vecs.uses[iix_bounds.uses_start as usize] == src);
+                    assert!(reg_vecs.defs[iix_bounds.defs_start as usize] == dst.to_reg());
+                    moves.push(MoveInfoElem {
+                        dst: dst.to_reg(),
+                        src,
+                        iix: inst_ix,
+                        est_freq: block_estimated_frequency,
+                    });
                 }
             }
         }
     }
-
-    MoveInfo { moves }
+    MoveInfo::new(moves)
 }
