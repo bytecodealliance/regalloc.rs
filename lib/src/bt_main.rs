@@ -1334,7 +1334,7 @@ pub fn alloc_main<F: Function>(
                 assert!(src_reg.is_virtual() && dst_reg.is_virtual());
                 let dst_vreg: VirtualReg = dst_reg.to_virtual_reg();
                 let src_vreg: VirtualReg = src_reg.to_virtual_reg();
-                let bridge_eef = est_freqs[sri.bix];
+                let bridge_eef = est_freqs.cost(sri.bix);
                 match sri.kind {
                     BridgeKind::RtoU => {
                         // Reload-to-Use bridge.  Hint that we want to be

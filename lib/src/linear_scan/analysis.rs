@@ -1,10 +1,12 @@
 use super::{FixedInterval, IntId, Intervals, Mention, MentionMap, VirtualInterval};
 use crate::{
     analysis_control_flow::{CFGInfo, InstIxToBlockIxMap},
+    analysis_data_flow::collect_move_info,
     analysis_data_flow::{
         calc_def_and_use, calc_livein_and_liveout, get_sanitized_reg_uses_for_func, reg_ix_to_reg,
         reg_to_reg_ix,
     },
+    analysis_main::DepthBasedFrequencies,
     data_structures::{BlockIx, InstPoint, RangeFragIx, RangeFragKind, Reg, RegVecsAndBounds},
     sparse_set::SparseSet,
     union_find::UnionFind,
@@ -137,6 +139,10 @@ pub(crate) fn run<F: Function>(
     let reg_vecs_and_bounds = get_sanitized_reg_uses_for_func(func, reg_universe)
         .map_err(|reg| AnalysisError::IllegalRealReg(reg))?;
     assert!(reg_vecs_and_bounds.is_sanitized());
+
+    // TODO depth-based is fine, using the plain depth would be sufficient too.
+    let estimator = DepthBasedFrequencies::new(func, &cfg_info);
+    let _move_info = collect_move_info(func, &reg_vecs_and_bounds, &estimator);
 
     // Calculate block-local def/use sets.
     let (def_sets_per_block, use_sets_per_block) =

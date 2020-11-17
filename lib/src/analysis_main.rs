@@ -109,7 +109,7 @@ pub struct AnalysisInfo {
     /// The fragment metrics table
     pub(crate) range_metrics: TypedIxVec<RangeFragIx, RangeFragMetrics>,
     /// Estimated execution frequency per block
-    pub(crate) estimated_frequencies: TypedIxVec<BlockIx, u32>,
+    pub(crate) estimated_frequencies: DepthBasedFrequencies,
     /// Maps InstIxs to BlockIxs
     pub(crate) inst_to_block_map: InstIxToBlockIxMap,
     /// Maps from RealRegs to sets of RealRanges and VirtualRegs to sets of VirtualRanges
@@ -150,17 +150,8 @@ pub fn run_analysis<F: Function>(
     // analysis, but needs to be done at some point.
     let inst_to_block_map = InstIxToBlockIxMap::new(func);
 
-    // Annotate each Block with its estimated execution frequency
-    let mut estimated_frequencies = TypedIxVec::new();
-    for bix in func.blocks() {
-        let mut estimated_frequency = 1;
-        let depth = u32::min(cfg_info.depth_map[bix], 3);
-        for _ in 0..depth {
-            estimated_frequency *= 10;
-        }
-        assert!(bix == BlockIx::new(estimated_frequencies.len()));
-        estimated_frequencies.push(estimated_frequency);
-    }
+    // Annotate each Block with its estimated execution frequency.
+    let estimated_frequencies = DepthBasedFrequencies::new(func, &cfg_info);
 
     info!("  run_analysis: end control flow analysis");
 
@@ -322,4 +313,33 @@ pub fn run_analysis<F: Function>(
         reg_to_ranges_maps,
         move_info,
     })
+}
+
+/// A small wrapper for estimated execution frequencies, based on the block's loop depth.
+pub(crate) struct DepthBasedFrequencies(TypedIxVec<BlockIx, u32>);
+
+impl DepthBasedFrequencies {
+    pub(crate) fn new<F: Function>(func: &F, cfg_info: &CFGInfo) -> Self {
+        let mut values = TypedIxVec::new();
+        for bix in func.blocks() {
+            let mut estimated_frequency = 1;
+            let depth = u32::min(cfg_info.depth_map[bix], 3);
+            for _ in 0..depth {
+                estimated_frequency *= 10;
+            }
+            assert!(bix == BlockIx::new(values.len()));
+            values.push(estimated_frequency);
+        }
+        Self(values)
+    }
+    pub(crate) fn len(&self) -> u32 {
+        self.0.len()
+    }
+    pub(crate) fn iter(&self) -> std::slice::Iter<u32> {
+        self.0.iter()
+    }
+    #[inline(always)]
+    pub(crate) fn cost(&self, bix: BlockIx) -> u32 {
+        self.0[bix]
+    }
 }

@@ -5,11 +5,11 @@ use smallvec::{smallvec, SmallVec};
 use std::cmp::min;
 use std::fmt;
 
-use crate::analysis_control_flow::CFGInfo;
 use crate::data_structures::*;
 use crate::sparse_set::SparseSet;
 use crate::union_find::{ToFromU32, UnionFind};
 use crate::Function;
+use crate::{analysis_control_flow::CFGInfo, analysis_main::DepthBasedFrequencies};
 
 //===========================================================================//
 //                                                                           //
@@ -1374,7 +1374,7 @@ fn calc_virtual_range_metrics(
     sorted_frag_ixs: &SortedRangeFragIxs,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
-    estimated_frequencies: &TypedIxVec<BlockIx, u32>,
+    estimated_frequencies: &DepthBasedFrequencies,
 ) -> (u16, u32, SpillCost) {
     assert!(frag_env.len() == frag_metrics_env.len());
 
@@ -1395,7 +1395,7 @@ fn calc_virtual_range_metrics(
         // Here, tot_size <= 0xFFFF.  frag.count is u16.  estFreq[] is u32.
         // We must be careful not to overflow tot_cost, which is u32.
         let mut new_tot_cost: u64 = frag_metrics.count as u64; // at max 16 bits
-        new_tot_cost *= estimated_frequencies[frag_metrics.bix] as u64; // at max 48 bits
+        new_tot_cost *= estimated_frequencies.cost(frag_metrics.bix) as u64; // at max 48 bits
         new_tot_cost += tot_cost as u64; // at max 48 bits + epsilon
         new_tot_cost = min(new_tot_cost, 0xFFFF_FFFFu64);
 
@@ -1428,7 +1428,7 @@ fn create_and_add_range(
     sorted_frag_ixs: SortedRangeFragIxs,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
-    estimated_frequencies: &TypedIxVec<BlockIx, u32>,
+    estimated_frequencies: &DepthBasedFrequencies,
 ) {
     if reg.is_virtual() {
         // First, compute the VirtualRange metrics.  This has to be done
@@ -1502,7 +1502,7 @@ pub(crate) fn merge_range_frags(
     frag_ix_vec_per_reg: &Vec</*rreg index, then vreg index, */ SmallVec<[RangeFragIx; 8]>>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
-    estimated_frequencies: &TypedIxVec<BlockIx, u32>,
+    estimated_frequencies: &DepthBasedFrequencies,
     cfg_info: &CFGInfo,
     reg_universe: &RealRegUniverse,
     vreg_classes: &Vec</*vreg index,*/ RegClass>,
@@ -1910,11 +1910,11 @@ pub(crate) fn compute_reg_to_ranges_maps<F: Function>(
 pub(crate) fn collect_move_info<F: Function>(
     func: &F,
     reg_vecs_and_bounds: &RegVecsAndBounds,
-    estimated_frequencies: &TypedIxVec<BlockIx, u32>,
+    estimated_frequency: &DepthBasedFrequencies,
 ) -> MoveInfo {
     let mut moves = Vec::new();
     for b in func.blocks() {
-        let block_estimated_frequency = estimated_frequencies[b];
+        let block_estimated_frequency = estimated_frequency.cost(b);
         for inst_ix in func.block_insns(b) {
             if let Some((dst, src)) = func.is_move(func.get_insn(inst_ix)) {
                 let iix_bounds = &reg_vecs_and_bounds.bounds[inst_ix];
