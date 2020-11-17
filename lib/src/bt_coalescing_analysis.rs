@@ -131,7 +131,7 @@ impl ToFromU32 for VirtualRangeIx {
 // it also may change the spill costs for some of the VLRs in `vlr_env` to
 // better reflect the spill cost situation in the presence of coalescing.
 #[inline(never)]
-pub fn do_coalescing_analysis<F: Function>(
+pub(crate) fn do_coalescing_analysis<F: Function>(
     func: &F,
     univ: &RealRegUniverse,
     rlr_env: &TypedIxVec<RealRangeIx, RealRange>,
@@ -529,7 +529,7 @@ pub fn do_coalescing_analysis<F: Function>(
         iix,
         est_freq,
         ..
-    } in &move_info.moves
+    } in move_info.iter()
     {
         debug!(
             "connected by moves: {:?} {:?} <- {:?} (est_freq {})",
