@@ -48,10 +48,6 @@ pub enum AnalysisError {
     /// Implementation limits exceeded.  The incoming function is too big.  It
     /// may contain at most 1 million basic blocks and 16 million instructions.
     ImplementationLimitsExceeded,
-
-    /// Currently LSRA can't generate stackmaps, but the client has requested LSRA *and*
-    /// stackmaps.
-    LSRACantDoStackmaps,
 }
 
 impl ToString for AnalysisError {
@@ -77,10 +73,6 @@ impl ToString for AnalysisError {
             AnalysisError::UnreachableBlocks => "at least one block is unreachable".to_string(),
             AnalysisError::ImplementationLimitsExceeded => {
                 "implementation limits exceeded (more than 1 million blocks or 16 million insns)"
-                    .to_string()
-            }
-            AnalysisError::LSRACantDoStackmaps => {
-                "LSRA *and* stackmap creation requested; but this combination is not yet supported"
                     .to_string()
             }
         }
