@@ -258,29 +258,25 @@ pub fn run_analysis<F: Function>(
     // Now a bit of auxiliary info collection, which isn't really either control- or data-flow
     // analysis.
 
-    // For BT and/or reftypes, we'll also need the reg-to-ranges maps.
-    let reg_to_ranges_maps =
+    // For BT and/or reftypes, we'll also need the reg-to-ranges maps and information about moves.
+    let (reg_to_ranges_maps, move_info) =
         if client_wants_stackmaps || algorithm == AlgorithmWithDefaults::Backtracking {
-            Some(compute_reg_to_ranges_maps(
-                func,
-                &reg_universe,
-                &rlr_env,
-                &vlr_env,
-            ))
+            (
+                Some(compute_reg_to_ranges_maps(
+                    func,
+                    &reg_universe,
+                    &rlr_env,
+                    &vlr_env,
+                )),
+                Some(collect_move_info(
+                    func,
+                    &reg_vecs_and_bounds,
+                    &estimated_frequencies,
+                )),
+            )
         } else {
-            None
+            (None, None)
         };
-
-    // For BT and/or reftypes, we'll also need information about moves.
-    let move_info = if client_wants_stackmaps || algorithm == AlgorithmWithDefaults::Backtracking {
-        Some(collect_move_info(
-            func,
-            &reg_vecs_and_bounds,
-            &estimated_frequencies,
-        ))
-    } else {
-        None
-    };
 
     info!("  run_analysis: end liveness analysis");
 
