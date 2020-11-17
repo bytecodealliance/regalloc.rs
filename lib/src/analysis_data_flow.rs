@@ -1322,13 +1322,12 @@ fn deref_and_compress_sorted_range_frag_ixs(
 ) -> SortedRangeFrags {
     let mut res = SortedRangeFrags::empty();
 
-    let frag_ixs = &sorted_frag_ixs.frag_ixs;
-    let num_frags = frag_ixs.len();
+    let num_frags = sorted_frag_ixs.len();
     *stats_num_vfrags_uncompressed += num_frags;
 
     if num_frags == 1 {
         // Nothing we can do.  Shortcut.
-        res.frags.push(frag_env[frag_ixs[0]].clone());
+        res.frags.push(frag_env[sorted_frag_ixs[0]].clone());
         *stats_num_vfrags_compressed += 1;
         return res;
     }
@@ -1344,10 +1343,10 @@ fn deref_and_compress_sorted_range_frag_ixs(
         }
         while e + 1 < num_frags
             && frags_are_mergeable(
-                &frag_env[frag_ixs[e]],
-                &frag_metrics_env[frag_ixs[e]],
-                &frag_env[frag_ixs[e + 1]],
-                &frag_metrics_env[frag_ixs[e + 1]],
+                &frag_env[sorted_frag_ixs[e]],
+                &frag_metrics_env[sorted_frag_ixs[e]],
+                &frag_env[sorted_frag_ixs[e + 1]],
+                &frag_metrics_env[sorted_frag_ixs[e + 1]],
             )
         {
             e += 1;
@@ -1356,11 +1355,11 @@ fn deref_and_compress_sorted_range_frag_ixs(
         // emit (s, e)
         if s == e {
             // Can't compress this one
-            res.frags.push(frag_env[frag_ixs[s]].clone());
+            res.frags.push(frag_env[sorted_frag_ixs[s]].clone());
         } else {
             let compressed_frag = RangeFrag {
-                first: frag_env[frag_ixs[s]].first,
-                last: frag_env[frag_ixs[e]].last,
+                first: frag_env[sorted_frag_ixs[s]].first,
+                last: frag_env[sorted_frag_ixs[e]].last,
             };
             res.frags.push(compressed_frag);
         }
@@ -1388,7 +1387,7 @@ fn calc_virtual_range_metrics(
     let mut tot_size: u32 = 0;
     let mut tot_cost: u32 = 0;
 
-    for fix in &sorted_frag_ixs.frag_ixs {
+    for fix in sorted_frag_ixs.iter() {
         let frag = &frag_env[*fix];
         let frag_metrics = &frag_metrics_env[*fix];
 
@@ -1505,7 +1504,7 @@ impl ToFromU32 for usize {
 }
 
 #[inline(never)]
-pub fn merge_range_frags(
+pub(crate) fn merge_range_frags(
     frag_ix_vec_per_reg: &Vec</*rreg index, then vreg index, */ SmallVec<[RangeFragIx; 8]>>,
     frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     frag_metrics_env: &TypedIxVec<RangeFragIx, RangeFragMetrics>,
@@ -1822,7 +1821,7 @@ pub fn merge_range_frags(
 // inverse mappings.  They are used by BT's coalescing analysis, and for the dataflow analysis
 // that supports reftype handling.
 #[inline(never)]
-pub fn compute_reg_to_ranges_maps<F: Function>(
+pub(crate) fn compute_reg_to_ranges_maps<F: Function>(
     func: &F,
     univ: &RealRegUniverse,
     rlr_env: &TypedIxVec<RealRangeIx, RealRange>,
@@ -1897,7 +1896,7 @@ pub fn compute_reg_to_ranges_maps<F: Function>(
         let rreg_index = rreg.get_index();
         rreg_to_rlrs_map[rreg_index].push(rlrix);
 
-        let rlr_num_frags = rlr.sorted_frags.frag_ixs.len();
+        let rlr_num_frags = rlr.sorted_frags.len();
         add_u8_usize_saturate_to_u8(&mut rreg_approx_frag_counts[rreg_index], rlr_num_frags);
     }
 

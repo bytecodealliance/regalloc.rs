@@ -109,13 +109,13 @@ impl CommitmentMap {
         }
     }
 
-    pub fn add_indirect(
+    pub(crate) fn add_indirect(
         &mut self,
         to_add_frags: &SortedRangeFragIxs,
         to_add_lr_id: RangeId,
         frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
     ) {
-        for fix in &to_add_frags.frag_ixs {
+        for fix in to_add_frags.iter() {
             let to_add = RangeFragAndRangeId::new(frag_env[*fix].clone(), to_add_lr_id);
             let added = self.tree.insert(
                 to_add,
