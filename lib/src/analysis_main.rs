@@ -130,10 +130,8 @@ pub fn run_analysis<F: Function>(
         func.insns().len()
     );
 
-    // LSRA can't do reftypes yet.  That should have been checked at the top level already.
-    if client_wants_stackmaps {
-        assert!(algorithm != AlgorithmWithDefaults::LinearScan);
-    }
+    // LSRA uses its own analysis.
+    assert!(!client_wants_stackmaps || algorithm != AlgorithmWithDefaults::LinearScan);
 
     info!("  run_analysis: begin control flow analysis");
 

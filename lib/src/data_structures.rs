@@ -4,7 +4,6 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
-use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt;
 use std::hash::Hash;
@@ -12,6 +11,7 @@ use std::marker::PhantomData;
 use std::ops::Index;
 use std::ops::IndexMut;
 use std::slice::{Iter, IterMut};
+use std::{cmp::Ordering, ops::Deref};
 
 use crate::{Function, RegUsageMapper};
 
@@ -1761,29 +1761,35 @@ impl fmt::Debug for RangeFragMetrics {
 // RangeFragIxs refer, is not stored here.
 
 #[derive(Clone)]
-pub struct SortedRangeFragIxs {
-    pub frag_ixs: SmallVec<[RangeFragIx; 4]>,
-}
+pub(crate) struct SortedRangeFragIxs(SmallVec<[RangeFragIx; 4]>);
 
 impl fmt::Debug for SortedRangeFragIxs {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        self.frag_ixs.fmt(fmt)
+        self.0.fmt(fmt)
+    }
+}
+
+impl Deref for SortedRangeFragIxs {
+    type Target = SmallVec<[RangeFragIx; 4]>;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
 impl SortedRangeFragIxs {
-    pub(crate) fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
-        for i in 1..self.frag_ixs.len() {
-            let prev_frag = &fenv[self.frag_ixs[i - 1]];
-            let this_frag = &fenv[self.frag_ixs[i]];
+    fn check(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
+        for i in 1..self.0.len() {
+            let prev_frag = &fenv[self.0[i - 1]];
+            let this_frag = &fenv[self.0[i]];
             if cmp_range_frags(prev_frag, this_frag) != Some(Ordering::Less) {
                 panic!("SortedRangeFragIxs::check: vector not ok");
             }
         }
     }
 
-    pub fn sort(&mut self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
-        self.frag_ixs.sort_unstable_by(|fix_a, fix_b| {
+    fn sort(&mut self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
+        self.0.sort_unstable_by(|fix_a, fix_b| {
             match cmp_range_frags(&fenv[*fix_a], &fenv[*fix_b]) {
                 Some(Ordering::Less) => Ordering::Less,
                 Some(Ordering::Greater) => Ordering::Greater,
@@ -1794,29 +1800,31 @@ impl SortedRangeFragIxs {
         });
     }
 
-    pub fn new(
+    pub(crate) fn new(
         frag_ixs: SmallVec<[RangeFragIx; 4]>,
         fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
     ) -> Self {
-        let mut res = SortedRangeFragIxs { frag_ixs };
-        // check the source is ordered, and clone (or sort it)
+        let mut res = Self(frag_ixs);
+        // Check the source is ordered, and clone (or sort it).
         res.sort(fenv);
         res.check(fenv);
         res
     }
 
-    pub fn unit(fix: RangeFragIx, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) -> Self {
-        let mut res = SortedRangeFragIxs {
-            frag_ixs: SmallVec::<[RangeFragIx; 4]>::new(),
-        };
-        res.frag_ixs.push(fix);
+    pub(crate) fn unit(fix: RangeFragIx, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) -> Self {
+        let mut res = Self(SmallVec::<[RangeFragIx; 4]>::new());
+        res.0.push(fix);
         res.check(fenv);
         res
     }
 
     /// Does this sorted list of range fragments contain the given instruction point?
-    pub fn contains_pt(&self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>, pt: InstPoint) -> bool {
-        self.frag_ixs
+    pub(crate) fn contains_pt(
+        &self,
+        fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
+        pt: InstPoint,
+    ) -> bool {
+        self.0
             .binary_search_by(|&ix| {
                 let frag = &fenv[ix];
                 if pt < frag.first {
@@ -2046,7 +2054,7 @@ impl SpillCost {
 #[derive(Clone)]
 pub struct RealRange {
     pub rreg: RealReg,
-    pub sorted_frags: SortedRangeFragIxs,
+    pub(crate) sorted_frags: SortedRangeFragIxs,
     pub is_ref: bool,
 }
 

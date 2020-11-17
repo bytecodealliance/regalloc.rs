@@ -260,7 +260,7 @@ pub fn do_coalescing_analysis<F: Function>(
         };
         let rlrixs = &reg_to_ranges_maps.rreg_to_rlrs_map[*rreg_no as usize];
         for rlrix in rlrixs {
-            for fix in &rlr_env[*rlrix].sorted_frags.frag_ixs {
+            for fix in rlr_env[*rlrix].sorted_frags.iter() {
                 let frag = &frag_env[*fix];
                 many_frags_info.sorted_firsts.push((frag.first, *rlrix));
                 many_frags_info.sorted_lasts.push((frag.last, *rlrix));
@@ -421,7 +421,7 @@ pub fn do_coalescing_analysis<F: Function>(
         let rlrixs = &reg_to_ranges_maps.rreg_to_rlrs_map[rreg_no];
         for rlrix in rlrixs {
             let frags = &rlr_env[*rlrix].sorted_frags;
-            for fix in &frags.frag_ixs {
+            for fix in frags.iter() {
                 let frag = &frag_env[*fix];
                 if frag.last == point_to_find {
                     return Some(*rlrix);
@@ -461,7 +461,7 @@ pub fn do_coalescing_analysis<F: Function>(
         let rlrixs = &reg_to_ranges_maps.rreg_to_rlrs_map[rreg_no];
         for rlrix in rlrixs {
             let frags = &rlr_env[*rlrix].sorted_frags;
-            for fix in &frags.frag_ixs {
+            for fix in frags.iter() {
                 let frag = &frag_env[*fix];
                 if frag.first == point_to_find {
                     return Some(*rlrix);

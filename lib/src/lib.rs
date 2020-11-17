@@ -524,6 +524,7 @@ pub fn allocate_registers_with_opts<F: Function>(
 ) -> Result<RegAllocResult<F>, RegAllocError> {
     info!("");
     info!("================ regalloc.rs: BEGIN function ================");
+
     if log_enabled!(Level::Info) {
         info!("with options: {:?}", opts);
         let strs = rreg_universe.show();
@@ -532,6 +533,7 @@ pub fn allocate_registers_with_opts<F: Function>(
             info!("  {}", s);
         }
     }
+
     // If stackmap support has been requested, perform some initial sanity checks.
     if let Some(&StackmapRequestInfo {
         reftype_class,
@@ -549,9 +551,9 @@ pub fn allocate_registers_with_opts<F: Function>(
                 "stackmap request: invalid reftype_class".to_string(),
             ));
         }
+
         let num_avail_vregs = func.get_num_vregs();
-        for i in 0..reftyped_vregs.len() {
-            let vreg = &reftyped_vregs[i];
+        for (i, vreg) in reftyped_vregs.iter().enumerate() {
             if vreg.get_class() != reftype_class {
                 return Err(RegAllocError::Other(
                     "stackmap request: invalid vreg class".to_string(),
@@ -568,10 +570,10 @@ pub fn allocate_registers_with_opts<F: Function>(
                 ));
             }
         }
-        let num_avail_insns = func.insns().len();
-        for i in 0..safepoint_insns.len() {
-            let safepoint_iix = safepoint_insns[i];
-            if safepoint_iix.get() as usize >= num_avail_insns {
+
+        let num_inst = func.insns().len();
+        for (i, &safepoint_iix) in safepoint_insns.iter().enumerate() {
+            if safepoint_iix.get() as usize >= num_inst {
                 return Err(RegAllocError::Other(
                     "stackmap request: out of range safepoint insn".to_string(),
                 ));
@@ -587,7 +589,8 @@ pub fn allocate_registers_with_opts<F: Function>(
                 ));
             }
         }
-        // We can't check here that reftyped regs are not changed by safepoint insns.  That is
+
+        // We can't check here that reftyped regs are not *modified* by safepoint insns. That is
         // done deep in the stackmap creation logic, for BT in `get_stackmap_artefacts_at`.
     }
 
@@ -598,6 +601,7 @@ pub fn allocate_registers_with_opts<F: Function>(
         }
         Algorithm::LinearScan(opts) => linear_scan::run(func, rreg_universe, run_checker, opts),
     };
+
     info!("================ regalloc.rs: END function ================");
     res
 }
