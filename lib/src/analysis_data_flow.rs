@@ -6,13 +6,7 @@ use std::cmp::min;
 use std::fmt;
 
 use crate::analysis_control_flow::CFGInfo;
-use crate::data_structures::{
-    BlockIx, InstIx, InstPoint, MoveInfo, MoveInfoElem, Point, Queue, RangeFrag, RangeFragIx,
-    RangeFragKind, RangeFragMetrics, RealRange, RealRangeIx, RealReg, RealRegUniverse, Reg,
-    RegClass, RegSets, RegToRangesMaps, RegUsageCollector, RegVecBounds, RegVecs, RegVecsAndBounds,
-    SortedRangeFragIxs, SortedRangeFrags, SpillCost, TypedIxVec, VirtualRange, VirtualRangeIx,
-    VirtualReg,
-};
+use crate::data_structures::*;
 use crate::sparse_set::SparseSet;
 use crate::union_find::{ToFromU32, UnionFind};
 use crate::Function;
@@ -1814,12 +1808,12 @@ pub(crate) fn merge_range_frags(
 // Auxiliary activities that mostly fall under the category "dataflow analysis", but are not
 // part of the main dataflow analysis pipeline.
 
-// Dataflow and liveness together create vectors of VirtualRanges and RealRanges.  These define
-// (amongst other things) mappings from VirtualRanges to VirtualRegs and from RealRanges to
-// RealRegs.  However, we often need the inverse mappings: from VirtualRegs to (sets of
-// VirtualRanges) and from RealRegs to (sets of) RealRanges.  This function computes those
-// inverse mappings.  They are used by BT's coalescing analysis, and for the dataflow analysis
-// that supports reftype handling.
+/// Dataflow and liveness together create vectors of VirtualRanges and RealRanges.  These define
+/// (amongst other things) mappings from VirtualRanges to VirtualRegs and from RealRanges to
+/// RealRegs.  However, we often need the inverse mappings: from VirtualRegs to (sets of
+/// VirtualRanges) and from RealRegs to (sets of) RealRanges.  This function computes those inverse
+/// mappings.  They are used by BT's coalescing analysis, and for the dataflow analysis that
+/// supports reftype handling.
 #[inline(never)]
 pub(crate) fn compute_reg_to_ranges_maps<F: Function>(
     func: &F,
@@ -1827,36 +1821,25 @@ pub(crate) fn compute_reg_to_ranges_maps<F: Function>(
     rlr_env: &TypedIxVec<RealRangeIx, RealRange>,
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
 ) -> RegToRangesMaps {
-    // Arbitrary, but chosen after quite some profiling, so as to minimise both instruction
-    // count and number of `malloc` calls.  Don't mess with this without first collecting
-    // comprehensive measurements.  Note that if you set this above 255, the type of
-    // `r/vreg_approx_frag_counts` below will need to change accordingly.
+    // Arbitrary, but chosen after quite some profiling, so as to minimise both instruction count
+    // and number of `malloc` calls.  Don't mess with this without first collecting comprehensive
+    // measurements.  Note that if you set this above 255, the type of `r/vreg_approx_frag_counts`
+    // below will need to change accordingly.
     const MANY_FRAGS_THRESH: u8 = 200;
 
     // Adds `to_add` to `*counter`, taking care not to overflow it in the process.
-    let add_u8_usize_saturate_to_u8 = |counter: &mut u8, mut to_add: usize| {
-        if to_add > 0xFF {
-            to_add = 0xFF;
-        }
-        let mut n = *counter as usize;
-        n += to_add as usize;
-        // n is at max 0x1FE (510)
-        if n > 0xFF {
-            n = 0xFF;
-        }
-        *counter = n as u8;
+    let add_u8_usize_saturate_to_u8 = |counter: &mut u8, to_add: usize| {
+        *counter = counter.saturating_add(usize::min(to_add, 0xff) as u8);
     };
 
-    // We have in hand the virtual live ranges.  Each of these carries its
-    // associated vreg.  So in effect we have a VLR -> VReg mapping.  We now
-    // invert that, so as to generate a mapping from VRegs to their containing
-    // VLRs.
+    // We have in hand the virtual live ranges.  Each of these carries its associated vreg.  So in
+    // effect we have a VLR -> VReg mapping.  We now invert that, so as to generate a mapping from
+    // VRegs to their containing VLRs.
     //
-    // Note that multiple VLRs may map to the same VReg.  So the inverse mapping
-    // will actually be from VRegs to a set of VLRs.  In most cases, we expect
-    // the virtual-registerised-code given to this allocator to be derived from
-    // SSA, in which case each VReg will have only one VLR.  So in this case,
-    // the cost of first creating the mapping, and then looking up all the VRegs
+    // Note that multiple VLRs may map to the same VReg.  So the inverse mapping will actually be
+    // from VRegs to a set of VLRs.  In most cases, we expect the virtual-registerised-code given
+    // to this allocator to be derived from SSA, in which case each VReg will have only one VLR.
+    // So in this case, the cost of first creating the mapping, and then looking up all the VRegs
     // in moves in it, will have cost linear in the size of the input function.
     //
     // NB re the SmallVec.  That has set semantics (no dups).
@@ -1866,19 +1849,17 @@ pub(crate) fn compute_reg_to_ranges_maps<F: Function>(
 
     let mut vreg_approx_frag_counts = vec![0u8; num_vregs];
     let mut vreg_to_vlrs_map = vec![SmallVec::<[VirtualRangeIx; 3]>::new(); num_vregs];
-    for (vlr, n) in vlr_env.iter().zip(0..) {
-        let vlrix = VirtualRangeIx::new(n);
-        let vreg: VirtualReg = vlr.vreg;
+    for (vlr, vlr_ix) in vlr_env.iter().zip(0..) {
         // Now we know that there's a VLR `vlr` that is for VReg `vreg`.  Update the inverse
         // mapping accordingly.  We know we are stepping sequentially through the VLR (index)
-        // space, so we'll never see the same VLRIx twice.  Hence there's no need to check for
-        // dups when adding a VLR index to an existing binding for a VReg.
+        // space, so we'll never see the same VLRIx twice.  Hence there's no need to check for dups
+        // when adding a VLR index to an existing binding for a VReg.
         //
-        // If this array-indexing fails, it means the client's `.get_num_vregs()` function
-        // claims there are fewer virtual regs than we actually observe in the code it gave us.
-        // So it's a bug in the client.
-        let vreg_index = vreg.get_index();
-        vreg_to_vlrs_map[vreg_index].push(vlrix);
+        // If this array-indexing fails, it means the client's `.get_num_vregs()` function claims
+        // there are fewer virtual regs than we actually observe in the code it gave us.  So it's a
+        // bug in the client.
+        let vreg_index = vlr.vreg.get_index();
+        vreg_to_vlrs_map[vreg_index].push(VirtualRangeIx::new(vlr_ix));
 
         let vlr_num_frags = vlr.sorted_frags.frags.len();
         add_u8_usize_saturate_to_u8(&mut vreg_approx_frag_counts[vreg_index], vlr_num_frags);
@@ -1887,22 +1868,20 @@ pub(crate) fn compute_reg_to_ranges_maps<F: Function>(
     // Same for the real live ranges.
     let mut rreg_approx_frag_counts = vec![0u8; num_rregs];
     let mut rreg_to_rlrs_map = vec![SmallVec::<[RealRangeIx; 6]>::new(); num_rregs];
-    for (rlr, n) in rlr_env.iter().zip(0..) {
-        let rlrix = RealRangeIx::new(n);
-        let rreg: RealReg = rlr.rreg;
+    for (rlr, rlr_ix) in rlr_env.iter().zip(0..) {
         // If this array-indexing fails, it means something has gone wrong with sanitisation of
         // real registers -- that should ensure that we never see a real register with an index
         // greater than `univ.allocable`.  So it's a bug in the allocator's analysis phases.
-        let rreg_index = rreg.get_index();
-        rreg_to_rlrs_map[rreg_index].push(rlrix);
+        let rreg_index = rlr.rreg.get_index();
+        rreg_to_rlrs_map[rreg_index].push(RealRangeIx::new(rlr_ix));
 
         let rlr_num_frags = rlr.sorted_frags.len();
         add_u8_usize_saturate_to_u8(&mut rreg_approx_frag_counts[rreg_index], rlr_num_frags);
     }
 
-    // Create sets indicating which regs have "many" live ranges.  Hopefully very few.
-    // Since the `push`ed-in values are supplied by the `zip(0..)` iterator, they are
-    // guaranteed duplicate-free, as required by the defn of `RegToRangesMaps`.
+    // Create sets indicating which regs have "many" live ranges.  Hopefully very few. Since the
+    // `push`ed-in values are supplied by the `zip(0..)` iterator, they are guaranteed
+    // duplicate-free, as required by the definition of `RegToRangesMaps`.
     let mut vregs_with_many_frags = Vec::<u32 /*VirtualReg index*/>::with_capacity(16);
     for (count, vreg_ix) in vreg_approx_frag_counts.iter().zip(0..) {
         if *count >= MANY_FRAGS_THRESH {

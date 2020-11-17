@@ -2126,39 +2126,40 @@ impl fmt::Debug for VirtualRange {
 //=============================================================================
 // Some auxiliary/miscellaneous data structures that are useful: RegToRangesMaps
 
-// Mappings from RealRegs and VirtualRegs to the sets of RealRanges and VirtualRanges that
-// belong to them.  These are needed for BT's coalescing analysis and for the dataflow analysis
-// that supports reftype handling.
+/// Mappings from RealRegs and VirtualRegs to the sets of RealRanges and VirtualRanges that belong
+/// to them.  These are needed for BT's coalescing analysis and for the dataflow analysis that
+/// supports reftype handling.
+pub(crate) struct RegToRangesMaps {
+    /// This maps RealReg indices to the set of RealRangeIxs for that RealReg. Valid indices are
+    /// real register indices for all non-sanitised real regs; that is,
+    /// 0..RealRegUniverse::allocable. The Vecs of RealRangeIxs are duplicate-free.
+    ///
+    /// The SmallVec capacity of 6 was chosen after quite some profiling, of Cranelift/x64/newBE
+    /// compiling ZenGarden.wasm -- a huge input, with many relatively small functions. Profiling
+    /// was performed in August 2020, using Valgrind/DHAT.
+    pub(crate) rreg_to_rlrs_map: Vec</*real reg ix, */ SmallVec<[RealRangeIx; 6]>>,
 
-pub struct RegToRangesMaps {
-    // This maps RealReg indices to the set of RealRangeIxs for that RealReg.  Valid indices are
-    // real register indices for all non-sanitised real regs; that is,
-    // 0 .. RealRegUniverse::allocable, for ".." having the Rust meaning.  The Vecs of
-    // RealRangeIxs are duplicate-free.  The SmallVec capacity of 6 was chosen after quite
-    // some profiling, of CL/x64/newBE compiling ZenGarden.wasm -- a huge input, with many
-    // relatively small functions.  Profiling was performed in August 2020, using Valgrind/DHAT.
-    pub rreg_to_rlrs_map: Vec</*real reg ix, */ SmallVec<[RealRangeIx; 6]>>,
+    /// This maps VirtualReg indices to the set of VirtualRangeIxs for that VirtualReg. Valid
+    /// indices are 0..Function::get_num_vregs(). For functions mostly translated from SSA,
+    /// most VirtualRegs will have just one VirtualRange, and there are a lot of VirtualRegs in
+    /// general. So SmallVec is a definite benefit here.
+    pub(crate) vreg_to_vlrs_map: Vec</*virtual reg ix, */ SmallVec<[VirtualRangeIx; 3]>>,
 
-    // This maps VirtualReg indices to the set of VirtualRangeIxs for that VirtualReg.  Valid
-    // indices are 0 .. Function::get_num_vregs().  For functions mostly translated from SSA,
-    // most VirtualRegs will have just one VirtualRange, and there are a lot of VirtualRegs in
-    // general.  So SmallVec is a definite benefit here.
-    pub vreg_to_vlrs_map: Vec</*virtual reg ix, */ SmallVec<[VirtualRangeIx; 3]>>,
+    /// As an optimisation heuristic for BT's coalescing analysis, these indicate which
+    /// real/virtual registers have "many" `RangeFrag`s in their live ranges. For some definition
+    /// of "many", as defined by the `many_frags_thresh` field. This is not important for overall
+    /// allocation result or correctness: it merely allows the coalescing analysis to switch
+    /// between two search strategies, one of which is fast for regs with few `RangeFrag`s (the
+    /// vast majority) and the other of which has better asymptotic behaviour for regs with many
+    /// `RangeFrag`s (in order to keep out of trouble on some pathological inputs).  These vectors
+    /// are duplicate-free but the elements may be in an arbitrary order.
+    pub(crate) rregs_with_many_frags: Vec<u32 /*RealReg index*/>,
+    /// Same as above, for virtual registers.
+    pub(crate) vregs_with_many_frags: Vec<u32 /*VirtualReg index*/>,
 
-    // As an optimisation heuristic for BT's coalescing analysis, these indicate which
-    // real/virtual registers have "many" `RangeFrag`s in their live ranges.  For some
-    // definition of "many", perhaps "200 or more".  This is not important for overall
-    // allocation result or correctness: it merely allows the coalescing analysis to switch
-    // between two search strategies, one of which is fast for regs with few `RangeFrag`s (the
-    // vast majority) and the other of which has better asymptotic behaviour for regs with many
-    // `RangeFrag`s (in order to keep out of trouble on some pathological inputs).  These
-    // vectors are duplicate-free but the elements may be in an arbitrary order.
-    pub rregs_with_many_frags: Vec<u32 /*RealReg index*/>,
-    pub vregs_with_many_frags: Vec<u32 /*VirtualReg index*/>,
-
-    // And this indicates what the thresh is actually set to.  A frag will be in
-    // `r/vregs_with_many_frags` if it has `many_frags_thresh` or more RangeFrags.
-    pub many_frags_thresh: usize,
+    /// This indicates what the threshold is actually set to.  A frag will be in
+    /// `{r,v}regs_with_many_frags` if it has `many_frags_thresh` or more RangeFrags.
+    pub(crate) many_frags_thresh: usize,
 }
 
 /// `MoveInfoElem` holds info about the two registers connected a move: the source and destination
