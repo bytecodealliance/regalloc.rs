@@ -1321,7 +1321,7 @@ fn deref_and_compress_sorted_range_frag_ixs(
 
     if num_frags == 1 {
         // Nothing we can do.  Shortcut.
-        res.frags.push(frag_env[sorted_frag_ixs[0]].clone());
+        res.push(frag_env[sorted_frag_ixs[0]].clone());
         *stats_num_vfrags_compressed += 1;
         return res;
     }
@@ -1349,13 +1349,13 @@ fn deref_and_compress_sorted_range_frag_ixs(
         // emit (s, e)
         if s == e {
             // Can't compress this one
-            res.frags.push(frag_env[sorted_frag_ixs[s]].clone());
+            res.push(frag_env[sorted_frag_ixs[s]].clone());
         } else {
             let compressed_frag = RangeFrag {
                 first: frag_env[sorted_frag_ixs[s]].first,
                 last: frag_env[sorted_frag_ixs[e]].last,
             };
-            res.frags.push(compressed_frag);
+            res.push(compressed_frag);
         }
         // move on
         s = e + 1;
@@ -1363,7 +1363,7 @@ fn deref_and_compress_sorted_range_frag_ixs(
     }
     // END merge this frag sequence as much as possible
 
-    *stats_num_vfrags_compressed += res.frags.len();
+    *stats_num_vfrags_compressed += res.len();
     res
 }
 
@@ -1861,7 +1861,7 @@ pub(crate) fn compute_reg_to_ranges_maps<F: Function>(
         let vreg_index = vlr.vreg.get_index();
         vreg_to_vlrs_map[vreg_index].push(VirtualRangeIx::new(vlr_ix));
 
-        let vlr_num_frags = vlr.sorted_frags.frags.len();
+        let vlr_num_frags = vlr.sorted_frags.len();
         add_u8_usize_saturate_to_u8(&mut vreg_approx_frag_counts[vreg_index], vlr_num_frags);
     }
 

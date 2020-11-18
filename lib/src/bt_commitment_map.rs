@@ -73,9 +73,10 @@ impl fmt::Debug for RangeFragAndRangeId {
 // currently "committed".  The fragments *must* be non-overlapping.  Hence
 // they form a total order, and so we may validly build an AVL tree of them.
 
-pub struct CommitmentMap {
+pub(crate) struct CommitmentMap {
     pub tree: AVLTree<RangeFragAndRangeId>,
 }
+
 impl fmt::Debug for CommitmentMap {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         let as_vec = self.tree.to_vec();
@@ -84,7 +85,7 @@ impl fmt::Debug for CommitmentMap {
 }
 
 impl CommitmentMap {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         // The AVL tree constructor needs a default value for the elements.  It
         // will never be used.  The RangeId index value will show as
         // obviously bogus if we ever try to "dereference" any part of it.
@@ -94,8 +95,8 @@ impl CommitmentMap {
         }
     }
 
-    pub fn add(&mut self, to_add_frags: &SortedRangeFrags, to_add_lr_id: RangeId) {
-        for frag in &to_add_frags.frags {
+    pub(crate) fn add(&mut self, to_add_frags: &SortedRangeFrags, to_add_lr_id: RangeId) {
+        for frag in to_add_frags.iter() {
             let to_add = RangeFragAndRangeId::new(frag.clone(), to_add_lr_id);
             let added = self.tree.insert(
                 to_add,
@@ -129,8 +130,8 @@ impl CommitmentMap {
         }
     }
 
-    pub fn del(&mut self, to_del_frags: &SortedRangeFrags) {
-        for frag in &to_del_frags.frags {
+    pub(crate) fn del(&mut self, to_del_frags: &SortedRangeFrags) {
+        for frag in to_del_frags.iter() {
             // re RangeId::invalid_value(): we don't care what the RangeId is, since we're
             // deleting by RangeFrags alone.
             let to_del = RangeFragAndRangeId::new(frag.clone(), RangeId::invalid_value());
@@ -148,7 +149,7 @@ impl CommitmentMap {
 
     // Find the RangeId for the RangeFrag that overlaps `pt`, if one exists.
     // This is conceptually equivalent to LogicalSpillSlot::get_refness_at_inst_point.
-    pub fn lookup_inst_point(&self, pt: InstPoint) -> Option<RangeId> {
+    pub(crate) fn lookup_inst_point(&self, pt: InstPoint) -> Option<RangeId> {
         let mut root = self.tree.root;
         while root != AVL_NULL {
             let root_node = &self.tree.pool[root as usize];

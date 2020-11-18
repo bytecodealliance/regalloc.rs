@@ -158,7 +158,7 @@ fn ssal_is_add_frag_possible(tree: &AVLTree<RangeFragAndRefness>, frag: &RangeFr
 // `AVLTree::contains`.
 fn ssal_is_add_possible(tree: &AVLTree<RangeFragAndRefness>, frags: &SortedRangeFrags) -> bool {
     // Figure out whether all the frags will go in.
-    for frag in &frags.frags {
+    for frag in frags.iter() {
         if !ssal_is_add_frag_possible(&tree, frag) {
             return false;
         }
@@ -178,7 +178,7 @@ fn ssal_add_if_possible(tree: &mut AVLTree<RangeFragAndRefness>, frags: &SortedR
         return false;
     }
     // They will.  So now insert them.
-    for frag in &frags.frags {
+    for frag in frags.iter() {
         let inserted = tree.insert(
             RangeFragAndRefness::new(frag.clone(), /*is_ref=*/ false),
             Some(&|item1: RangeFragAndRefness, item2: RangeFragAndRefness| {
@@ -195,7 +195,7 @@ fn ssal_add_if_possible(tree: &mut AVLTree<RangeFragAndRefness>, frags: &SortedR
 // Let `frags` be the RangeFrags for some VirtualRange, that have already been allocated in
 // `tree`.  Mark each such RangeFrag as reffy.
 fn ssal_mark_frags_as_reftyped(tree: &mut AVLTree<RangeFragAndRefness>, frags: &SortedRangeFrags) {
-    for frag in &frags.frags {
+    for frag in frags.iter() {
         // Be paranoid.  (1) `frag` must already exist in `tree`.  (2) it must not be marked as
         // reffy.
         let del_this = RangeFragAndRefness::new(frag.clone(), /*is_ref=*/ false);
@@ -215,22 +215,22 @@ fn ssal_mark_frags_as_reftyped(tree: &mut AVLTree<RangeFragAndRefness>, frags: &
 //=============================================================================
 // SpillSlotAllocator: public interface
 
-pub struct SpillSlotAllocator {
+pub(crate) struct SpillSlotAllocator {
     slots: Vec<LogicalSpillSlot>,
 }
+
 impl SpillSlotAllocator {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { slots: vec![] }
     }
 
-    pub fn num_slots_in_use(&self) -> usize {
+    pub(crate) fn num_slots_in_use(&self) -> usize {
         self.slots.len()
     }
 
-    // This adds a new, empty slot, for items of the given size, and returns
-    // its index.  This isn't clever, in the sense that it fails to use some
-    // slots that it could use, but at least it's simple.  Note, this is a
-    // private method.
+    /// This adds a new, empty slot, for items of the given size, and returns its index.  This
+    /// isn't clever, in the sense that it fails to use some slots that it could use, but at least
+    /// it's simple.  Note, this is a private method.
     fn add_new_slot(&mut self, req_size: u32) -> u32 {
         assert!(req_size == 1 || req_size == 2 || req_size == 4 || req_size == 8);
         // Satisfy alignment constraints.  These entries will unfortunately be
@@ -261,15 +261,12 @@ impl SpillSlotAllocator {
         res
     }
 
-    // THE MAIN FUNCTION
-    // Allocate spill slots for all the VirtualRanges in `vlrix`s eclass,
-    // including `vlrix` itself.  Since we are allocating spill slots for
-    // complete eclasses at once, none of the members of the class should
-    // currently have any allocation.  This routine will try to allocate all
-    // class members the same slot, but it can only guarantee to do so if the
-    // class members are mutually non-overlapping.  Hence it can't guarantee that
-    // in general.
-    pub fn alloc_spill_slots<F: Function>(
+    /// Main function: allocate spill slots for all the VirtualRanges in `vlrix`s eclass, including
+    /// `vlrix` itself.  Since we are allocating spill slots for complete eclasses at once, none of
+    /// the members of the class should currently have any allocation.  This routine will try to
+    /// allocate all class members the same slot, but it can only guarantee to do so if the class
+    /// members are mutually non-overlapping.  Hence it can't guarantee that in general.
+    pub(crate) fn alloc_spill_slots<F: Function>(
         &mut self,
         vlr_slot_env: &mut TypedIxVec<VirtualRangeIx, Option<SpillSlot>>,
         func: &F,
@@ -454,10 +451,9 @@ impl SpillSlotAllocator {
         } /* 'pass2_per_equiv_class */
     }
 
-    // STACKMAP SUPPORT
-    // Mark the `frags` for `slot_no` as being reftyped.  They are expected to already exist in
-    // the relevant tree, and not currently be marked as reftyped.
-    pub fn notify_spillage_of_reftyped_vlr(
+    /// Stackmap support: Mark the `frags` for `slot_no` as being reftyped.  They are expected to
+    /// already exist in the relevant tree, and not currently be marked as reftyped.
+    pub(crate) fn notify_spillage_of_reftyped_vlr(
         &mut self,
         slot_no: SpillSlot,
         frags: &SortedRangeFrags,
@@ -473,10 +469,10 @@ impl SpillSlotAllocator {
         }
     }
 
-    // STACKMAP SUPPORT
-    // Allocate a size-1 (word!) spill slot for `frag` and return it.  The slot is marked
-    // reftyped so that a later call to `get_reftyped_spillslots_at_inst_point` will return it.
-    pub fn alloc_reftyped_spillslot_for_frag(&mut self, frag: RangeFrag) -> SpillSlot {
+    /// Stackmap support: Allocate a size-1 (word!) spill slot for `frag` and return it.  The slot
+    /// is marked reftyped so that a later call to `get_reftyped_spillslots_at_inst_point` will
+    /// return it.
+    pub(crate) fn alloc_reftyped_spillslot_for_frag(&mut self, frag: RangeFrag) -> SpillSlot {
         for i in 0..self.slots.len() {
             match &mut self.slots[i] {
                 LogicalSpillSlot::InUse { size: 1, tree } => {
@@ -507,10 +503,9 @@ impl SpillSlotAllocator {
         self.alloc_reftyped_spillslot_for_frag(frag) // \o/ tailcall \o/
     }
 
-    // STACKMAP SUPPORT
-    // Examine all the spill slots at `pt` and return those that are reftyped.  This is
-    // fundamentally what creates a stack map.
-    pub fn get_reftyped_spillslots_at_inst_point(&self, pt: InstPoint) -> Vec<SpillSlot> {
+    /// Stackmap support: Examine all the spill slots at `pt` and return those that are reftyped.
+    /// This is fundamentally what creates a stack map.
+    pub(crate) fn get_reftyped_spillslots_at_inst_point(&self, pt: InstPoint) -> Vec<SpillSlot> {
         let mut res = Vec::<SpillSlot>::new();
         for (i, slot) in self.slots.iter().enumerate() {
             if slot.get_refness_at_inst_point(pt) == Some(true) {

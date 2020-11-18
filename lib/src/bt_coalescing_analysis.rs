@@ -306,7 +306,7 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
         };
         let vlrixs = &reg_to_ranges_maps.vreg_to_vlrs_map[*vreg_no as usize];
         for vlrix in vlrixs {
-            for frag in &vlr_env[*vlrix].sorted_frags.frags {
+            for frag in vlr_env[*vlrix].sorted_frags.iter() {
                 many_frags_info.sorted_firsts.push((frag.first, *vlrix));
                 many_frags_info.sorted_lasts.push((frag.last, *vlrix));
             }
@@ -344,7 +344,7 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
         let vreg_no = vreg.get_index();
         let vlrixs = &reg_to_ranges_maps.vreg_to_vlrs_map[vreg_no];
         for vlrix in vlrixs {
-            for frag in &vlr_env[*vlrix].sorted_frags.frags {
+            for frag in vlr_env[*vlrix].sorted_frags.iter() {
                 if frag.last == point_to_find {
                     return Some(*vlrix);
                 }
@@ -352,6 +352,7 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
         }
         None
     };
+
     let doesVRegHaveLastUseAt = |vreg: VirtualReg, iix: InstIx| -> Option<VirtualRangeIx> {
         let point_to_find = InstPoint::new_use(iix);
         let vreg_no = vreg.get_index();
@@ -382,7 +383,7 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
         let vreg_no = vreg.get_index();
         let vlrixs = &reg_to_ranges_maps.vreg_to_vlrs_map[vreg_no];
         for vlrix in vlrixs {
-            for frag in &vlr_env[*vlrix].sorted_frags.frags {
+            for frag in vlr_env[*vlrix].sorted_frags.iter() {
                 if frag.first == point_to_find {
                     return Some(*vlrix);
                 }
@@ -390,6 +391,7 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
         }
         None
     };
+
     let doesVRegHaveFirstDefAt = |vreg: VirtualReg, iix: InstIx| -> Option<VirtualRangeIx> {
         let point_to_find = InstPoint::new_def(iix);
         let vreg_no = vreg.get_index();
@@ -430,6 +432,7 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
         }
         None
     };
+
     let doesRRegHaveLastUseAt = |rreg: RealReg, iix: InstIx| -> Option<RealRangeIx> {
         let point_to_find = InstPoint::new_use(iix);
         let rreg_no = rreg.get_index();
@@ -470,6 +473,7 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
         }
         None
     };
+
     let doesRRegHaveFirstDefAt = |rreg: RealReg, iix: InstIx| -> Option<RealRangeIx> {
         let point_to_find = InstPoint::new_def(iix);
         let rreg_no = rreg.get_index();
