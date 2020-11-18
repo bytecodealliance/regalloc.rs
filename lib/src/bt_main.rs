@@ -302,7 +302,7 @@ impl PerRealReg {
         let mut running_cost = SpillCost::zero();
 
         // "wlta" = would like to add
-        for wlta_frag in &would_like_to_add_vlr.sorted_frags.frags {
+        for wlta_frag in would_like_to_add_vlr.sorted_frags.iter() {
             let wlta_frag_ok = search_commitment_tree(
                 &mut running_set,
                 &mut running_cost,
@@ -1194,7 +1194,7 @@ pub fn alloc_main<F: Function>(
         let curr_vlr_reg = curr_vlr_vreg.to_reg();
         let curr_vlr_is_ref = curr_vlr.is_ref;
 
-        for frag in &curr_vlr.sorted_frags.frags {
+        for frag in curr_vlr.sorted_frags.iter() {
             for iix in frag.first.iix().dotdot(frag.last.iix().plus(1)) {
                 let (iix_uses_curr_vlr_reg, iix_defs_curr_vlr_reg, iix_mods_curr_vlr_reg) =
                     does_inst_use_def_or_mod_reg(&reg_vecs_and_bounds, iix, curr_vlr_reg);
@@ -1493,10 +1493,10 @@ pub fn alloc_main<F: Function>(
             let vlr2 = &vlr_env[vlrix2];
             let frags1 = &vlr1.sorted_frags;
             let frags2 = &vlr2.sorted_frags;
-            assert!(frags1.frags.len() == 1);
-            assert!(frags2.frags.len() == 1);
-            let frag1 = &frags1.frags[0];
-            let frag2 = &frags2.frags[0];
+            assert!(frags1.len() == 1);
+            assert!(frags2.len() == 1);
+            let frag1 = &frags1[0];
+            let frag2 = &frags2[0];
             assert!(frag1.first.iix() == i_min_iix);
             assert!(frag1.last.iix() == i_min_iix);
             assert!(frag2.first.iix() == i_min_iix);
@@ -1571,8 +1571,8 @@ pub fn alloc_main<F: Function>(
         debug!("editlist entry (other): {:?}", eli);
         let vlr = &vlr_env[eli.vlrix];
         let vlr_sfrags = &vlr.sorted_frags;
-        assert!(vlr_sfrags.frags.len() == 1);
-        let vlr_frag = &vlr_sfrags.frags[0];
+        assert!(vlr_sfrags.len() == 1);
+        let vlr_frag = &vlr_sfrags[0];
         let rreg = vlr.rreg.expect("Gen of spill/reload: reg not assigned?!");
         let vreg = vlr.vreg;
         match eli.kind {
@@ -1580,33 +1580,33 @@ pub fn alloc_main<F: Function>(
                 debug_assert!(vlr_frag.first.pt().is_reload());
                 debug_assert!(vlr_frag.last.pt().is_use());
                 debug_assert!(vlr_frag.first.iix() == vlr_frag.last.iix());
-                let insnR = InstToInsert::Reload {
+                let reload_inst = InstToInsert::Reload {
                     to_reg: Writable::from_reg(rreg),
                     from_slot: eli.slot,
                     for_vreg: Some(vreg),
                 };
-                let whereToR = InstExtPoint::from_inst_point(vlr_frag.first);
-                spills_n_reloads.push(InstToInsertAndExtPoint::new(insnR, whereToR));
+                let where_to_reload = InstExtPoint::from_inst_point(vlr_frag.first);
+                spills_n_reloads.push(InstToInsertAndExtPoint::new(reload_inst, where_to_reload));
                 num_reloads += 1;
             }
             BridgeKind::RtoS => {
                 debug_assert!(vlr_frag.first.pt().is_reload());
                 debug_assert!(vlr_frag.last.pt().is_spill());
                 debug_assert!(vlr_frag.first.iix() == vlr_frag.last.iix());
-                let insnR = InstToInsert::Reload {
+                let reload_inst = InstToInsert::Reload {
                     to_reg: Writable::from_reg(rreg),
                     from_slot: eli.slot,
                     for_vreg: Some(vreg),
                 };
-                let whereToR = InstExtPoint::from_inst_point(vlr_frag.first);
-                let insnS = InstToInsert::Spill {
+                let where_to_reload = InstExtPoint::from_inst_point(vlr_frag.first);
+                let spill_inst = InstToInsert::Spill {
                     to_slot: eli.slot,
                     from_reg: rreg,
                     for_vreg: Some(vreg),
                 };
-                let whereToS = InstExtPoint::from_inst_point(vlr_frag.last);
-                spills_n_reloads.push(InstToInsertAndExtPoint::new(insnR, whereToR));
-                spills_n_reloads.push(InstToInsertAndExtPoint::new(insnS, whereToS));
+                let where_to_spill = InstExtPoint::from_inst_point(vlr_frag.last);
+                spills_n_reloads.push(InstToInsertAndExtPoint::new(reload_inst, where_to_reload));
+                spills_n_reloads.push(InstToInsertAndExtPoint::new(spill_inst, where_to_spill));
                 num_reloads += 1;
                 num_spills += 1;
             }
@@ -1614,13 +1614,13 @@ pub fn alloc_main<F: Function>(
                 debug_assert!(vlr_frag.first.pt().is_def());
                 debug_assert!(vlr_frag.last.pt().is_spill());
                 debug_assert!(vlr_frag.first.iix() == vlr_frag.last.iix());
-                let insnS = InstToInsert::Spill {
+                let spill_inst = InstToInsert::Spill {
                     to_slot: eli.slot,
                     from_reg: rreg,
                     for_vreg: Some(vreg),
                 };
-                let whereToS = InstExtPoint::from_inst_point(vlr_frag.last);
-                spills_n_reloads.push(InstToInsertAndExtPoint::new(insnS, whereToS));
+                let where_to_spill = InstExtPoint::from_inst_point(vlr_frag.last);
+                spills_n_reloads.push(InstToInsertAndExtPoint::new(spill_inst, where_to_spill));
                 num_spills += 1;
             }
         }
@@ -1657,7 +1657,7 @@ pub fn alloc_main<F: Function>(
             // All the RangeFrags in `vlr_assigned` require `vlr_assigned.reg`
             // to be mapped to the real reg `i`
             // .. collect up all its constituent RangeFrags.
-            for frag in &sorted_frags.frags {
+            for frag in sorted_frags.iter() {
                 frag_map.push((frag.clone(), *vreg, rreg));
             }
         }

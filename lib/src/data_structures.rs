@@ -4,14 +4,13 @@ use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
+use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::ops::Index;
-use std::ops::IndexMut;
+use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::slice::{Iter, IterMut};
-use std::{cmp::Ordering, ops::Deref};
 
 use crate::{Function, RegUsageMapper};
 
@@ -1839,52 +1838,58 @@ impl SortedRangeFragIxs {
     }
 }
 
-//=============================================================================
-// Vectors of RangeFrags, sorted so that they are in ascending order, per
-// their InstPoint fields.  The RangeFrags may not overlap.
-
+/// Vectors of RangeFrags, sorted so that they are in ascending order, per
+/// their InstPoint fields.  The RangeFrags may not overlap.
 #[derive(Clone)]
-pub struct SortedRangeFrags {
-    pub frags: SmallVec<[RangeFrag; 4]>,
-}
+pub(crate) struct SortedRangeFrags(SmallVec<[RangeFrag; 4]>);
 
 impl fmt::Debug for SortedRangeFrags {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        self.frags.fmt(fmt)
+        self.0.fmt(fmt)
+    }
+}
+
+impl Deref for SortedRangeFrags {
+    type Target = SmallVec<[RangeFrag; 4]>;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for SortedRangeFrags {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
 impl SortedRangeFrags {
-    pub fn unit(frag: RangeFrag) -> Self {
-        let mut res = SortedRangeFrags {
-            frags: SmallVec::<[RangeFrag; 4]>::new(),
-        };
-        res.frags.push(frag);
+    pub(crate) fn unit(frag: RangeFrag) -> Self {
+        let mut res = Self(SmallVec::<[RangeFrag; 4]>::new());
+        res.0.push(frag);
         res
     }
 
-    pub fn empty() -> Self {
-        Self {
-            frags: SmallVec::<[RangeFrag; 4]>::new(),
-        }
+    pub(crate) fn empty() -> Self {
+        Self(SmallVec::<[RangeFrag; 4]>::new())
     }
 
-    pub fn overlaps(&self, other: &Self) -> bool {
-        // Since both vectors are sorted and individually non-overlapping, we
-        // can establish that they are mutually non-overlapping by walking
-        // them simultaneously and checking, at each step, that there is a
-        // unique "next lowest" frag available.
-        let frags1 = &self.frags;
-        let frags2 = &other.frags;
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
+        // Since both vectors are sorted and individually non-overlapping, we can establish that
+        // they are mutually non-overlapping by walking them simultaneously and checking, at each
+        // step, that there is a unique "next lowest" frag available.
+        let frags1 = &self.0;
+        let frags2 = &other.0;
         let n1 = frags1.len();
         let n2 = frags2.len();
         let mut c1 = 0;
         let mut c2 = 0;
         loop {
             if c1 >= n1 || c2 >= n2 {
-                // We made it to the end of one (or both) vectors without
-                // finding any conflicts.
-                return false; // "no overlaps"
+                // We made it to the end of one (or both) vectors without finding any conflicts: no
+                // overlap.
+                return false;
             }
             let f1 = &frags1[c1];
             let f2 = &frags2[c2];
@@ -1892,17 +1897,17 @@ impl SortedRangeFrags {
                 Some(Ordering::Less) => c1 += 1,
                 Some(Ordering::Greater) => c2 += 1,
                 _ => {
-                    // There's no unique "next frag" -- either they are
-                    // identical, or they overlap.  So we're done.
-                    return true; // "there's an overlap"
+                    // There's no unique "next frag" -- either they are identical, or they overlap.
+                    // So we're done.
+                    return true;
                 }
             }
         }
     }
 
     /// Does this sorted list of range fragments contain the given instruction point?
-    pub fn contains_pt(&self, pt: InstPoint) -> bool {
-        self.frags
+    pub(crate) fn contains_pt(&self, pt: InstPoint) -> bool {
+        self.0
             .binary_search_by(|frag| {
                 if pt < frag.first {
                     Ordering::Greater
@@ -2089,13 +2094,13 @@ impl RealRange {
 
 #[derive(Clone)]
 pub struct VirtualRange {
-    pub vreg: VirtualReg,
-    pub rreg: Option<RealReg>,
-    pub sorted_frags: SortedRangeFrags,
-    pub is_ref: bool,
-    pub size: u16,
-    pub total_cost: u32,
-    pub spill_cost: SpillCost, // == total_cost / size
+    pub(crate) vreg: VirtualReg,
+    pub(crate) rreg: Option<RealReg>,
+    pub(crate) sorted_frags: SortedRangeFrags,
+    pub(crate) is_ref: bool,
+    pub(crate) size: u16,
+    pub(crate) total_cost: u32,
+    pub(crate) spill_cost: SpillCost, // == total_cost / size
 }
 
 impl VirtualRange {
