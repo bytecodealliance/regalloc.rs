@@ -1131,6 +1131,7 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
 
     let vreg = int.vreg;
     let ancestor = int.ancestor;
+    let ref_typed = int.ref_typed;
 
     // Split the register mentions.
     let parent_mentions = state.intervals.get_mut(id).mentions_mut();
@@ -1215,6 +1216,7 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
         child_end,
         child_mentions,
         child_boundaries,
+        ref_typed,
     );
     child_int.parent = Some(id);
     child_int.ancestor = ancestor;

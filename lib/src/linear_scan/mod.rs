@@ -6,9 +6,9 @@
 
 use log::{info, log_enabled, trace, Level};
 
-use std::default;
 use std::env;
 use std::fmt;
+use std::{cmp::Ordering, default};
 
 use crate::inst_stream::{add_spills_reloads_and_moves, InstToInsertAndExtPoint};
 use crate::{
@@ -17,7 +17,7 @@ use crate::{
 };
 use crate::{
     data_structures::{BlockIx, InstIx, InstPoint, Point, RealReg, RegVecsAndBounds},
-    CheckerErrors,
+    CheckerErrors, StackmapRequestInfo,
 };
 
 use analysis::{AnalysisInfo, RangeFrag};
@@ -161,10 +161,31 @@ impl fmt::Display for FixedInterval {
     }
 }
 
+impl FixedInterval {
+    /// Find the fragment that contains the given instruction point.
+    /// May crash if the point doesn't belong to any fragment.
+    pub(crate) fn find_frag(&self, pt: InstPoint) -> usize {
+        self.frags
+            .binary_search_by(|frag| {
+                if pt < frag.first {
+                    Ordering::Greater
+                } else if pt >= frag.first && pt <= frag.last {
+                    Ordering::Equal
+                } else {
+                    Ordering::Less
+                }
+            })
+            .unwrap()
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct VirtualInterval {
     id: IntId,
     vreg: VirtualReg,
+
+    /// Is this interval used for a reference type?
+    ref_typed: bool,
 
     /// Parent interval in the split tree.
     parent: Option<IntId>,
@@ -220,6 +241,7 @@ impl VirtualInterval {
         end: InstPoint,
         mentions: MentionMap,
         block_boundaries: Vec<BlockBoundary>,
+        ref_typed: bool,
     ) -> Self {
         Self {
             id,
@@ -232,6 +254,7 @@ impl VirtualInterval {
             block_boundaries,
             start,
             end,
+            ref_typed,
         }
     }
     fn mentions(&self) -> &MentionMap {
@@ -570,6 +593,7 @@ fn compute_scratches(
 pub(crate) fn run<F: Function>(
     func: &mut F,
     reg_universe: &RealRegUniverse,
+    stackmap_request: Option<&StackmapRequestInfo>,
     use_checker: bool,
     opts: &LinearScanOptions,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
@@ -580,7 +604,8 @@ pub(crate) fn run<F: Function>(
         liveouts,
         cfg,
         ..
-    } = analysis::run(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
+    } = analysis::run(func, reg_universe, stackmap_request)
+        .map_err(|err| RegAllocError::Analysis(err))?;
 
     let scratches_by_rc = compute_scratches(reg_universe)?;
 
