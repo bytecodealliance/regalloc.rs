@@ -1,4 +1,4 @@
-use super::{FixedInterval, IntId, Intervals, Mention, MentionMap, VirtualInterval};
+use super::{FixedInterval, IntId, Intervals, Mention, MentionMap, Safepoints, VirtualInterval};
 use crate::{
     analysis_control_flow::{CFGInfo, InstIxToBlockIxMap},
     analysis_data_flow::collect_move_info,
@@ -47,12 +47,25 @@ pub(crate) struct RangeFrag {
     pub(crate) first: InstPoint,
     pub(crate) last: InstPoint,
     pub(crate) mentions: MentionMap,
+    pub(crate) safepoints: Safepoints,
     pub(crate) ref_typed: bool,
 }
 
 impl fmt::Debug for RangeFrag {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "[{:?}; {:?}]", self.first, self.last)
+        let safepoint_str = if !self.safepoints.is_empty() {
+            format!(
+                "; safepoints: {}",
+                self.safepoints
+                    .iter()
+                    .map(|pt| format!("{:?}", pt))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            "".into()
+        };
+        write!(fmt, "[{:?}; {:?}{}]", self.first, self.last, safepoint_str)
     }
 }
 
@@ -64,6 +77,7 @@ impl RangeFrag {
         last: InstPoint,
         mentions: MentionMap,
         ref_typed: bool,
+        safepoints: Safepoints,
     ) -> (Self, RangeFragMetrics) {
         debug_assert!(func.block_insns(bix).len() >= 1);
         debug_assert!(func.block_insns(bix).contains(first.iix()));
@@ -84,6 +98,7 @@ impl RangeFrag {
                 first,
                 last,
                 mentions,
+                safepoints,
                 ref_typed,
             },
             RangeFragMetrics { bix, kind },
@@ -218,8 +233,9 @@ pub(crate) fn run<F: Function>(
     info!("  run_analysis: begin liveness analysis");
     let (frag_ixs_per_reg, mut frag_env, frag_metrics_env, vreg_classes) = get_range_frags(
         func,
-        &reg_vecs_and_bounds,
         &reg_universe,
+        stackmap_request.map(|req| req.safepoint_insns.as_slice()),
+        &reg_vecs_and_bounds,
         &livein_sets_per_block,
         &liveout_sets_per_block,
     );
@@ -233,7 +249,7 @@ pub(crate) fn run<F: Function>(
         &cfg_info,
         &vreg_classes,
         stackmap_request.is_some(),
-    );
+    )?;
     info!("  run_analysis: end liveness analysis");
 
     // Make sure the fixed interval's fragment are sorted, to allow for binary search in misc
@@ -383,6 +399,7 @@ fn get_range_frags_for_block<F: Function>(
     rvb: &RegVecsAndBounds,
     reg_universe: &RealRegUniverse,
     vreg_classes: &Vec<RegClass>,
+    safepoints: Option<&[InstIx]>,
     bix: BlockIx,
     livein: &SparseSet<Reg>,
     liveout: &SparseSet<Reg>,
@@ -394,8 +411,41 @@ fn get_range_frags_for_block<F: Function>(
     out_frags: &mut Vec<RangeFrag>,
     out_frag_metrics: &mut Vec<RangeFragMetrics>,
 ) {
+    // Iterate to the next safepoint contained in this block.
+    let first_sp_ix = {
+        let mut first = None;
+        if let Some(safepoints) = safepoints {
+            let first_block_iix = func.block_insns(bix).first();
+            for (i, sp_iix) in safepoints.iter().enumerate() {
+                if *sp_iix >= first_block_iix {
+                    first = Some(i);
+                    break;
+                }
+            }
+        }
+        first
+    };
+
     let mut emit_range_frag =
-        |r: Reg, frag: RangeFrag, frag_metrics: RangeFragMetrics, num_real_regs: u32| {
+        |r: Reg, mut frag: RangeFrag, frag_metrics: RangeFragMetrics, num_real_regs: u32| {
+            // Make a list of all the safepoints present in this range.
+            if let (Some(ref safepoints), Some(first_sp_ix)) = (safepoints, first_sp_ix) {
+                let mut sp_ix = first_sp_ix;
+                while let Some(sp_iix) = safepoints.get(sp_ix) {
+                    if InstPoint::new_use(*sp_iix) >= frag.first {
+                        break;
+                    }
+                    sp_ix += 1;
+                }
+                while let Some(sp_iix) = safepoints.get(sp_ix) {
+                    if InstPoint::new_use(*sp_iix) > frag.last {
+                        break;
+                    }
+                    frag.safepoints.push((safepoints[sp_ix], sp_ix));
+                    sp_ix += 1;
+                }
+            }
+
             let fix = RangeFragIx::new(out_frags.len() as u32);
             out_frags.push(frag);
             out_frag_metrics.push(frag_metrics);
@@ -422,6 +472,7 @@ fn get_range_frags_for_block<F: Function>(
             mentions: MentionMap::new(),
             first: first_pt_in_block,
             last: first_pt_in_block,
+            safepoints: Default::default(),
             ref_typed: false,
         });
         visited.push(reg_state_ix as u32);
@@ -504,6 +555,7 @@ fn get_range_frags_for_block<F: Function>(
                         last: new_pt,
                         mentions: smallvec![(inst_ix, mention_set)],
                         ref_typed: false,
+                        safepoints: smallvec![],
                     })
                 }
 
@@ -514,12 +566,21 @@ fn get_range_frags_for_block<F: Function>(
                     ref mut last,
                     ref mut mentions,
                     ref mut ref_typed,
+                    ref mut safepoints,
                 }) => {
                     // Steal the mentions and replace the mutable ref by an empty vector for reuse.
                     let stolen_mentions = mem::replace(mentions, MentionMap::new());
+                    let stolen_safepoints = mem::replace(safepoints, Default::default());
 
-                    let (frag, frag_metrics) =
-                        RangeFrag::new(func, bix, *first, *last, stolen_mentions, *ref_typed);
+                    let (frag, frag_metrics) = RangeFrag::new(
+                        func,
+                        bix,
+                        *first,
+                        *last,
+                        stolen_mentions,
+                        *ref_typed,
+                        stolen_safepoints,
+                    );
                     emit_range_frag(*reg, frag, frag_metrics, num_real_regs);
 
                     let mut mention_set = Mention::new();
@@ -553,21 +614,23 @@ fn get_range_frags_for_block<F: Function>(
             last_pt_in_block,
             prev_frag.mentions,
             prev_frag.ref_typed,
+            prev_frag.safepoints,
         );
         emit_range_frag(*reg, frag, frag_metrics, num_real_regs);
     }
 
     // Finally, round up any remaining RangeFrag left in `state`.
     for r_state_ix in visited {
-        if let Some(pf) = &mut state[*r_state_ix as usize] {
+        if let Some(prev_frag) = &mut state[*r_state_ix as usize] {
             let r = reg_ix_to_reg(reg_universe, vreg_classes, *r_state_ix);
             let (frag, frag_metrics) = RangeFrag::new(
                 func,
                 bix,
-                pf.first,
-                pf.last,
-                mem::replace(&mut pf.mentions, MentionMap::new()),
-                pf.ref_typed,
+                prev_frag.first,
+                prev_frag.last,
+                mem::replace(&mut prev_frag.mentions, MentionMap::new()),
+                prev_frag.ref_typed,
+                mem::replace(&mut prev_frag.safepoints, Default::default()),
             );
             emit_range_frag(r, frag, frag_metrics, num_real_regs);
             state[*r_state_ix as usize] = None;
@@ -578,8 +641,9 @@ fn get_range_frags_for_block<F: Function>(
 #[inline(never)]
 fn get_range_frags<F: Function>(
     func: &F,
-    rvb: &RegVecsAndBounds,
     reg_universe: &RealRegUniverse,
+    safepoints: Option<&[InstIx]>,
+    rvb: &RegVecsAndBounds,
     liveins: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     liveouts: &TypedIxVec<BlockIx, SparseSet<Reg>>,
 ) -> (
@@ -630,6 +694,7 @@ fn get_range_frags<F: Function>(
             &rvb,
             reg_universe,
             &vreg_classes,
+            safepoints,
             bix,
             &liveins[bix],
             &liveouts[bix],
@@ -696,7 +761,7 @@ fn merge_range_frags<F: Function>(
     cfg_info: &CFGInfo,
     vreg_classes: &Vec</*vreg index,*/ RegClass>,
     wants_stackmaps: bool,
-) -> (Vec<FixedInterval>, Vec<VirtualInterval>, VirtualRegToRanges) {
+) -> Result<(Vec<FixedInterval>, Vec<VirtualInterval>, VirtualRegToRanges), AnalysisError> {
     info!("    merge_range_frags: begin");
     if log_enabled!(Level::Info) {
         let mut stats_num_total_incoming_frags = 0;
@@ -759,7 +824,7 @@ fn merge_range_frags<F: Function>(
                 all_frag_ixs_for_reg,
                 &frag_metrics_env,
                 frag_env,
-            );
+            )?;
             continue;
         }
 
@@ -786,7 +851,7 @@ fn merge_range_frags<F: Function>(
                     &[*fix],
                     &frag_metrics_env,
                     frag_env,
-                );
+                )?;
                 continue;
             }
 
@@ -951,7 +1016,7 @@ fn merge_range_frags<F: Function>(
                 &frag_ixs,
                 &frag_metrics_env,
                 frag_env,
-            );
+            )?;
         }
         // END merge `all_frag_ixs_for_reg` entries as much as possible
     } // END per reg loop
@@ -968,7 +1033,7 @@ fn merge_range_frags<F: Function>(
 
     info!("    merge_range_frags: end");
 
-    (result_fixed, result_virtual, vreg_to_vranges)
+    Ok((result_fixed, result_virtual, vreg_to_vranges))
 }
 
 #[inline(never)]
@@ -981,26 +1046,27 @@ fn flush_interval(
     frag_ixs: &[RangeFragIx],
     metrics: &[RangeFragMetrics],
     frags: &mut Vec<RangeFrag>,
-) {
+) -> Result<(), AnalysisError> {
     if reg.is_real() {
         // Append all the RangeFrags to this fixed interval. They'll get sorted later.
-        result_real[reg.to_real_reg().get_index()]
-            .frags
-            .extend(frag_ixs.iter().map(|&i| {
-                let frag = &mut frags[i.get() as usize];
-                RangeFrag {
-                    first: frag.first,
-                    last: frag.last,
-                    mentions: mem::replace(&mut frag.mentions, MentionMap::new()),
-                    ref_typed: frag.ref_typed,
-                }
-            }));
-        return;
+        let fixed_int = &mut result_real[reg.to_real_reg().get_index()];
+        fixed_int.frags.reserve(frag_ixs.len());
+        for &frag_ix in frag_ixs {
+            let frag = &mut frags[frag_ix.get() as usize];
+            fixed_int.frags.push(RangeFrag {
+                first: frag.first,
+                last: frag.last,
+                mentions: mem::replace(&mut frag.mentions, MentionMap::new()),
+                ref_typed: false,
+                safepoints: Default::default(),
+            })
+        }
+        return Ok(());
     }
 
     debug_assert!(reg.is_virtual());
 
-    let (start, end, mentions, block_boundaries) = {
+    let (start, end, mentions, block_boundaries, safepoints) = {
         // Merge all the mentions together.
         let capacity = frag_ixs
             .iter()
@@ -1010,15 +1076,18 @@ fn flush_interval(
         let mut start = InstPoint::max_value();
         let mut end = InstPoint::min_value();
 
-        // Merge all the register mentions together.
+        // Merge all the register mentions and safepoints together.
 
         // TODO rework this!
         let mut mentions = MentionMap::with_capacity(capacity);
+        let mut safepoints: Safepoints = Default::default();
         for frag in frag_ixs.iter().map(|fix| &frags[fix.get() as usize]) {
             mentions.extend(frag.mentions.iter().cloned());
+            safepoints.extend(frag.safepoints.iter().cloned());
             start = InstPoint::min(start, frag.first);
             end = InstPoint::max(end, frag.last);
         }
+        safepoints.sort_unstable_by_key(|tuple| tuple.0);
         mentions.sort_unstable_by_key(|tuple| tuple.0);
 
         // Merge mention set that are at the same instruction.
@@ -1098,7 +1167,7 @@ fn flush_interval(
         // Lexicographic sort: first by block index, then by position.
         block_boundaries.sort_unstable();
 
-        (start, end, mentions, block_boundaries)
+        (start, end, mentions, block_boundaries, safepoints)
     };
 
     // If any frag associated to this interval has been marked as reftyped, this is reftyped.
@@ -1115,6 +1184,7 @@ fn flush_interval(
         mentions,
         block_boundaries,
         ref_typed,
+        safepoints,
     );
     int.ancestor = Some(id);
 
@@ -1126,4 +1196,6 @@ fn flush_interval(
             frag_ixs: frag_ixs.into_iter().cloned().collect(),
         })
     }
+
+    Ok(())
 }

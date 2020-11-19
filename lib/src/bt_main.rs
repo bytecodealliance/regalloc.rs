@@ -1720,14 +1720,13 @@ pub fn alloc_main<F: Function>(
 
     let final_insns_and_targetmap_and_new_safepoints__or_err = edit_inst_stream(
         func,
-        &safepoint_insns,
         spills_n_reloads,
         &iixs_to_nop_out,
         frag_map,
         &reg_universe,
         use_checker,
+        stackmap_request,
         &stackmaps[..],
-        &reftyped_vregs[..],
     );
 
     // ======== END Create final instruction stream ========

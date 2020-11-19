@@ -15,7 +15,10 @@ b0:
 
 b1:
     safepoint
-    if_then_else v10I, b0:b0, b0:b0
+    if_then_else v10I, b1b0, b1b0
+
+b1b0:
+    goto b0
 
 b2:
     safepoint
@@ -23,4 +26,7 @@ b2:
     load    r2I, [v0I, 24080239]
     copy    v4I, v0I
     useref  r2I, v13I
-    if_then_else v10I, b0:b0, b0:b0
+    if_then_else v10I, b2b0, b2b0
+
+b2b0:
+    goto b0
