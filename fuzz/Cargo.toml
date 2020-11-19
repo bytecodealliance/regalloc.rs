@@ -19,27 +19,27 @@ members = ["."]
 
 [[bin]]
 name = "bt"
-path = "fuzz_bt.rs"
+path = "fuzz_targets/bt.rs"
 
 [[bin]]
 name = "bt_differential"
-path = "fuzz_bt_differential.rs"
+path = "fuzz_targets/bt_differential.rs"
 
 [[bin]]
 name = "lsra"
-path = "fuzz_lsra.rs"
+path = "fuzz_targets/lsra.rs"
 
 [[bin]]
 name = "lsra_differential"
-path = "fuzz_lsra_differential.rs"
+path = "fuzz_targets/lsra_differential.rs"
 
 [[bin]]
 name = "validator"
-path = "fuzz_validator.rs"
+path = "fuzz_targets/validator.rs"
 
 [[bin]]
 name = "parser"
-path = "fuzz_parser.rs"
+path = "fuzz_targets/parser.rs"
 
 [profile.release]
 debug = true
