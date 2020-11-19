@@ -75,7 +75,11 @@ impl ToString for AnalysisError {
                 )
             }
             AnalysisError::IllegalRealReg(reg) => {
-                format!("instructions mention real register {:?}, which either isn't defined in the register universe, or is a 'suggested_scratch' register", reg)
+                format!(
+                    "instructions mention real register {:?}, which either isn't defined in the
+                    register universe, or is a 'suggested_scratch' register",
+                    reg
+                )
             }
             AnalysisError::UnreachableBlocks => "at least one block is unreachable".to_string(),
             AnalysisError::ImplementationLimitsExceeded => {

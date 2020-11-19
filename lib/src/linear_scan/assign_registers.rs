@@ -226,7 +226,11 @@ pub(crate) fn run<F: Function>(
             }
 
             if state.intervals.get(id).location.reg().is_some() {
-                state.activity.set_active(id);
+                if maybe_handle_safepoints(&mut state, id) {
+                    // Even it if may have been spilled (because of a safepoint), the parent
+                    // interval may still be active.
+                    state.activity.set_active(id);
+                }
             }
 
             // Reset reusable state.
@@ -908,6 +912,49 @@ fn allocate_blocked_reg<F: Function>(
     Ok(())
 }
 
+/// Handle safepoints by causing a spill/reload sequence across safepoint instructions, if needed.
+///
+/// Returns true if the original interval still lives in a register, after this function has been
+/// called.
+fn maybe_handle_safepoints<F: Function>(state: &mut State<F>, id: IntId) -> bool {
+    let int = state.intervals.get(id);
+    if !int.ref_typed {
+        return true;
+    }
+
+    let next_safepoint = int.safepoints().first().clone();
+    let sp_iix = match next_safepoint {
+        Some(&(sp_iix, _)) => sp_iix,
+        None => return true,
+    };
+
+    lsra_assert!(int.start.iix() <= sp_iix && sp_iix <= int.end.iix());
+
+    let sp_def = InstPoint::new_def(sp_iix);
+    if let Some(prev_use) = last_use(&state.intervals.get(id), sp_def, &state.reg_uses) {
+        if prev_use == sp_def {
+            // The value is being redefined by the instruction; there's no need to keep it alive on the
+            // stack, and we can use the same register assignment before and after the safepoint.
+            return true;
+        }
+
+        // The value is not redefined by the instruction, split and spill before the safepoint.
+        split_and_spill(state, id, InstPoint::new_use(sp_iix));
+        return true;
+    }
+
+    // No use before the safepoint! Split the interval so a new child is put on the allocation
+    // queue at its next use, and spill the interval.
+    if let Some(nu) = next_use(&state.intervals.get(id), sp_def, &state.reg_uses) {
+        let child = split(state, id, nu);
+        state.insert_unhandled(child);
+    }
+
+    // Not in a register anymore.
+    state.spill(id);
+    return false;
+}
+
 /// Finds an optimal split position, whenever we're given a range of possible
 /// positions where to split.
 fn find_optimal_split_pos<F: Function>(
@@ -1207,6 +1254,24 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
         .block_boundaries_mut()
         .split_off(index);
 
+    // Now split the safepoints.
+    let child_safepoints = {
+        // Remove from the parent all the safepoints that aren't included in the new bounds.
+        let mut i = 0;
+        let parent_safepoints = state.intervals.get_mut(id).safepoints_mut();
+        while let Some(&(sp_iix, _sp_ix)) = parent_safepoints.get(i) {
+            if InstPoint::new_use(sp_iix) >= child_start {
+                break;
+            }
+            i += 1;
+        }
+        let child = parent_safepoints.iter().skip(i).cloned().collect();
+        parent_safepoints.truncate(i);
+        child
+    };
+
+    trace!("child interval has safepoints {:?}", child_safepoints);
+
     // Phew: eventually create the child interval.
     let child_id = IntId(state.intervals.num_virtual_intervals());
     let mut child_int = VirtualInterval::new(
@@ -1217,6 +1282,7 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
         child_mentions,
         child_boundaries,
         ref_typed,
+        child_safepoints,
     );
     child_int.parent = Some(id);
     child_int.ancestor = ancestor;

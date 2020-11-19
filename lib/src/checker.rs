@@ -55,11 +55,11 @@
 
 #![allow(dead_code)]
 
-use crate::analysis_data_flow::get_san_reg_sets_for_insn;
 use crate::data_structures::{
     BlockIx, InstIx, Map, RealReg, RealRegUniverse, Reg, RegSets, SpillSlot, VirtualReg, Writable,
 };
 use crate::inst_stream::{ExtPoint, InstExtPoint, InstToInsertAndExtPoint};
+use crate::{analysis_data_flow::get_san_reg_sets_for_insn, StackmapRequestInfo};
 use crate::{Function, RegUsageMapper};
 
 use rustc_hash::FxHashSet;
@@ -631,6 +631,12 @@ pub(crate) struct CheckerContext {
     checker_inst_map: Map<InstExtPoint, Vec<Inst>>,
 }
 
+/// Full infromation needed by the checker for checking reference types.
+pub(crate) struct CheckerStackmapInfo<'a> {
+    pub(crate) request: &'a StackmapRequestInfo,
+    pub(crate) stackmaps: &'a [Vec<SpillSlot>],
+}
+
 impl CheckerContext {
     /// Create a new checker context for the given function, which is about to be edited with the
     /// given instruction insertions.
@@ -638,11 +644,8 @@ impl CheckerContext {
         f: &F,
         ru: &RealRegUniverse,
         insts_to_add: &Vec<InstToInsertAndExtPoint>,
-        safepoint_insns: &[InstIx],
-        stackmaps: &[Vec<SpillSlot>],
-        reftyped_vregs: &[VirtualReg],
+        stackmap_info: Option<CheckerStackmapInfo>,
     ) -> CheckerContext {
-        assert!(safepoint_insns.len() == stackmaps.len());
         let mut checker_inst_map: Map<InstExtPoint, Vec<Inst>> = Map::default();
         for &InstToInsertAndExtPoint { ref inst, ref iep } in insts_to_add {
             let checker_insts = checker_inst_map
@@ -650,18 +653,31 @@ impl CheckerContext {
                 .or_insert_with(|| vec![]);
             checker_insts.push(inst.to_checker_inst());
         }
-        for (iix, slots) in safepoint_insns.iter().zip(stackmaps.iter()) {
-            let iep = InstExtPoint::new(*iix, ExtPoint::Use);
-            let mut slots = slots.clone();
-            slots.sort();
-            checker_inst_map
-                .entry(iep)
-                .or_insert_with(|| vec![])
-                .push(Inst::Safepoint {
-                    inst_ix: *iix,
-                    slots,
-                });
-        }
+
+        let reftyped_vregs = if let Some(info) = stackmap_info {
+            assert!(info.request.safepoint_insns.len() == info.stackmaps.len());
+            for (iix, slots) in info
+                .request
+                .safepoint_insns
+                .iter()
+                .zip(info.stackmaps.iter())
+            {
+                let iep = InstExtPoint::new(*iix, ExtPoint::Use);
+                let mut slots = slots.clone();
+                slots.sort();
+                checker_inst_map
+                    .entry(iep)
+                    .or_insert_with(|| vec![])
+                    .push(Inst::Safepoint {
+                        inst_ix: *iix,
+                        slots,
+                    });
+            }
+            info.request.reftyped_vregs.as_slice()
+        } else {
+            &[]
+        };
+
         let checker = Checker::new(f, ru, reftyped_vregs);
         CheckerContext {
             checker,
