@@ -55,8 +55,13 @@ fn main() {
             clap::Arg::with_name("snapshot")
             .short("s")
             .takes_value(true)
-            .help("Path to a snapshot file (.bin) or directory containing snapshot files.")
-    );
+            .help("Path to a snapshot file (.bin) or directory containing snapshot files."))
+        .arg(
+            clap::Arg::with_name("run-snapshot")
+            .short("r")
+            .takes_value(false)
+            .help("Rerun the whole program as a snapshotted test.")
+            );
 
     let matches = app.get_matches();
     if matches.value_of("snapshot").is_none() && matches.value_of("test").is_none() {
@@ -120,16 +125,20 @@ fn main() {
 
     // Just so we can run it later.  Not needed for actual allocation.
     let original_func = func.clone();
-    let sri = func.get_stackmap_request();
+    let stackmap_request = func.get_stackmap_request();
 
-    let result =
-        match allocate_registers_with_opts(&mut func, &reg_universe, sri.as_ref(), opts.clone()) {
-            Err(e) => {
-                println!("allocation failed: {}", e);
-                return;
-            }
-            Ok(r) => r,
-        };
+    let result = match allocate_registers_with_opts(
+        &mut func,
+        &reg_universe,
+        stackmap_request.as_ref(),
+        opts.clone(),
+    ) {
+        Err(e) => {
+            println!("allocation failed: {}", e);
+            return;
+        }
+        Ok(r) => r,
+    };
 
     let num_spill_slots = result.num_spill_slots;
 
@@ -164,11 +173,13 @@ fn main() {
 
     check_results(&before_regalloc_result, &after_regalloc_result);
 
-    println!("Re-running as snapshotted test case...");
-    let mut snapshot = IRSnapshot::from_function(&original_func, &reg_universe);
-    println!("Constructed snapshot, running...");
-    snapshot.allocate(opts).expect("generic allocation failed!");
-    println!("Success!");
+    if matches.is_present("run-snapshot") {
+        println!("Re-running as snapshotted test case...");
+        let mut snapshot = IRSnapshot::from_function(&original_func, &reg_universe);
+        println!("Constructed snapshot, running...");
+        snapshot.allocate(opts).expect("generic allocation failed!");
+        println!("Success!");
+    }
 }
 
 fn run_snapshot(path: &str, opts: Options, quiet: bool) {
