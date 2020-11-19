@@ -1368,14 +1368,15 @@ impl<'a> IState<'a> {
         }
     }
 
-    fn set_spill_slot_u32(&mut self, slot: SpillSlot, val: u32) {
+    fn set_spill_slot_u32(&mut self, slot: SpillSlot, val: Value) {
         // Auto-resize the vector if necessary
         let ix = slot.get_usize();
         if ix >= self.slots.len() {
             self.slots.resize(ix + 1, None);
         }
         debug_assert!(ix < self.slots.len());
-        self.slots[ix] = Some(Value::U32(val));
+        debug_assert!(matches!(val, Value::Ref(_) | Value::U32(_)));
+        self.slots[ix] = Some(val);
     }
 
     fn set_spill_slot_f32(&mut self, slot: SpillSlot, val: f32) {
@@ -1543,7 +1544,7 @@ impl<'a> IState<'a> {
                 self.set_mem_f32(addr_v, src_v)?;
             }
             Inst::Spill { dst, src } => {
-                let src_v = self.get_real_reg(*src)?.to_u32();
+                let src_v = self.get_real_reg(*src)?;
                 self.set_spill_slot_u32(*dst, src_v);
                 self.num_spills += 1;
             }
@@ -1553,8 +1554,12 @@ impl<'a> IState<'a> {
                 self.num_spills += 1;
             }
             Inst::Reload { dst, src } => {
-                let src_v = self.get_spill_slot(*src).to_u32();
-                self.set_reg_u32(dst.to_reg(), src_v);
+                let src_v = self.get_spill_slot(*src);
+                match src_v {
+                    Value::Ref(n) => self.set_reg_ref(dst.to_reg(), n),
+                    Value::U32(n) => self.set_reg_u32(dst.to_reg(), n),
+                    _ => panic!("must be a ref or u32"),
+                }
                 self.num_reloads += 1;
             }
             Inst::ReloadF { dst, src } => {
