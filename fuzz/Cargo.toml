@@ -13,35 +13,38 @@ libfuzzer-sys = "0.3"
 minira-util = { path = ".." }
 regalloc = { path = "../lib", features = ["fuzzing"] }
 
-# Prevent this from interfering with workspaces
-[workspace]
-members = ["."]
-
 [[bin]]
 name = "bt"
 path = "fuzz_targets/bt.rs"
+test = false
+doc = false
 
 [[bin]]
 name = "bt_differential"
 path = "fuzz_targets/bt_differential.rs"
+test = false
+doc = false
 
 [[bin]]
 name = "lsra"
 path = "fuzz_targets/lsra.rs"
+test = false
+doc = false
 
 [[bin]]
 name = "lsra_differential"
 path = "fuzz_targets/lsra_differential.rs"
+test = false
+doc = false
 
 [[bin]]
 name = "validator"
 path = "fuzz_targets/validator.rs"
+test = false
+doc = false
 
 [[bin]]
 name = "parser"
 path = "fuzz_targets/parser.rs"
-
-[profile.release]
-debug = true
-debug-assertions = true
-overflow-checks = true
+test = false
+doc = false

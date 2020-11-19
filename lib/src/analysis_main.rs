@@ -57,26 +57,33 @@ pub enum AnalysisError {
 impl ToString for AnalysisError {
     fn to_string(&self) -> String {
         match self {
-      AnalysisError::CriticalEdge { from, to } => {
-        format!("critical edge detected, from {:?} to {:?}", from, to)
-      }
-      AnalysisError::EntryLiveinValues(regs) => {
-        let regs_string = regs.iter().map(|reg| format!("{:?}", reg)).collect::<Vec<_>>().join(", ");
-        format!("entry block has love-in value not present in function liveins: {}", regs_string)
-      }
-      AnalysisError::IllegalRealReg(reg) => {
-        format!("instructions mention real register {:?}, which either isn't defined in the register universe, or is a 'suggested_scratch' register", reg)
-      }
-      AnalysisError::UnreachableBlocks => {
-        "at least one block is unreachable".to_string()
-      }
-      AnalysisError::ImplementationLimitsExceeded => {
-        "implementation limits exceeded (more than 1 million blocks or 16 million insns)".to_string()
-      }
-      AnalysisError::LSRACantDoStackmaps => {
-        "LSRA *and* stackmap creation requested; but this combination is not yet supported".to_string()
-      }
-    }
+            AnalysisError::CriticalEdge { from, to } => {
+                format!("critical edge detected, from {:?} to {:?}", from, to)
+            }
+            AnalysisError::EntryLiveinValues(regs) => {
+                let regs_string = regs
+                    .iter()
+                    .map(|reg| format!("{:?}", reg))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "entry block has love-in value not present in function liveins: {}",
+                    regs_string
+                )
+            }
+            AnalysisError::IllegalRealReg(reg) => {
+                format!("instructions mention real register {:?}, which either isn't defined in the register universe, or is a 'suggested_scratch' register", reg)
+            }
+            AnalysisError::UnreachableBlocks => "at least one block is unreachable".to_string(),
+            AnalysisError::ImplementationLimitsExceeded => {
+                "implementation limits exceeded (more than 1 million blocks or 16 million insns)"
+                    .to_string()
+            }
+            AnalysisError::LSRACantDoStackmaps => {
+                "LSRA *and* stackmap creation requested; but this combination is not yet supported"
+                    .to_string()
+            }
+        }
     }
 }
 
