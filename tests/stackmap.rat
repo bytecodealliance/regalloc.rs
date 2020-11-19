@@ -1,0 +1,11 @@
+reftype_start = 1
+v0 = I32
+v1_ref = I32
+real = real I32 2
+
+b0:
+    imm     v0, 42
+    makeref v1_ref, v0
+    safepoint
+    useref  real, v1_ref
+    finish

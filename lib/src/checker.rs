@@ -316,10 +316,17 @@ impl CheckerState {
                 }
             }
         }
+        // Mark registers holding reference values as unknown, forcing the need for a reload around
+        // the safepoint.
+        for (_, val) in &mut self.reg_values {
+            if let &mut CheckerValue::Reg(_, true) = val {
+                *val = CheckerValue::Unknown;
+            }
+        }
     }
 
     /// Update according to instruction.
-    pub(crate) fn update(&mut self, inst: &Inst) {
+    fn update(&mut self, inst: &Inst) {
         match inst {
             &Inst::Op {
                 ref defs_orig,

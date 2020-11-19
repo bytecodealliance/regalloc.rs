@@ -130,7 +130,7 @@ pub fn do_reftypes_analysis(
         } else {
             let vrange = &mut vlr_env[range.to_virtual()];
             debug_assert!(!vrange.is_ref);
-            debug!(" -> rrange {:?} is reffy", range.to_virtual());
+            debug!(" -> vrange {:?} is reffy", range.to_virtual());
             vrange.is_ref = true;
         }
     }
