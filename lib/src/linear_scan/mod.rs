@@ -10,11 +10,14 @@ use std::default;
 use std::env;
 use std::fmt;
 
-use crate::data_structures::{BlockIx, InstIx, InstPoint, Point, RealReg, RegVecsAndBounds};
 use crate::inst_stream::{add_spills_reloads_and_moves, InstToInsertAndExtPoint};
 use crate::{
     checker::CheckerContext, reg_maps::MentionRegUsageMapper, Function, RealRegUniverse,
     RegAllocError, RegAllocResult, RegClass, Set, SpillSlot, VirtualReg, NUM_REG_CLASSES,
+};
+use crate::{
+    data_structures::{BlockIx, InstIx, InstPoint, Point, RealReg, RegVecsAndBounds},
+    CheckerErrors,
 };
 
 use analysis::{AnalysisInfo, RangeFrag};
@@ -626,28 +629,8 @@ fn set_registers<F: Function>(
     reg_universe: &RealRegUniverse,
     use_checker: bool,
     memory_moves: &Vec<InstToInsertAndExtPoint>,
-) -> Set<RealReg> {
+) -> Result<Set<RealReg>, CheckerErrors> {
     info!("set_registers");
-
-    // Set up checker state, if indicated by our configuration.
-    let mut checker: Option<CheckerContext> = None;
-    let mut insn_blocks: Vec<BlockIx> = vec![];
-    if use_checker {
-        checker = Some(CheckerContext::new(
-            func,
-            reg_universe,
-            memory_moves,
-            &[],
-            &[],
-            &[],
-        ));
-        insn_blocks.resize(func.insns().len(), BlockIx::new(0));
-        for block_ix in func.blocks() {
-            for insn_ix in func.block_insns(block_ix) {
-                insn_blocks[insn_ix.get() as usize] = block_ix;
-            }
-        }
-    }
 
     let mut clobbered_registers = Set::empty();
 
@@ -659,7 +642,7 @@ fn set_registers<F: Function>(
 
     if capacity == 0 {
         // No virtual registers have been allocated, exit early.
-        return clobbered_registers;
+        return Ok(clobbered_registers);
     }
 
     let mut mention_map = Vec::with_capacity(capacity);
@@ -682,80 +665,105 @@ fn set_registers<F: Function>(
     // Iterate over all the mentions.
     let mut mapper = MentionRegUsageMapper::new();
 
-    let flush_inst = |func: &mut F,
-                      mapper: &mut MentionRegUsageMapper,
-                      iix: InstIx,
-                      checker: Option<&mut CheckerContext>| {
-        trace!("map_regs for {:?}", iix);
-        let mut inst = func.get_insn_mut(iix);
-        F::map_regs(&mut inst, mapper);
-
-        if let Some(checker) = checker {
-            let block_ix = insn_blocks[iix.get() as usize];
-            checker
-                .handle_insn(reg_universe, func, block_ix, iix, mapper)
-                .unwrap();
-        }
-
-        mapper.clear();
-    };
-
-    let mut prev_iix = mention_map[0].0;
-    for (iix, mention_set, vreg, rreg) in mention_map {
-        if prev_iix != iix {
-            // Flush previous instruction.
-            flush_inst(func, &mut mapper, prev_iix, checker.as_mut());
-            prev_iix = iix;
-        }
-
-        trace!(
-            "{:?}: {:?} is in {:?} at {:?}",
-            iix,
-            vreg,
-            rreg,
-            mention_set
-        );
-
-        // Fill in new information at the given index.
-        if mention_set.is_use() {
-            if let Some(prev_rreg) = mapper.lookup_use(vreg) {
-                debug_assert_eq!(prev_rreg, rreg, "different use allocs for {:?}", vreg);
-            }
-            mapper.set_use(vreg, rreg);
-        }
-
-        let included_in_clobbers = func.is_included_in_clobbers(func.get_insn(iix));
-        if mention_set.is_mod() {
-            if let Some(prev_rreg) = mapper.lookup_use(vreg) {
-                debug_assert_eq!(prev_rreg, rreg, "different use allocs for {:?}", vreg);
-            }
-            if let Some(prev_rreg) = mapper.lookup_def(vreg) {
-                debug_assert_eq!(prev_rreg, rreg, "different def allocs for {:?}", vreg);
-            }
-
-            mapper.set_use(vreg, rreg);
-            mapper.set_def(vreg, rreg);
-            if included_in_clobbers {
-                clobbered_registers.insert(rreg);
-            }
-        }
-
-        if mention_set.is_def() {
-            if let Some(prev_rreg) = mapper.lookup_def(vreg) {
-                debug_assert_eq!(prev_rreg, rreg, "different def allocs for {:?}", vreg);
-            }
-
-            mapper.set_def(vreg, rreg);
-            if included_in_clobbers {
-                clobbered_registers.insert(rreg);
+    // Set up checker state, if indicated by our configuration.
+    let mut checker: Option<CheckerContext> = None;
+    let mut insn_blocks: Vec<BlockIx> = vec![];
+    if use_checker {
+        checker = Some(CheckerContext::new(
+            func,
+            reg_universe,
+            memory_moves,
+            &[],
+            &[],
+            &[],
+        ));
+        insn_blocks.resize(func.insns().len(), BlockIx::new(0));
+        for block_ix in func.blocks() {
+            for insn_ix in func.block_insns(block_ix) {
+                insn_blocks[insn_ix.get() as usize] = block_ix;
             }
         }
     }
 
-    // Flush last instruction.
-    flush_inst(func, &mut mapper, prev_iix, checker.as_mut());
+    let mut cur_quad_ix = 0;
+    for func_inst_ix in func.insn_indices() {
+        // Several items in the mention_map array may refer to the same instruction index, so
+        // iterate over all of them that are related to the current instruction index.
+        while let Some((iix, mention_set, vreg, rreg)) = mention_map.get(cur_quad_ix) {
+            if func_inst_ix != *iix {
+                break;
+            }
 
-    clobbered_registers
+            trace!(
+                "{:?}: {:?} is in {:?} at {:?}",
+                iix,
+                vreg,
+                rreg,
+                mention_set
+            );
+
+            // Fill in new information at the given index.
+            if mention_set.is_use() {
+                if let Some(prev_rreg) = mapper.lookup_use(*vreg) {
+                    debug_assert_eq!(prev_rreg, *rreg, "different use allocs for {:?}", vreg);
+                }
+                mapper.set_use(*vreg, *rreg);
+            }
+
+            let included_in_clobbers = func.is_included_in_clobbers(func.get_insn(*iix));
+            if mention_set.is_mod() {
+                if let Some(prev_rreg) = mapper.lookup_use(*vreg) {
+                    debug_assert_eq!(prev_rreg, *rreg, "different use allocs for {:?}", vreg);
+                }
+                if let Some(prev_rreg) = mapper.lookup_def(*vreg) {
+                    debug_assert_eq!(prev_rreg, *rreg, "different def allocs for {:?}", vreg);
+                }
+
+                mapper.set_use(*vreg, *rreg);
+                mapper.set_def(*vreg, *rreg);
+                if included_in_clobbers {
+                    clobbered_registers.insert(*rreg);
+                }
+            }
+
+            if mention_set.is_def() {
+                if let Some(prev_rreg) = mapper.lookup_def(*vreg) {
+                    debug_assert_eq!(prev_rreg, *rreg, "different def allocs for {:?}", *vreg);
+                }
+
+                mapper.set_def(*vreg, *rreg);
+                if included_in_clobbers {
+                    clobbered_registers.insert(*rreg);
+                }
+            }
+
+            cur_quad_ix += 1;
+        }
+
+        // At this point we've correctly filled the mapper; actually map the virtual registers to
+        // the real ones in the Function.
+        trace!("map_regs for {:?}", func_inst_ix);
+
+        // If available, make sure to update the checker's state *before* actually mapping the
+        // register; the checker must see the function with virtual registers, not real ones.
+        if let Some(ref mut checker) = checker {
+            let block_ix = insn_blocks[func_inst_ix.get() as usize];
+            checker
+                .handle_insn(reg_universe, func, block_ix, func_inst_ix, &mapper)
+                .unwrap();
+        }
+
+        let mut inst = func.get_insn_mut(func_inst_ix);
+        F::map_regs(&mut inst, &mapper);
+
+        mapper.clear();
+    }
+
+    if let Some(checker) = checker {
+        checker.run()?;
+    }
+
+    Ok(clobbered_registers)
 }
 
 /// Fills in the register assignments into instructions.
@@ -776,7 +784,8 @@ fn apply_registers<F: Function>(
         reg_universe,
         use_checker,
         &memory_moves,
-    );
+    )
+    .map_err(|err| RegAllocError::RegChecker(err))?;
 
     let safepoint_insns = vec![];
     let (final_insns, target_map, new_to_old_insn_map, new_safepoint_insns) =
