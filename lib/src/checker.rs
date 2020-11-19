@@ -436,6 +436,7 @@ pub(crate) struct Checker {
     bb_succs: Map<BlockIx, Vec<BlockIx>>,
     bb_insts: Map<BlockIx, Vec<Inst>>,
     reftyped_vregs: FxHashSet<VirtualReg>,
+    has_run: bool,
 }
 
 fn map_regs<F: Fn(VirtualReg) -> Option<RealReg>>(
@@ -496,6 +497,7 @@ impl Checker {
             bb_succs,
             bb_insts,
             reftyped_vregs,
+            has_run: false,
         }
     }
 
@@ -616,6 +618,7 @@ impl Checker {
     /// or `Ok(())` otherwise.
     pub(crate) fn run(mut self) -> Result<(), CheckerErrors> {
         debug!("Checker: full body is:\n{:?}", self.bb_insts);
+        self.has_run = true;
         self.analyze();
         self.find_errors()
     }
@@ -720,5 +723,13 @@ impl CheckerContext {
     /// Run the underlying checker, once all instructions have been added.
     pub(crate) fn run(self) -> Result<(), CheckerErrors> {
         self.checker.run()
+    }
+}
+
+impl Drop for Checker {
+    fn drop(&mut self) {
+        if !self.has_run {
+            panic!("Programmer error: the CheckerContext run() function hasn't been called");
+        }
     }
 }
