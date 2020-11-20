@@ -431,7 +431,7 @@ impl Arbitrary for Func {
             name: "funk".to_string(),
             entry,
             num_virtual_regs: (num_virtual_regs + num_reftyped_regs) as u32,
-            reftype_reg_start: num_virtual_regs as u32,
+            reftype_reg_start: Some(num_virtual_regs as u32),
             insns: insts,
             blocks,
         })

@@ -7,7 +7,10 @@ use std::collections::HashSet;
 
 use std::{borrow::Cow, fmt};
 
-use crate::validator::{validate, Context as ValidatorContext, RegRef};
+use crate::{
+    parser::REFTYPE_START,
+    validator::{validate, Context as ValidatorContext, RegRef},
+};
 
 use log::debug;
 
@@ -1701,7 +1704,7 @@ pub struct Func {
     pub name: String,
     pub entry: Option<Label>,
     pub num_virtual_regs: u32,
-    pub reftype_reg_start: u32, // all vregs >= this index are reftyped.
+    pub reftype_reg_start: Option<u32>, // all vregs >= this index are reftyped.
     pub insns: TypedIxVec<InstIx, Inst>, // indexed by InstIx
 
     // Note that `blocks` must be in order of increasing `Block::start`
@@ -1729,7 +1732,7 @@ impl Func {
             name: name.to_string(),
             entry: None,
             num_virtual_regs: 0,
-            reftype_reg_start: 0,
+            reftype_reg_start: None,
             insns: TypedIxVec::<InstIx, Inst>::new(),
             blocks: TypedIxVec::<BlockIx, Block>::new(),
         }
@@ -1821,6 +1824,9 @@ impl Func {
         used_rregs.sort();
 
         writeln!(fmt, "; {}", who)?;
+        if let Some(start) = self.reftype_reg_start {
+            writeln!(fmt, "{} = {}", REFTYPE_START, start)?;
+        }
         for vreg in used_vregs {
             writeln!(fmt, "{:?} = {:?}", vreg, vreg.get_class())?;
         }
@@ -1923,31 +1929,33 @@ impl Func {
     }
 
     pub fn get_stackmap_request(&self) -> Option<StackmapRequestInfo> {
-        if self.reftype_reg_start == self.num_virtual_regs {
-            None
-        } else {
-            let reftyped_vregs = (self.reftype_reg_start..self.num_virtual_regs)
-                .map(|index| Reg::new_virtual(RegClass::I32, index).to_virtual_reg())
-                .collect::<Vec<_>>();
-            let mut safepoint_insns = vec![];
-            for iix in self.insns.range() {
-                match self.insns[iix] {
-                    Inst::Safepoint => {
-                        safepoint_insns.push(iix);
+        self.reftype_reg_start.and_then(|reftype_reg_start| {
+            if reftype_reg_start == self.num_virtual_regs {
+                None
+            } else {
+                let reftyped_vregs = (reftype_reg_start..self.num_virtual_regs)
+                    .map(|index| Reg::new_virtual(RegClass::I32, index).to_virtual_reg())
+                    .collect::<Vec<_>>();
+                let mut safepoint_insns = vec![];
+                for iix in self.insns.range() {
+                    match self.insns[iix] {
+                        Inst::Safepoint => {
+                            safepoint_insns.push(iix);
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
+                debug!(
+                    "SRI: reftyped_vregs = {:?}, safepoint_insns = {:?}",
+                    reftyped_vregs, safepoint_insns
+                );
+                Some(StackmapRequestInfo {
+                    reftype_class: RegClass::I32,
+                    reftyped_vregs,
+                    safepoint_insns,
+                })
             }
-            debug!(
-                "SRI: reftyped_vregs = {:?}, safepoint_insns = {:?}",
-                reftyped_vregs, safepoint_insns
-            );
-            Some(StackmapRequestInfo {
-                reftype_class: RegClass::I32,
-                reftyped_vregs,
-                safepoint_insns,
-            })
-        }
+        })
     }
 }
 
