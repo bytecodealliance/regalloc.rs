@@ -13,6 +13,8 @@ use regalloc::{Reg, RegClass};
 
 use crate::test_framework::*;
 
+pub(crate) const REFTYPE_START: &'static str = "reftype_start";
+
 #[derive(Debug)]
 pub enum ParseError {
     IoError(io::Error),
@@ -428,9 +430,9 @@ pub fn parse_content(func_name: &str, content: &str) -> ParseResult<Func> {
     loop {
         name = parser.read_ident()?;
         let c = parser.read_char()?;
-        if &name == "reftype_start" && c == '=' {
+        if &name == REFTYPE_START && c == '=' {
             let index = parser.read_int()?;
-            parser.func.reftype_reg_start = index;
+            parser.func.reftype_reg_start = Some(index);
         } else if c == '=' {
             // variable declaration.
             let real_or_class = parser.read_ident()?;
