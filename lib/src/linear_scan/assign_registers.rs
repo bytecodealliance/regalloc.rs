@@ -510,7 +510,7 @@ impl<'a, F: Function> State<'a, F> {
         } else {
             let size_slot = self.func.get_spillslot_size(vreg.get_class(), vreg);
             let spill_slot = self.next_spill_slot.round_up(size_slot);
-            self.next_spill_slot = self.next_spill_slot.inc(1);
+            self.next_spill_slot = spill_slot.inc(1);
             self.spill_map.insert(vreg, spill_slot);
             spill_slot
         };
