@@ -54,11 +54,12 @@ struct ActivityTracker {
 }
 
 impl ActivityTracker {
-    fn new(intervals: &Intervals) -> Self {
+    fn new(intervals: &Intervals, scratches_by_rc: &[Option<RealReg>]) -> Self {
         let mut inactive = Vec::with_capacity(intervals.fixeds.len());
         for fixed in &intervals.fixeds {
-            if !fixed.frags.is_empty() {
-                inactive.push((fixed.reg, 0))
+            let rreg = fixed.reg;
+            if !fixed.frags.is_empty() && scratches_by_rc[rreg.get_class() as usize] != Some(rreg) {
+                inactive.push((rreg, 0))
             }
         }
 
@@ -192,12 +193,12 @@ pub(crate) fn run<F: Function>(
     func: &F,
     reg_uses: &RegVecsAndBounds,
     reg_universe: &RealRegUniverse,
-    scratches_by_rc: &Vec<Option<RealReg>>,
+    scratches_by_rc: &[Option<RealReg>],
     intervals: Intervals,
     stats: Option<Statistics>,
 ) -> Result<(Intervals, u32), RegAllocError> {
-    let mut state = State::new(opts, func, &reg_uses, intervals, stats);
-    let mut reusable = ReusableState::new(reg_universe, &scratches_by_rc);
+    let mut state = State::new(opts, func, &reg_uses, scratches_by_rc, intervals, stats);
+    let mut reusable = ReusableState::new(reg_universe, scratches_by_rc);
 
     #[cfg(debug_assertions)]
     let mut prev_start = InstPoint::min_value();
@@ -326,7 +327,10 @@ impl<T> std::ops::Index<RealReg> for RegisterMapping<T> {
             rreg.get_class() as usize == self.reg_class_index,
             "trying to index a reg from the wrong class"
         );
-        lsra_assert!(Some(rreg) != self.scratch, "trying to use the scratch");
+        lsra_assert!(
+            Some(rreg) != self.scratch,
+            format!("trying to const-use the scratch of {:?}", rreg.get_class())
+        );
         &self.regs[rreg.get_index() - self.offset].1
     }
 }
@@ -337,7 +341,10 @@ impl<T> std::ops::IndexMut<RealReg> for RegisterMapping<T> {
             rreg.get_class() as usize == self.reg_class_index,
             "trying to index a reg from the wrong class"
         );
-        lsra_assert!(Some(rreg) != self.scratch, "trying to use the scratch");
+        lsra_assert!(
+            Some(rreg) != self.scratch,
+            format!("trying to mut-use the scratch of {:?}", rreg.get_class())
+        );
         &mut self.regs[rreg.get_index() - self.offset].1
     }
 }
@@ -461,6 +468,7 @@ impl<'a, F: Function> State<'a, F> {
         opts: &'a LinearScanOptions,
         func: &'a F,
         reg_uses: &'a RegUses,
+        scratches_by_rc: &[Option<RealReg>],
         intervals: Intervals,
         stats: Option<Statistics>,
     ) -> Self {
@@ -469,7 +477,7 @@ impl<'a, F: Function> State<'a, F> {
             unhandled.insert(int.id, &intervals);
         }
 
-        let activity = ActivityTracker::new(&intervals);
+        let activity = ActivityTracker::new(&intervals, scratches_by_rc);
 
         Self {
             func,
