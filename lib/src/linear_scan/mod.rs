@@ -6,9 +6,9 @@
 
 use log::{info, log_enabled, trace, Level};
 
-use std::default;
-use std::env;
-use std::fmt;
+use alloc::{vec, vec::Vec};
+use core::default;
+use core::fmt;
 
 use crate::inst_stream::{add_spills_reloads_and_moves, InstToInsertAndExtPoint};
 use crate::{
@@ -50,7 +50,7 @@ impl Drop for Statistics {
         if self.only_large && self.num_vregs < 1000 {
             return;
         }
-        println!(
+        info!(
             "stats: {} fixed; {} vreg; {} vranges; {} peak-active; {} peak-inactive, {} direct-alloc; {} total-alloc; {} partial-splits; {} partial-splits-attempts",
             self.num_fixed,
             self.num_vregs,
@@ -90,6 +90,16 @@ pub struct LinearScanOptions {
 
 impl default::Default for LinearScanOptions {
     fn default() -> Self {
+        Self {
+            split_strategy: OptimalSplitStrategy::From,
+            partial_split: false,
+            partial_split_near_end: false,
+            stats: false,
+            large_stats: false,
+        }
+    }
+
+    /*fn default() -> Self {
         // Useful for debugging.
         let optimal_split_strategy = match env::var("LSRA_SPLIT") {
             Ok(s) => match s.as_str() {
@@ -117,7 +127,7 @@ impl default::Default for LinearScanOptions {
             stats,
             large_stats,
         }
-    }
+    }*/
 }
 
 impl fmt::Debug for LinearScanOptions {

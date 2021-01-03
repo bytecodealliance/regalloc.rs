@@ -8,7 +8,8 @@ description = "Modular register allocation algorithms"
 repository = "https://github.com/bytecodealliance/regalloc.rs"
 
 [dependencies]
-rustc-hash = "1.0.1"
+hashbrown = { version = "0.9.1", default-features = false }
+rustc-hash = { version = "1.0.1", default-features = false }
 log = { version = "0.4.8", default-features = false }
 smallvec = "1.0.0"
 serde = { version = "1.0.94", features = ["derive"], optional = true }
@@ -18,4 +19,4 @@ default = []
 fuzzing = []
 
 # For dependent crates that want to serialize some parts of regalloc.
-enable-serde = ["serde"]
+enable-serde = ["serde", "hashbrown/serde"]

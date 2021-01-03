@@ -7,6 +7,7 @@ use crate::data_structures::{
 };
 use crate::sparse_set::{SparseSet, SparseSetU};
 
+use alloc::vec::Vec;
 use log::debug;
 use smallvec::SmallVec;
 

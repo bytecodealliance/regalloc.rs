@@ -7,6 +7,10 @@
 //! to use this library in your own code, you would be well advised to read
 //! the comments in this file very carefully.
 
+#![no_std]
+
+extern crate alloc;
+
 // Make the analysis module public for fuzzing.
 #[cfg(feature = "fuzzing")]
 pub mod analysis_main;
@@ -32,9 +36,10 @@ mod snapshot;
 mod sparse_set;
 mod union_find;
 
+use alloc::{borrow::Cow, string::{String, ToString}, vec, vec::Vec};
 use log::{info, log_enabled, Level};
-use std::default;
-use std::{borrow::Cow, fmt};
+use core::default;
+use core::fmt;
 
 // Stuff that is defined by the library
 
