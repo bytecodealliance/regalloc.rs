@@ -26,7 +26,12 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
-use alloc::{format, string::{String, ToString}, vec, vec::Vec};
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 use log::{debug, info, log_enabled, Level};
 use smallvec::{smallvec, SmallVec};
 

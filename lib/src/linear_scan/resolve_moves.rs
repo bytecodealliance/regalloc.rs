@@ -7,9 +7,9 @@ use crate::{
 };
 
 use alloc::vec::Vec;
+use core::fmt;
 use log::{debug, info, trace};
 use smallvec::SmallVec;
-use core::fmt;
 
 type HashMap<K, V> = hashbrown::HashMap<K, V, core::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
 type HashSet<T> = hashbrown::HashSet<T, core::hash::BuildHasherDefault<rustc_hash::FxHasher>>;

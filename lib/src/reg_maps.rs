@@ -1,7 +1,7 @@
 use crate::{RealReg, RegUsageMapper, VirtualReg};
 use alloc::vec::Vec;
-use smallvec::SmallVec;
 use core::mem;
+use smallvec::SmallVec;
 
 /// This data structure holds the mappings needed to map an instruction's uses, mods and defs from
 /// virtual to real registers.

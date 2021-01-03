@@ -9,9 +9,9 @@ use crate::{
 };
 
 use alloc::{collections::BinaryHeap, format, vec::Vec};
+use core::{cmp, cmp::Ordering, fmt};
 use log::{debug, info, log_enabled, trace, Level};
 use smallvec::SmallVec;
-use core::{cmp, cmp::Ordering, fmt};
 
 type HashMap<K, V> = hashbrown::HashMap<K, V, core::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
 

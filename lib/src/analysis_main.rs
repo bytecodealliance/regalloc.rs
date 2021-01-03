@@ -1,6 +1,10 @@
 //! Top level module for all analysis activities.
 
-use alloc::{format, string::{String, ToString}, vec::Vec};
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
 use log::{debug, info};
 
 use crate::analysis_control_flow::{CFGInfo, InstIxToBlockIxMap};

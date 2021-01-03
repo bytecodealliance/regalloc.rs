@@ -1,10 +1,10 @@
 //! Performs dataflow and liveness analysis, including live range construction.
 
 use alloc::{format, string::ToString, vec, vec::Vec};
-use log::{debug, info, log_enabled, Level};
-use smallvec::{smallvec, SmallVec};
 use core::cmp::min;
 use core::fmt;
+use log::{debug, info, log_enabled, Level};
+use smallvec::{smallvec, SmallVec};
 
 use crate::analysis_control_flow::CFGInfo;
 use crate::data_structures::*;

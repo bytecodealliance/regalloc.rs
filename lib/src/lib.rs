@@ -36,10 +36,15 @@ mod snapshot;
 mod sparse_set;
 mod union_find;
 
-use alloc::{borrow::Cow, string::{String, ToString}, vec, vec::Vec};
-use log::{info, log_enabled, Level};
+use alloc::{
+    borrow::Cow,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 use core::default;
 use core::fmt;
+use log::{info, log_enabled, Level};
 
 // Stuff that is defined by the library
 

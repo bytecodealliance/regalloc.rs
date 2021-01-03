@@ -4,8 +4,8 @@
 //! traversals of the tree as it wishes.
 
 use alloc::vec::Vec;
-use smallvec::SmallVec;
 use core::cmp::Ordering;
+use smallvec::SmallVec;
 
 //=============================================================================
 // Data structures for AVLTree

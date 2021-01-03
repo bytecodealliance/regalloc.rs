@@ -11,9 +11,9 @@ use crate::{
     AnalysisError, Function, RealRegUniverse, RegClass, TypedIxVec,
 };
 use alloc::{vec, vec::Vec};
+use core::{fmt, mem};
 use log::{debug, info, log_enabled, Level};
 use smallvec::{smallvec, SmallVec};
-use core::{fmt, mem};
 
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct RangeFrag {

@@ -4,7 +4,13 @@ use hashbrown::{HashMap, HashSet};
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
 
-use alloc::{collections::VecDeque, format, string::{String, ToString}, vec, vec::Vec};
+use alloc::{
+    collections::VecDeque,
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{BuildHasherDefault, Hash};
