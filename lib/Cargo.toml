@@ -10,7 +10,7 @@ repository = "https://github.com/bytecodealliance/regalloc.rs"
 [dependencies]
 rustc-hash = "1.0.1"
 log = { version = "0.4.8", default-features = false }
-smallvec = "1.0.0"
+smallvec = "1.6.1"
 serde = { version = "1.0.94", features = ["derive"], optional = true }
 
 [features]
