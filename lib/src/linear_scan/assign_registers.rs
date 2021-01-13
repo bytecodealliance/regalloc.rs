@@ -1167,9 +1167,9 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
         }
     });
 
-    let (index, may_need_fixup) = match index {
-        Ok(index) => (index, true),
-        Err(index) => (index, false),
+    let index = match index {
+        Ok(index) => index,
+        Err(index) => index,
     };
 
     // Emulate split_off for SmallVec here.
@@ -1178,24 +1178,6 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
         child_mentions.push(mention.clone());
     }
     parent_mentions.truncate(index);
-
-    // In the situation where we split at the def point of an instruction, and the mention set
-    // contains the use point, we need to refine the sets:
-    // - the parent must still contain the use point (and the modified point if present)
-    // - the child must only contain the def point (and the modified point if present).
-    // Note that if we split at the use point of an instruction, and the mention set contains the
-    // def point, it is fine: we're not splitting between the two of them.
-    if may_need_fixup && at_pos.pt() == Point::Def && child_mentions.first().unwrap().1.is_use() {
-        let first_child_mention = child_mentions.first_mut().unwrap();
-        first_child_mention.1.remove_use();
-
-        let last_parent_mention = parent_mentions.last_mut().unwrap();
-        last_parent_mention.1.add_use();
-
-        if first_child_mention.1.is_mod() {
-            last_parent_mention.1.add_mod();
-        }
-    }
 
     let child_id = IntId(state.intervals.num_virtual_intervals());
     let mut child_int =
