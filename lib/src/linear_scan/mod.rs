@@ -550,6 +550,7 @@ pub(crate) fn run<F: Function>(
         intervals,
         liveins,
         liveouts,
+        cfg,
         ..
     } = analysis::run(func, reg_universe).map_err(|err| RegAllocError::Analysis(err))?;
 
@@ -600,6 +601,7 @@ pub(crate) fn run<F: Function>(
 
     let memory_moves = resolve_moves::run(
         func,
+        &cfg,
         &reg_uses,
         virtuals,
         &liveins,

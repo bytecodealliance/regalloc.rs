@@ -1,5 +1,6 @@
 use super::{next_use, IntId, Location, RegUses, VirtualInterval};
 use crate::{
+    analysis_control_flow::CFGInfo,
     data_structures::{BlockIx, InstPoint, Point},
     inst_stream::{InstExtPoint, InstToInsert, InstToInsertAndExtPoint},
     sparse_set::SparseSet,
@@ -319,6 +320,7 @@ fn collect_block_infos<F: Function>(
 #[inline(never)]
 fn resolve_moves_across_blocks<F: Function>(
     func: &F,
+    cfg: &CFGInfo,
     liveins: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     liveouts: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     intervals: &Vec<VirtualInterval>,
@@ -335,16 +337,20 @@ fn resolve_moves_across_blocks<F: Function>(
 
     let mut seen_successors = HashSet::default();
     for block in func.blocks() {
-        let successors = func.block_succs(block);
+        let successors = &cfg.succ_map[block];
 
-        // Where to insert the fixup move, if needed? If there's more than one
-        // successor to the current block, inserting in the current block will
-        // impact all the successors.
-        //
-        // We assume critical edges have been split, so
-        // if the current block has more than one successor, then its successors
-        // have at most one predecessor.
-        let cur_has_one_succ = successors.len() == 1;
+        // Where to insert the fixup move, if needed? Per API contract, there are no more critical
+        // edges: so this block is the only successor to its predecessors, or the only predecessor
+        // to its successors in the control flow graph.
+        // If there's more than one successor to the current block, then inserting the fix-up moves
+        // in the current block may impact all the other successors: in this case, we should insert
+        // the instruction at the end of the current block. If the successors all have only one
+        // predecessor (the current block), then we can insert the fixup move at the beginning of
+        // the successors safely.
+        let all_succ_have_one_pred = successors
+            .iter()
+            .all(|succ| cfg.pred_map[*succ].card() == 1);
+        assert!(successors.card() == 1 || all_succ_have_one_pred);
 
         for &reg in liveouts[block].iter() {
             let vreg = if let Some(vreg) = reg.as_virtual_reg() {
@@ -379,13 +385,14 @@ fn resolve_moves_across_blocks<F: Function>(
 
                 let loc_at_succ_start = succ_int.location;
 
-                let (at_inst, block_pos) = if cur_has_one_succ {
+                let (at_inst, block_pos) = if all_succ_have_one_pred {
+                    // At the beginning of the successors (each only has a single predecessor).
+                    let pos = InstPoint::new_reload(func.block_insns(succ).first());
+                    (pos, BlockPos::Start)
+                } else {
                     // Before the control flow instruction.
                     let pos = InstPoint::new_reload(func.block_insns(block).last());
                     (pos, BlockPos::End)
-                } else {
-                    let pos = InstPoint::new_reload(func.block_insns(succ).first());
-                    (pos, BlockPos::Start)
                 };
 
                 let pending_moves = parallel_move_map
@@ -494,6 +501,7 @@ fn resolve_moves_across_blocks<F: Function>(
 #[inline(never)]
 pub(crate) fn run<F: Function>(
     func: &F,
+    cfg: &CFGInfo,
     reg_uses: &RegUses,
     intervals: &Vec<VirtualInterval>,
     liveins: &TypedIxVec<BlockIx, SparseSet<Reg>>,
@@ -530,6 +538,7 @@ pub(crate) fn run<F: Function>(
 
     resolve_moves_across_blocks(
         func,
+        cfg,
         liveins,
         liveouts,
         intervals,
