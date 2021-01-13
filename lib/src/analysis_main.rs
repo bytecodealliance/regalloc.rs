@@ -8,11 +8,7 @@ use crate::analysis_data_flow::{
     get_range_frags, get_sanitized_reg_uses_for_func, merge_range_frags,
 };
 use crate::analysis_reftypes::do_reftypes_analysis;
-use crate::data_structures::{
-    BlockIx, MoveInfo, RangeFrag, RangeFragIx, RangeFragMetrics, RealRange, RealRangeIx, RealReg,
-    RealRegUniverse, RegClass, RegToRangesMaps, RegVecsAndBounds, TypedIxVec, VirtualRange,
-    VirtualRangeIx, VirtualReg,
-};
+use crate::data_structures::*;
 use crate::sparse_set::SparseSet;
 use crate::AlgorithmWithDefaults;
 use crate::{Function, Reg};
@@ -48,6 +44,17 @@ pub enum AnalysisError {
     /// Implementation limits exceeded.  The incoming function is too big.  It
     /// may contain at most 1 million basic blocks and 16 million instructions.
     ImplementationLimitsExceeded,
+
+    /// Linear scan requires that if a block ends with a control flow
+    /// instruction that has at least one register mention (use, mod or def),
+    /// then the successor blocks must have a single predecessor.
+    ///
+    /// In practice, this means that users should consider associated edges to
+    /// be "critical" and split them (and maybe remove dead blocks afterwards).
+    ///
+    /// For details, see the comment in linear_scan::analysis generating this
+    /// error.
+    LsraCriticalEdge { block: BlockIx, inst: InstIx },
 }
 
 impl ToString for AnalysisError {
@@ -74,6 +81,14 @@ impl ToString for AnalysisError {
             AnalysisError::ImplementationLimitsExceeded => {
                 "implementation limits exceeded (more than 1 million blocks or 16 million insns)"
                     .to_string()
+            }
+            AnalysisError::LsraCriticalEdge { block, inst } => {
+                format!(
+                    "block {:?} ends with control flow instruction {:?} that mentions a register,
+                    and at least one of the multiple successors has several predecessors; consider
+                    splitting the outgoing edges!",
+                    block, inst
+                )
             }
         }
     }

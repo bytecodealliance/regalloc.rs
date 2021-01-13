@@ -72,6 +72,8 @@ struct RangeFragMetrics {
 }
 
 pub(crate) struct AnalysisInfo {
+    /// Control-flow graph information.
+    pub(crate) cfg: CFGInfo,
     /// The sanitized per-insn reg-use info.
     pub(crate) reg_vecs_and_bounds: RegVecsAndBounds,
     /// All the intervals, fixed or virtual.
@@ -80,8 +82,6 @@ pub(crate) struct AnalysisInfo {
     pub(crate) liveins: TypedIxVec<BlockIx, SparseSet<Reg>>,
     /// Liveouts per block.
     pub(crate) liveouts: TypedIxVec<BlockIx, SparseSet<Reg>>,
-    /// Blocks's loop depths.
-    pub(crate) _loop_depth: TypedIxVec<BlockIx, u32>,
     /// Maps InstIxs to BlockIxs.
     pub(crate) _inst_to_block_map: InstIxToBlockIxMap,
 }
@@ -155,10 +155,29 @@ pub(crate) fn run<F: Function>(
             .map(|rreg| rreg.to_reg())
             .collect(),
     );
+
     for block in func.blocks() {
         let last_iix = func.block_insns(block).last();
         if func.is_ret(last_iix) {
             liveout_sets_per_block[block].union(&func_liveouts);
+        }
+
+        // While we're here: consider if the (ending) control flow instruction has register mentions (any
+        // use/def/mod).
+        //
+        // If that's the case, then the successor blocks must have at most one predecessor,
+        // otherwise inter-blocks fix-up moves may interfere with the control flow instruction
+        // register mentions, resulting in allocations impossible to solve.
+        let bounds = &reg_vecs_and_bounds.bounds[last_iix];
+        if bounds.uses_len + bounds.defs_len + bounds.mods_len > 0 {
+            for &succ_ix in cfg_info.succ_map[block].iter() {
+                if cfg_info.pred_map[succ_ix].card() > 1 {
+                    return Err(AnalysisError::LsraCriticalEdge {
+                        block,
+                        inst: last_iix,
+                    });
+                }
+            }
         }
     }
 
@@ -195,11 +214,11 @@ pub(crate) fn run<F: Function>(
     info!("run_analysis: end");
 
     Ok(AnalysisInfo {
+        cfg: cfg_info,
         reg_vecs_and_bounds,
         intervals,
         liveins: livein_sets_per_block,
         liveouts: liveout_sets_per_block,
-        _loop_depth: cfg_info.depth_map,
         _inst_to_block_map: inst_to_block_map,
     })
 }
