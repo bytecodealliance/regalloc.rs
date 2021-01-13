@@ -268,10 +268,6 @@ impl Mention {
         self.0 |= 1 << 2;
     }
 
-    fn remove_use(&mut self) {
-        self.0 &= !(1 << 0);
-    }
-
     // Getters.
     fn is_use(&self) -> bool {
         (self.0 & 0b001) != 0
