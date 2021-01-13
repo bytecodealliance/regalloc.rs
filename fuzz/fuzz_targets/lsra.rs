@@ -15,11 +15,14 @@ fuzz_target!(|func: ir::Func| {
     func.render("func:", &mut rendered).unwrap();
     println!("{}", rendered);
 
-    let result = match regalloc::allocate_registers(
+    let result = match regalloc::allocate_registers_with_opts(
         &mut func,
         &reg_universe,
         None,
-        regalloc::AlgorithmWithDefaults::LinearScan,
+        regalloc::Options {
+            run_checker: true,
+            algorithm: regalloc::Algorithm::LinearScan(Default::default()),
+        },
     ) {
         Ok(result) => result,
         Err(err) => {
