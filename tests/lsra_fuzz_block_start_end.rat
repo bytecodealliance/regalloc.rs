@@ -1,0 +1,21 @@
+v0I = I32
+v1I = I32
+v3I = I32
+r1I = real I32 2
+
+b0:
+    imm     v0I, 2088532992
+    makeref v3I, v0I
+    goto    b1:b1
+
+b1:
+    cmp_gt  v1I, v0I, v0I
+    goto    b3:b3
+
+b2:
+    useref  r1I, v3I
+    finish
+
+b3:
+    copy    v3I, v3I
+    goto    b2:b2
