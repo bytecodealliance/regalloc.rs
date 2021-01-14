@@ -23,6 +23,8 @@ use crate::{
 use analysis::{AnalysisInfo, RangeFrag};
 use smallvec::SmallVec;
 
+use self::analysis::{BlockBoundary, BlockPos};
+
 mod analysis;
 mod assign_registers;
 mod resolve_moves;
@@ -174,6 +176,7 @@ pub(crate) struct VirtualInterval {
     location: Location,
 
     mentions: MentionMap,
+    block_boundaries: Vec<BlockBoundary>,
     start: InstPoint,
     end: InstPoint,
 }
@@ -188,6 +191,23 @@ impl fmt::Display for VirtualInterval {
             fmt,
             ": {:?} {} [{:?}; {:?}]",
             self.vreg, self.location, self.start, self.end
+        )?;
+        write!(
+            fmt,
+            " [{}]",
+            self.block_boundaries
+                .iter()
+                .map(|boundary| format!(
+                    "{:?}{}",
+                    boundary.bix,
+                    if boundary.pos == BlockPos::Start {
+                        "s"
+                    } else {
+                        "e"
+                    }
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
         )
     }
 }
@@ -199,6 +219,7 @@ impl VirtualInterval {
         start: InstPoint,
         end: InstPoint,
         mentions: MentionMap,
+        block_boundaries: Vec<BlockBoundary>,
     ) -> Self {
         Self {
             id,
@@ -208,6 +229,7 @@ impl VirtualInterval {
             child: None,
             location: Location::None,
             mentions,
+            block_boundaries,
             start,
             end,
         }
@@ -217,6 +239,12 @@ impl VirtualInterval {
     }
     fn mentions_mut(&mut self) -> &mut MentionMap {
         &mut self.mentions
+    }
+    fn block_boundaries(&self) -> &[BlockBoundary] {
+        &self.block_boundaries
+    }
+    fn block_boundaries_mut(&mut self) -> &mut Vec<BlockBoundary> {
+        &mut self.block_boundaries
     }
     fn covers(&self, pos: InstPoint) -> bool {
         self.start <= pos && pos <= self.end

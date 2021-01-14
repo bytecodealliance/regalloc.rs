@@ -1,6 +1,6 @@
 use super::{
-    last_use, next_use, IntId, Intervals, Mention, MentionMap, OptimalSplitStrategy, RegUses,
-    Statistics, VirtualInterval,
+    analysis::BlockPos, last_use, next_use, IntId, Intervals, Mention, MentionMap,
+    OptimalSplitStrategy, RegUses, Statistics, VirtualInterval,
 };
 use crate::{
     data_structures::{InstPoint, Point, RegVecsAndBounds},
@@ -1132,6 +1132,7 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
     let vreg = int.vreg;
     let ancestor = int.ancestor;
 
+    // Split the register mentions.
     let parent_mentions = state.intervals.get_mut(id).mentions_mut();
     let index = parent_mentions.binary_search_by(|mention| {
         // The comparator function returns the position of the argument compared to the target.
@@ -1171,17 +1172,50 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
         Ok(index) => index,
         Err(index) => index,
     };
-
-    // Emulate split_off for SmallVec here.
     let mut child_mentions = MentionMap::with_capacity(parent_mentions.len() - index);
     for mention in parent_mentions.iter().skip(index) {
         child_mentions.push(mention.clone());
     }
     parent_mentions.truncate(index);
 
+    // Now split block boundaries.
+    let parent_boundaries = state.intervals.get(id).block_boundaries();
+    let index = parent_boundaries.binary_search_by(|boundary| {
+        let inst_range = state.func.block_insns(boundary.bix);
+        match boundary.pos {
+            BlockPos::Start => {
+                let first_inst = InstPoint::new_use(inst_range.first());
+                return first_inst.cmp(&at_pos);
+            }
+            BlockPos::End => {
+                let last_inst = InstPoint::new_def(inst_range.last());
+                return last_inst.cmp(&at_pos);
+            }
+        }
+    });
+
+    // It's possible that the binary search returns Err, for the edges (if the split position is
+    // before the first block boundary, or after the last).
+    let index = match index {
+        Ok(index) => index,
+        Err(index) => index,
+    };
+    let child_boundaries = state
+        .intervals
+        .get_mut(id)
+        .block_boundaries_mut()
+        .split_off(index);
+
+    // Phew: eventually create the child interval.
     let child_id = IntId(state.intervals.num_virtual_intervals());
-    let mut child_int =
-        VirtualInterval::new(child_id, vreg, child_start, child_end, child_mentions);
+    let mut child_int = VirtualInterval::new(
+        child_id,
+        vreg,
+        child_start,
+        child_end,
+        child_mentions,
+        child_boundaries,
+    );
     child_int.parent = Some(id);
     child_int.ancestor = ancestor;
 

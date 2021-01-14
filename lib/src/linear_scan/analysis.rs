@@ -12,9 +12,34 @@ use crate::{
 };
 use log::{debug, info, log_enabled, Level};
 use smallvec::{smallvec, SmallVec};
-use std::{fmt, mem};
+use std::{cmp::Ordering, fmt, mem};
 
-#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Ord)]
+pub(crate) enum BlockPos {
+    Start,
+    End,
+}
+
+// Start < End.
+impl PartialOrd for BlockPos {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(if *self == BlockPos::Start && *other == BlockPos::End {
+            Ordering::Less
+        } else if *self == BlockPos::End && *other == BlockPos::Start {
+            Ordering::Greater
+        } else {
+            Ordering::Equal
+        })
+    }
+}
+
+#[derive(Clone, PartialOrd, Ord, PartialEq, Eq)]
+pub(crate) struct BlockBoundary {
+    pub(crate) bix: BlockIx,
+    pub(crate) pos: BlockPos,
+}
+
+#[derive(Clone)]
 pub(crate) struct RangeFrag {
     pub(crate) first: InstPoint,
     pub(crate) last: InstPoint,
@@ -585,6 +610,7 @@ fn merge_range_frags(
                 &mut result_virtual,
                 reg,
                 all_frag_ixs_for_reg,
+                &frag_metrics_env,
                 frag_env,
             );
             continue;
@@ -609,6 +635,7 @@ fn merge_range_frags(
                     &mut result_virtual,
                     reg,
                     &[*fix],
+                    &frag_metrics_env,
                     frag_env,
                 );
                 continue;
@@ -771,6 +798,7 @@ fn merge_range_frags(
                 &mut result_virtual,
                 reg,
                 &frag_ixs,
+                &frag_metrics_env,
                 frag_env,
             );
         }
@@ -788,6 +816,7 @@ fn flush_interval(
     result_virtual: &mut Vec<VirtualInterval>,
     reg: Reg,
     frag_ixs: &[RangeFragIx],
+    metrics: &[RangeFragMetrics],
     frags: &mut Vec<RangeFrag>,
 ) {
     if reg.is_real() {
@@ -807,15 +836,17 @@ fn flush_interval(
 
     debug_assert!(reg.is_virtual());
 
-    let (start, end, mentions) = {
+    let (start, end, mentions, block_boundaries) = {
         // Merge all the mentions together.
         let capacity = frag_ixs
             .iter()
             .map(|fix| frags[fix.get() as usize].mentions.len())
-            .fold(0, |a, b| a + b);
+            .sum();
 
         let mut start = InstPoint::max_value();
         let mut end = InstPoint::min_value();
+
+        // Merge all the register mentions together.
 
         // TODO rework this!
         let mut mentions = MentionMap::with_capacity(capacity);
@@ -861,11 +892,60 @@ fn flush_interval(
             mentions.remove(i);
         }
 
-        (start, end, mentions)
+        // Retrieve all the block boundary information from the range metrics.
+
+        let mut block_boundaries = Vec::new();
+        for fix in frag_ixs.iter() {
+            let metric = &metrics[fix.get() as usize];
+            let bix = metric.bix;
+            // Unfortunately, the RangeFragKind are imprecise: e.g. LiveIn means that the
+            // fragment's first instruction coincides with the block's first instruction, not that
+            // it really is live in. Moreover, we could use the livein/liveout sets to figure this
+            // out more precisely, but they could refer to another Interval for the same vreg. So
+            // we end up storing slightly more boundaries that we ought to: it's not a correctness
+            // issue: the resolve_moves pass may skip such block boundaries when it requires those.
+            match metric.kind {
+                RangeFragKind::Local => {}
+                RangeFragKind::LiveIn => {
+                    block_boundaries.push(BlockBoundary {
+                        bix,
+                        pos: BlockPos::Start,
+                    });
+                }
+                RangeFragKind::LiveOut => {
+                    block_boundaries.push(BlockBoundary {
+                        bix,
+                        pos: BlockPos::End,
+                    });
+                }
+                RangeFragKind::Thru => {
+                    block_boundaries.push(BlockBoundary {
+                        bix,
+                        pos: BlockPos::Start,
+                    });
+                    block_boundaries.push(BlockBoundary {
+                        bix,
+                        pos: BlockPos::End,
+                    });
+                }
+            }
+        }
+
+        // Lexicographic sort: first by block index, then by position.
+        block_boundaries.sort_unstable();
+
+        (start, end, mentions, block_boundaries)
     };
 
     let id = IntId(result_virtual.len());
-    let mut int = VirtualInterval::new(id, reg.to_virtual_reg(), start, end, mentions);
+    let mut int = VirtualInterval::new(
+        id,
+        reg.to_virtual_reg(),
+        start,
+        end,
+        mentions,
+        block_boundaries,
+    );
     int.ancestor = Some(id);
 
     result_virtual.push(int);

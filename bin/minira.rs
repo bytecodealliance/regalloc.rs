@@ -634,6 +634,11 @@ fn lsra_critical_edge_invariant() {
     ));
 }
 
+#[test]
+fn lsra_fuzz_block_start_end() {
+    test_utils::check_lsra("lsra_fuzz_block_start_end", 5, 0);
+}
+
 // Requires at least 3 registers (r2 is mentioned explicitly).
 #[test]
 fn bt_fill_then_sum_2a() {
