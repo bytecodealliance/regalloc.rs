@@ -2,15 +2,20 @@
 
 use log::{debug, info};
 
-use crate::analysis_control_flow::{CFGInfo, InstIxToBlockIxMap};
-use crate::analysis_data_flow::{
-    calc_def_and_use, calc_livein_and_liveout, collect_move_info, compute_reg_to_ranges_maps,
-    get_range_frags, get_sanitized_reg_uses_for_func, merge_range_frags,
-};
-use crate::analysis_reftypes::do_reftypes_analysis;
 use crate::data_structures::*;
 use crate::sparse_set::SparseSet;
 use crate::AlgorithmWithDefaults;
+use crate::{
+    analysis_control_flow::{CFGInfo, InstIxToBlockIxMap},
+    analysis_reftypes::ReftypeAnalysis,
+};
+use crate::{
+    analysis_data_flow::{
+        calc_def_and_use, calc_livein_and_liveout, collect_move_info, compute_reg_to_ranges_maps,
+        get_range_frags, get_sanitized_reg_uses_for_func, merge_range_frags,
+    },
+    analysis_reftypes::core_reftypes_analysis,
+};
 use crate::{Function, Reg};
 
 //=============================================================================
@@ -346,4 +351,81 @@ impl DepthBasedFrequencies {
     pub(crate) fn cost(&self, bix: BlockIx) -> u32 {
         self.0[bix]
     }
+}
+
+/// Implementation of the reftype analysis for the backtracking algorithm.
+struct BacktrackingReftypeAnalysis<'a> {
+    rlr_env: &'a mut TypedIxVec<RealRangeIx, RealRange>,
+    vlr_env: &'a mut TypedIxVec<VirtualRangeIx, VirtualRange>,
+    frag_env: &'a TypedIxVec<RangeFragIx, RangeFrag>,
+    reg_to_ranges_maps: &'a RegToRangesMaps,
+}
+
+impl<'a> ReftypeAnalysis for BacktrackingReftypeAnalysis<'a> {
+    type RangeId = RangeId;
+
+    #[inline(always)]
+    fn find_range_id_for_reg(&self, pt: InstPoint, reg: Reg) -> Self::RangeId {
+        if reg.is_real() {
+            for &rlrix in &self.reg_to_ranges_maps.rreg_to_rlrs_map[reg.get_index() as usize] {
+                if self.rlr_env[rlrix]
+                    .sorted_frags
+                    .contains_pt(self.frag_env, pt)
+                {
+                    return RangeId::new_real(rlrix);
+                }
+            }
+        } else {
+            for &vlrix in &self.reg_to_ranges_maps.vreg_to_vlrs_map[reg.get_index() as usize] {
+                if self.vlr_env[vlrix].sorted_frags.contains_pt(pt) {
+                    return RangeId::new_virtual(vlrix);
+                }
+            }
+        }
+        panic!("do_reftypes_analysis::find_range_for_reg: can't find range");
+    }
+
+    #[inline(always)]
+    fn mark_reffy(&mut self, range: &Self::RangeId) {
+        if range.is_real() {
+            let rrange = &mut self.rlr_env[range.to_real()];
+            debug_assert!(!rrange.is_ref);
+            debug!(" -> rrange {:?} is reffy", range.to_real());
+            rrange.is_ref = true;
+        } else {
+            let vrange = &mut self.vlr_env[range.to_virtual()];
+            debug_assert!(!vrange.is_ref);
+            debug!(" -> rrange {:?} is reffy", range.to_virtual());
+            vrange.is_ref = true;
+        }
+    }
+
+    #[inline(always)]
+    fn insert_reffy_ranges(&self, vreg: VirtualReg, set: &mut SparseSet<Self::RangeId>) {
+        for vlr_ix in &self.reg_to_ranges_maps.vreg_to_vlrs_map[vreg.get_index()] {
+            debug!("range {:?} is reffy due to reffy vreg {:?}", vlr_ix, vreg);
+            set.insert(RangeId::new_virtual(*vlr_ix));
+        }
+    }
+}
+
+fn do_reftypes_analysis(
+    // From dataflow/liveness analysis.  Modified by setting their is_ref bit.
+    rlr_env: &mut TypedIxVec<RealRangeIx, RealRange>,
+    vlr_env: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
+    // From dataflow analysis
+    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+    reg_to_ranges_maps: &RegToRangesMaps,
+    move_info: &MoveInfo,
+    // As supplied by the client
+    reftype_class: RegClass,
+    reftyped_vregs: &Vec<VirtualReg>,
+) {
+    let mut analysis = BacktrackingReftypeAnalysis {
+        rlr_env,
+        vlr_env,
+        frag_env,
+        reg_to_ranges_maps,
+    };
+    core_reftypes_analysis(&mut analysis, move_info, reftype_class, reftyped_vregs);
 }
