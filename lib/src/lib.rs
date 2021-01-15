@@ -36,6 +36,74 @@ use log::{info, log_enabled, Level};
 use std::default;
 use std::{borrow::Cow, fmt};
 
+// Allocation with bumpalo
+pub use bumpalo::Bump;
+use hashbrown::raw::{AllocError, Allocator};
+use std::alloc::Layout;
+
+/// An arena allocator wrapped around a `bumpalo::Bump`.
+#[derive(Clone)]
+pub struct Alloc<'a>(pub &'a Bump);
+
+// Export arena-allocated container types.
+pub use bumpalo::collections::Vec as BumpVec;
+pub type BumpMap<'bump, K, V> =
+    hashbrown::HashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, Alloc<'bump>>;
+pub type BumpSet<'bump, T> =
+    hashbrown::HashSet<T, hashbrown::hash_map::DefaultHashBuilder, Alloc<'bump>>;
+use core::ptr::NonNull;
+
+// Implement the allocator for hashbrown.
+unsafe impl<'a> Allocator for Alloc<'a> {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<u8>, AllocError> {
+        Ok(self.0.alloc_layout(layout))
+    }
+    unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
+}
+
+impl<'a> Alloc<'a> {
+    /// Allocate a new BumpVec.
+    pub fn vec<T>(&self, capacity: usize) -> BumpVec<'a, T> {
+        BumpVec::with_capacity_in(capacity, self.0)
+    }
+    /// Allocate a new BumpMap.
+    pub fn map<K, V>(&self, capacity: usize) -> BumpMap<'a, K, V> {
+        BumpMap::with_capacity_in(capacity, self.clone())
+    }
+    /// Allocate a new BumpSet.
+    pub fn set<T: Eq + std::hash::Hash>(&self, capacity: usize) -> BumpSet<'a, T> {
+        BumpSet::with_capacity_in(capacity, self.clone())
+    }
+    /// Collect into a BumpVec.
+    pub fn collect<T>(&self, iter: impl Iterator<Item = T>) -> BumpVec<'a, T> {
+        let mut v = self.vec(0);
+        v.extend(iter);
+        v
+    }
+    /// Clone a BumpSet.
+    pub fn clone_set<'b, T: Clone + Eq + std::hash::Hash>(
+        &self,
+        set: &BumpSet<'b, T>,
+    ) -> BumpSet<'a, T> {
+        let mut ret = self.set(set.len());
+        for item in set.iter() {
+            ret.insert(item.clone());
+        }
+        ret
+    }
+    /// Clone a BumpMap.
+    pub fn clone_map<'b, K: Clone + Eq + std::hash::Hash, V: Clone>(
+        &self,
+        map: &BumpMap<'b, K, V>,
+    ) -> BumpMap<'a, K, V> {
+        let mut ret = self.map(map.len());
+        for (k, v) in map.iter() {
+            ret.insert(k.clone(), v.clone());
+        }
+        ret
+    }
+}
+
 // Stuff that is defined by the library
 
 // Pretty-printing utilities.
@@ -361,16 +429,19 @@ pub trait Function {
 }
 
 /// The result of register allocation.  Note that allocation can fail!
-pub struct RegAllocResult<F: Function> {
+pub struct RegAllocResult<'a, F: Function> {
     /// A new sequence of instructions with all register slots filled with real
     /// registers, and spills/fills/moves possibly inserted (and unneeded moves
     /// elided).
+    ///
+    /// Note that this is a `Vec`, not a `BumpVec`, because `F::Inst` may have
+    /// a nontrivial `Drop` and `bumpalo::Bump` does not invoke `Drop` impls.
     pub insns: Vec<F::Inst>,
 
     /// Basic-block start indices for the new instruction list, indexed by the
     /// original basic block indices. May be used by the client to, e.g., remap
     /// branch targets appropriately.
-    pub target_map: TypedIxVec<BlockIx, InstIx>,
+    pub target_map: TypedIxVec<'a, BlockIx, InstIx>,
 
     /// Full mapping from new instruction indices to original instruction
     /// indices. May be needed by the client to, for example, update metadata
@@ -380,14 +451,14 @@ pub struct RegAllocResult<F: Function> {
     /// Each entry is an `InstIx`, but may be `InstIx::invalid_value()` if the
     /// new instruction at this new index was inserted by the allocator
     /// (i.e., if it is a load, spill or move instruction).
-    pub orig_insn_map: TypedIxVec</* new */ InstIx, /* orig */ InstIx>,
+    pub orig_insn_map: TypedIxVec<'a, /* new */ InstIx, /* orig */ InstIx>,
 
     /// Which real registers were overwritten? This will contain all real regs
     /// that appear as defs or modifies in register slots of the output
     /// instruction list.  This will only list registers that are available to
     /// the allocator.  If one of the instructions clobbers a register which
     /// isn't available to the allocator, it won't be mentioned here.
-    pub clobbered_registers: Set<RealReg>,
+    pub clobbered_registers: BumpSet<'a, RealReg>,
 
     /// How many spill slots were used?
     pub num_spill_slots: u32,
@@ -395,15 +466,15 @@ pub struct RegAllocResult<F: Function> {
     /// Block annotation strings, for debugging.  Requires requesting in the
     /// call to `allocate_registers`.  Creating of these annotations is
     /// potentially expensive, so don't request them if you don't need them.
-    pub block_annotations: Option<TypedIxVec<BlockIx, Vec<String>>>,
+    pub block_annotations: Option<Vec</* BlockIx, */ Vec<String>>>,
 
     /// If stackmap support was requested: one stackmap for each of the safepoint instructions
     /// declared.  Otherwise empty.
-    pub stackmaps: Vec<Vec<SpillSlot>>,
+    pub stackmaps: BumpVec<'a, BumpVec<'a, SpillSlot>>,
 
     /// If stackmap support was requested: one InstIx for each safepoint instruction declared,
     /// indicating the corresponding location in the final instruction stream.  Otherwise empty.
-    pub new_safepoint_insns: Vec<InstIx>,
+    pub new_safepoint_insns: BumpVec<'a, InstIx>,
 }
 
 /// A choice of register allocation algorithm to run.
@@ -516,12 +587,13 @@ pub struct StackmapRequestInfo {
 /// common to all the backends. The choice of algorithm is done by passing a given [Algorithm]
 /// instance, with options tailored for each algorithm.
 #[inline(never)]
-pub fn allocate_registers_with_opts<F: Function>(
+pub fn allocate_registers_with_opts<'a, F: Function>(
     func: &mut F,
     rreg_universe: &RealRegUniverse,
     stackmap_info: Option<&StackmapRequestInfo>,
     opts: Options,
-) -> Result<RegAllocResult<F>, RegAllocError> {
+    alloc: &Alloc<'a>,
+) -> Result<RegAllocResult<'a, F>, RegAllocError> {
     info!("");
     info!("================ regalloc.rs: BEGIN function ================");
 
@@ -591,12 +663,22 @@ pub fn allocate_registers_with_opts<F: Function>(
 
     let run_checker = opts.run_checker;
     let res = match &opts.algorithm {
-        Algorithm::Backtracking(opts) => {
-            bt_main::alloc_main(func, rreg_universe, stackmap_info, run_checker, opts)
-        }
-        Algorithm::LinearScan(opts) => {
-            linear_scan::run(func, rreg_universe, stackmap_info, run_checker, opts)
-        }
+        Algorithm::Backtracking(opts) => bt_main::alloc_main(
+            func,
+            rreg_universe,
+            stackmap_info,
+            run_checker,
+            opts,
+            &alloc,
+        ),
+        Algorithm::LinearScan(opts) => linear_scan::run(
+            func,
+            rreg_universe,
+            stackmap_info,
+            run_checker,
+            opts,
+            &alloc,
+        ),
     };
 
     info!("================ regalloc.rs: END function ================");
@@ -617,12 +699,13 @@ pub fn allocate_registers_with_opts<F: Function>(
 /// This is a convenient function that uses standard options for the allocator, according to the
 /// selected algorithm.
 #[inline(never)]
-pub fn allocate_registers<F: Function>(
+pub fn allocate_registers<'a, F: Function>(
     func: &mut F,
     rreg_universe: &RealRegUniverse,
     stackmap_info: Option<&StackmapRequestInfo>,
     algorithm: AlgorithmWithDefaults,
-) -> Result<RegAllocResult<F>, RegAllocError> {
+    alloc: &Alloc<'a>,
+) -> Result<RegAllocResult<'a, F>, RegAllocError> {
     let algorithm = match algorithm {
         AlgorithmWithDefaults::Backtracking => Algorithm::Backtracking(Default::default()),
         AlgorithmWithDefaults::LinearScan => Algorithm::LinearScan(Default::default()),
@@ -631,7 +714,7 @@ pub fn allocate_registers<F: Function>(
         algorithm,
         ..Default::default()
     };
-    allocate_registers_with_opts(func, rreg_universe, stackmap_info, opts)
+    allocate_registers_with_opts(func, rreg_universe, stackmap_info, opts, alloc)
 }
 
 // Facilities to snapshot regalloc inputs and reproduce them in regalloc.rs.

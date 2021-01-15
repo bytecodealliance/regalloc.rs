@@ -12,7 +12,7 @@ use std::{cmp::Ordering, default};
 
 use crate::{
     checker::CheckerContext, reg_maps::MentionRegUsageMapper, Function, RealRegUniverse,
-    RegAllocError, RegAllocResult, RegClass, Set, SpillSlot, VirtualReg, NUM_REG_CLASSES,
+    RegAllocError, RegAllocResult, RegClass, SpillSlot, VirtualReg, NUM_REG_CLASSES,
 };
 use crate::{
     checker::CheckerStackmapInfo,
@@ -22,9 +22,9 @@ use crate::{
     data_structures::{BlockIx, InstIx, InstPoint, Point, RealReg, RegVecsAndBounds},
     CheckerErrors, StackmapRequestInfo,
 };
+use crate::{Alloc, BumpSet, BumpVec};
 
 use analysis::{AnalysisInfo, RangeFrag};
-use smallvec::SmallVec;
 
 use self::analysis::{BlockBoundary, BlockPos};
 
@@ -133,7 +133,7 @@ impl fmt::Debug for LinearScanOptions {
 }
 
 // Local shorthands.
-type RegUses = RegVecsAndBounds;
+type RegUses<'a> = RegVecsAndBounds<'a>;
 
 /// A unique identifier for an interval.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -146,12 +146,12 @@ impl fmt::Debug for IntId {
 }
 
 #[derive(Clone)]
-struct FixedInterval {
+struct FixedInterval<'a> {
     reg: RealReg,
-    frags: Vec<RangeFrag>,
+    frags: BumpVec<'a, RangeFrag<'a>>,
 }
 
-impl fmt::Display for FixedInterval {
+impl<'a> fmt::Display for FixedInterval<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "fixed {:?} [", self.reg)?;
         for (i, frag) in self.frags.iter().enumerate() {
@@ -167,7 +167,7 @@ impl fmt::Display for FixedInterval {
     }
 }
 
-impl FixedInterval {
+impl<'a> FixedInterval<'a> {
     /// Find the fragment that contains the given instruction point.
     /// May crash if the point doesn't belong to any fragment.
     pub(crate) fn find_frag(&self, pt: InstPoint) -> usize {
@@ -185,10 +185,10 @@ impl FixedInterval {
     }
 }
 
-type Safepoints = SmallVec<[(InstIx, usize); 8]>;
+type Safepoints<'a> = BumpVec<'a, (InstIx, usize)>;
 
 #[derive(Clone)]
-pub(crate) struct VirtualInterval {
+pub(crate) struct VirtualInterval<'a> {
     id: IntId,
     vreg: VirtualReg,
 
@@ -204,14 +204,14 @@ pub(crate) struct VirtualInterval {
     /// Location assigned to this live interval.
     location: Location,
 
-    mentions: MentionMap,
-    block_boundaries: Vec<BlockBoundary>,
-    safepoints: Safepoints,
+    mentions: MentionMap<'a>,
+    block_boundaries: BumpVec<'a, BlockBoundary>,
+    safepoints: Safepoints<'a>,
     start: InstPoint,
     end: InstPoint,
 }
 
-impl fmt::Display for VirtualInterval {
+impl<'a> fmt::Display for VirtualInterval<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(fmt, "virtual {:?}", self.id)?;
         if self.ref_typed {
@@ -257,16 +257,16 @@ impl fmt::Display for VirtualInterval {
     }
 }
 
-impl VirtualInterval {
+impl<'a> VirtualInterval<'a> {
     fn new(
         id: IntId,
         vreg: VirtualReg,
         start: InstPoint,
         end: InstPoint,
-        mentions: MentionMap,
-        block_boundaries: Vec<BlockBoundary>,
+        mentions: MentionMap<'a>,
+        block_boundaries: BumpVec<'a, BlockBoundary>,
         ref_typed: bool,
-        safepoints: Safepoints,
+        safepoints: Safepoints<'a>,
     ) -> Self {
         Self {
             id,
@@ -283,22 +283,22 @@ impl VirtualInterval {
             ref_typed,
         }
     }
-    fn safepoints(&self) -> &Safepoints {
+    fn safepoints(&self) -> &Safepoints<'a> {
         &self.safepoints
     }
-    fn safepoints_mut(&mut self) -> &mut Safepoints {
+    fn safepoints_mut(&mut self) -> &mut Safepoints<'a> {
         &mut self.safepoints
     }
     fn mentions(&self) -> &MentionMap {
         &self.mentions
     }
-    fn mentions_mut(&mut self) -> &mut MentionMap {
+    fn mentions_mut(&mut self) -> &mut MentionMap<'a> {
         &mut self.mentions
     }
     fn block_boundaries(&self) -> &[BlockBoundary] {
         &self.block_boundaries
     }
-    fn block_boundaries_mut(&mut self) -> &mut Vec<BlockBoundary> {
+    fn block_boundaries_mut(&mut self) -> &mut BumpVec<'a, BlockBoundary> {
         &mut self.block_boundaries
     }
     fn covers(&self, pos: InstPoint) -> bool {
@@ -369,7 +369,7 @@ impl Mention {
     }
 }
 
-pub type MentionMap = SmallVec<[(InstIx, Mention); 2]>;
+pub type MentionMap<'a> = BumpVec<'a, (InstIx, Mention)>;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Location {
@@ -410,16 +410,16 @@ impl fmt::Display for Location {
 }
 
 /// A group of live intervals.
-pub struct Intervals {
-    virtuals: Vec<VirtualInterval>,
-    fixeds: Vec<FixedInterval>,
+pub struct Intervals<'a> {
+    virtuals: BumpVec<'a, VirtualInterval<'a>>,
+    fixeds: BumpVec<'a, FixedInterval<'a>>,
 }
 
-impl Intervals {
-    fn get(&self, int_id: IntId) -> &VirtualInterval {
+impl<'a> Intervals<'a> {
+    fn get(&self, int_id: IntId) -> &VirtualInterval<'a> {
         &self.virtuals[int_id.0]
     }
-    fn get_mut(&mut self, int_id: IntId) -> &mut VirtualInterval {
+    fn get_mut(&mut self, int_id: IntId) -> &mut VirtualInterval<'a> {
         &mut self.virtuals[int_id.0]
     }
     fn num_virtual_intervals(&self) -> usize {
@@ -437,7 +437,7 @@ impl Intervals {
         debug_assert!(int.location.spill().is_none());
         int.location = Location::Stack(slot);
     }
-    fn push_interval(&mut self, int: VirtualInterval) {
+    fn push_interval(&mut self, int: VirtualInterval<'a>) {
         debug_assert!(int.id.0 == self.virtuals.len());
         self.virtuals.push(int);
     }
@@ -591,10 +591,11 @@ fn last_use(interval: &VirtualInterval, pos: InstPoint, _reg_uses: &RegUses) -> 
 
 /// Checks that each register class has its own scratch register in addition to one available
 /// register, and creates a mapping of register class -> scratch register.
-fn compute_scratches(
+fn compute_scratches<'a>(
     reg_universe: &RealRegUniverse,
-) -> Result<Vec<Option<RealReg>>, RegAllocError> {
-    let mut scratches_by_rc = vec![None; NUM_REG_CLASSES];
+    alloc: &Alloc<'a>,
+) -> Result<BumpVec<'a, Option<RealReg>>, RegAllocError> {
+    let mut scratches_by_rc = alloc.collect(std::iter::repeat(None).take(NUM_REG_CLASSES));
     for i in 0..NUM_REG_CLASSES {
         if let Some(info) = &reg_universe.allocable_by_class[i] {
             if info.first == info.last {
@@ -622,13 +623,14 @@ fn compute_scratches(
 /// Allocation can fail if there are insufficient registers to even generate spill/reload code, or
 /// if the function appears to have any undefined VirtualReg/RealReg uses.
 #[inline(never)]
-pub(crate) fn run<F: Function>(
+pub(crate) fn run<'a, F: Function>(
     func: &mut F,
     reg_universe: &RealRegUniverse,
     stackmap_request: Option<&StackmapRequestInfo>,
     use_checker: bool,
     opts: &LinearScanOptions,
-) -> Result<RegAllocResult<F>, RegAllocError> {
+    alloc: &Alloc<'a>,
+) -> Result<RegAllocResult<'a, F>, RegAllocError> {
     let AnalysisInfo {
         reg_vecs_and_bounds: reg_uses,
         intervals,
@@ -636,10 +638,10 @@ pub(crate) fn run<F: Function>(
         liveouts,
         cfg,
         ..
-    } = analysis::run(func, reg_universe, stackmap_request)
+    } = analysis::run(func, reg_universe, stackmap_request, alloc)
         .map_err(|err| RegAllocError::Analysis(err))?;
 
-    let scratches_by_rc = compute_scratches(reg_universe)?;
+    let scratches_by_rc = compute_scratches(reg_universe, alloc)?;
 
     let stats = if opts.stats {
         let mut stats = Statistics::default();
@@ -680,6 +682,7 @@ pub(crate) fn run<F: Function>(
         &scratches_by_rc,
         intervals,
         stats,
+        alloc,
     )?;
 
     let virtuals = &intervals.virtuals;
@@ -688,37 +691,40 @@ pub(crate) fn run<F: Function>(
         func,
         &cfg,
         &reg_uses,
-        virtuals,
+        &virtuals[..],
         &liveins,
         &liveouts,
         &mut num_spill_slots,
         &scratches_by_rc,
+        alloc,
     );
 
     apply_registers(
         func,
-        virtuals,
-        memory_moves,
+        &virtuals[..],
+        &memory_moves[..],
         reg_universe,
         num_spill_slots,
         use_checker,
         stackmap_request,
+        alloc,
     )
 }
 
 #[inline(never)]
-fn set_registers<F: Function>(
+fn set_registers<'a, F: Function>(
     func: &mut F,
-    virtual_intervals: &Vec<VirtualInterval>,
+    virtual_intervals: &[VirtualInterval],
     reg_universe: &RealRegUniverse,
     use_checker: bool,
-    memory_moves: &Vec<InstToInsertAndExtPoint>,
+    memory_moves: &[InstToInsertAndExtPoint],
     stackmap_request: Option<&StackmapRequestInfo>,
-    stackmaps: &[Vec<SpillSlot>],
-) -> Result<Set<RealReg>, CheckerErrors> {
+    stackmaps: &[BumpVec<'a, SpillSlot>],
+    alloc: &Alloc<'a>,
+) -> Result<BumpSet<'a, RealReg>, CheckerErrors> {
     info!("set_registers");
 
-    let mut clobbered_registers = Set::empty();
+    let mut clobbered_registers = alloc.set(16);
 
     // Collect all the regs per instruction and mention set.
     let capacity = virtual_intervals
@@ -731,7 +737,7 @@ fn set_registers<F: Function>(
         return Ok(clobbered_registers);
     }
 
-    let mut mention_map = Vec::with_capacity(capacity);
+    let mut mention_map = alloc.vec(capacity);
 
     for int in virtual_intervals {
         let rreg = match int.location.reg() {
@@ -753,7 +759,7 @@ fn set_registers<F: Function>(
 
     // Set up checker state, if indicated by our configuration.
     let mut checker: Option<CheckerContext> = None;
-    let mut insn_blocks: Vec<BlockIx> = vec![];
+    let mut insn_blocks = alloc.vec(0);
     if use_checker {
         let stackmap_info =
             stackmap_request.map(|request| CheckerStackmapInfo { request, stackmaps });
@@ -762,6 +768,7 @@ fn set_registers<F: Function>(
             reg_universe,
             memory_moves,
             stackmap_info,
+            alloc,
         ));
         insn_blocks.resize(func.insns().len(), BlockIx::new(0));
         for block_ix in func.blocks() {
@@ -852,12 +859,16 @@ fn set_registers<F: Function>(
     Ok(clobbered_registers)
 }
 
-fn compute_stackmaps(
+fn compute_stackmaps<'a>(
     intervals: &[VirtualInterval],
     stackmap_request: Option<&StackmapRequestInfo>,
-) -> Vec<Vec<SpillSlot>> {
+    alloc: &Alloc<'a>,
+) -> BumpVec<'a, BumpVec<'a, SpillSlot>> {
     if let Some(request) = stackmap_request {
-        let mut stackmaps = vec![Vec::new(); request.safepoint_insns.len()];
+        let mut stackmaps = alloc.vec(request.safepoint_insns.len());
+        for _ in 0..request.safepoint_insns.len() {
+            stackmaps.push(alloc.vec(4));
+        }
         for int in intervals {
             if !int.ref_typed {
                 continue;
@@ -870,24 +881,25 @@ fn compute_stackmaps(
         }
         stackmaps
     } else {
-        vec![]
+        alloc.vec(0)
     }
 }
 
 /// Fills in the register assignments into instructions.
 #[inline(never)]
-fn apply_registers<F: Function>(
+fn apply_registers<'a, F: Function>(
     func: &mut F,
-    virtual_intervals: &Vec<VirtualInterval>,
-    memory_moves: Vec<InstToInsertAndExtPoint>,
+    virtual_intervals: &[VirtualInterval],
+    memory_moves: &[InstToInsertAndExtPoint],
     reg_universe: &RealRegUniverse,
     num_spill_slots: u32,
     use_checker: bool,
     stackmap_request: Option<&StackmapRequestInfo>,
-) -> Result<RegAllocResult<F>, RegAllocError> {
+    alloc: &Alloc<'a>,
+) -> Result<RegAllocResult<'a, F>, RegAllocError> {
     info!("apply_registers");
 
-    let stackmaps = compute_stackmaps(virtual_intervals, stackmap_request.clone());
+    let stackmaps = compute_stackmaps(virtual_intervals, stackmap_request.clone(), alloc);
 
     let clobbered_registers = set_registers(
         func,
@@ -897,6 +909,7 @@ fn apply_registers<F: Function>(
         &memory_moves,
         stackmap_request,
         &stackmaps,
+        alloc,
     )
     .map_err(|err| RegAllocError::RegChecker(err))?;
 
@@ -904,19 +917,22 @@ fn apply_registers<F: Function>(
         add_spills_reloads_and_moves(
             func,
             stackmap_request.map(|request| request.safepoint_insns.as_slice()),
-            memory_moves,
+            &memory_moves[..],
+            alloc,
         )
         .map_err(|e| RegAllocError::Other(e))?;
 
     // And now remove from the clobbered registers set, all those not available to the allocator.
     // But not removing the reserved regs, since we might have modified those.
-    clobbered_registers.filter_map(|&reg| {
-        if reg.get_index() >= reg_universe.allocable {
-            None
-        } else {
-            Some(reg)
+    let clobbered_registers = {
+        let mut n = alloc.set(clobbered_registers.len());
+        for reg in clobbered_registers {
+            if reg.get_index() < reg_universe.allocable {
+                n.insert(reg);
+            }
         }
-    });
+        n
+    };
 
     Ok(RegAllocResult {
         insns: final_insns,

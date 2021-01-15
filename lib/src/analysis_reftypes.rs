@@ -2,6 +2,7 @@
 
 use crate::data_structures::*;
 use crate::sparse_set::{SparseSet, SparseSetU};
+use crate::{Alloc, BumpMap};
 use std::{fmt, hash::Hash};
 
 use log::debug;
@@ -17,18 +18,19 @@ pub(crate) trait ReftypeAnalysis {
     fn find_range_id_for_reg(&self, pt: InstPoint, reg: Reg) -> Self::RangeId;
 
     /// Add all the ranges associated to this vreg into the set of reftyped ranges.
-    fn insert_reffy_ranges(&self, vreg: VirtualReg, set: &mut SparseSet<Self::RangeId>);
+    fn insert_reffy_ranges<'a>(&self, vreg: VirtualReg, set: &mut SparseSet<'a, Self::RangeId>);
 
     /// Mark a given RangeId as being reffy.
     fn mark_reffy(&mut self, range_id: &Self::RangeId);
 }
 
-pub(crate) fn core_reftypes_analysis<RA: ReftypeAnalysis>(
+pub(crate) fn core_reftypes_analysis<'a, RA: ReftypeAnalysis>(
     analysis: &mut RA,
     move_info: &MoveInfo,
     // As supplied by the client
     reftype_class: RegClass,
-    reftyped_vregs: &Vec<VirtualReg>,
+    reftyped_vregs: &[VirtualReg],
+    alloc: &Alloc<'a>,
 ) {
     // The game here is: starting with `reftyped_vregs`, find *all* the VirtualRanges and
     // RealRanges to which refness can flow, via instructions which the client's `is_move`
@@ -51,7 +53,7 @@ pub(crate) fn core_reftypes_analysis<RA: ReftypeAnalysis>(
     // ====== Compute (1) above ======
     // Each entry in `succ` maps from `src` to a `SparseSet<dsts>`, so to speak.  That is, for
     // `d1`, `d2`, etc, in `dsts`, the function contains moves `d1 := src`, `d2 := src`, etc.
-    let mut succ = Map::<RA::RangeId, SparseSetU<[RA::RangeId; 4]>>::default();
+    let mut succ: BumpMap<RA::RangeId, SparseSetU<[RA::RangeId; 4]>> = alloc.map(0);
     for &MoveInfoElem { dst, src, iix, .. } in move_info.iter() {
         // Don't waste time processing moves which can't possibly be of reftyped values.
         debug_assert!(dst.get_class() == src.get_class());
@@ -68,7 +70,7 @@ pub(crate) fn core_reftypes_analysis<RA: ReftypeAnalysis>(
             Some(dst_ranges) => dst_ranges.insert(dst_range),
             None => {
                 // Re `; 4`: we expect most copies copy a register to only a few destinations.
-                let mut dst_ranges = SparseSetU::<[RA::RangeId; 4]>::empty();
+                let mut dst_ranges = SparseSetU::<[RA::RangeId; 4]>::empty(alloc);
                 dst_ranges.insert(dst_range);
                 let r = succ.insert(src_range, dst_ranges);
                 assert!(r.is_none());
@@ -77,7 +79,7 @@ pub(crate) fn core_reftypes_analysis<RA: ReftypeAnalysis>(
     }
 
     // ====== Compute (2) above ======
-    let mut reftyped_ranges = SparseSet::<RA::RangeId>::empty();
+    let mut reftyped_ranges = SparseSet::<RA::RangeId>::empty(alloc);
     for vreg in reftyped_vregs {
         // If this fails, the client has been telling is that some virtual reg is reftyped, yet
         // it doesn't belong to the class of regs that it claims can carry refs.  So the client

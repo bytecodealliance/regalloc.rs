@@ -35,6 +35,7 @@ use crate::data_structures::{
     VirtualReg,
 };
 use crate::union_find::{ToFromU32, UnionFind, UnionFindEquivClasses};
+use crate::Alloc;
 use crate::Function;
 
 //=============================================================================
@@ -131,18 +132,19 @@ impl ToFromU32 for VirtualRangeIx {
 // it also may change the spill costs for some of the VLRs in `vlr_env` to
 // better reflect the spill cost situation in the presence of coalescing.
 #[inline(never)]
-pub(crate) fn do_coalescing_analysis<F: Function>(
+pub(crate) fn do_coalescing_analysis<'a, F: Function>(
     func: &F,
     univ: &RealRegUniverse,
-    rlr_env: &TypedIxVec<RealRangeIx, RealRange>,
-    vlr_env: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
-    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-    reg_to_ranges_maps: &RegToRangesMaps,
-    move_info: &MoveInfo,
+    rlr_env: &TypedIxVec<'a, RealRangeIx, RealRange>,
+    vlr_env: &mut TypedIxVec<'a, VirtualRangeIx, VirtualRange>,
+    frag_env: &TypedIxVec<'a, RangeFragIx, RangeFrag>,
+    reg_to_ranges_maps: &RegToRangesMaps<'a>,
+    move_info: &MoveInfo<'a>,
+    alloc: &Alloc<'a>,
 ) -> (
-    TypedIxVec<VirtualRangeIx, SmallVec<[Hint; 8]>>,
-    UnionFindEquivClasses<VirtualRangeIx>,
-    TypedIxVec<InstIx, bool>,
+    TypedIxVec<'a, VirtualRangeIx, SmallVec<[Hint; 8]>>,
+    UnionFindEquivClasses<'a, VirtualRangeIx>,
+    TypedIxVec<'a, InstIx, bool>,
 ) {
     info!("");
     info!("do_coalescing_analysis: begin");
@@ -505,19 +507,19 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
     // suppose, for example if there are two identical copy insns at different points on the
     // "boundary" for some VLR.  I don't think it matters though since we're going to rank the
     // hints by strength and then choose at most one.
-    let mut hints = TypedIxVec::<VirtualRangeIx, SmallVec<[Hint; 8]>>::new();
+    let mut hints = TypedIxVec::<VirtualRangeIx, SmallVec<[Hint; 8]>>::new(alloc);
     hints.resize(vlr_env.len(), smallvec![]);
 
     // RETURNED TO CALLER
     // A vector that simply records which insns are v-to-v boundary moves, as established by the
     // analysis below.  This info is collected here because (1) the caller (BT) needs to have it
     // and (2) this is the first point at which we can efficiently compute it.
-    let mut is_vv_boundary_move = TypedIxVec::<InstIx, bool>::new();
+    let mut is_vv_boundary_move = TypedIxVec::<InstIx, bool>::new(alloc);
     is_vv_boundary_move.resize(func.insns().len() as u32, false);
 
     // RETURNED TO CALLER (after finalisation)
     // The virtual-to-virtual equivalence classes we're collecting.
-    let mut vlrEquivClassesUF = UnionFind::<VirtualRangeIx>::new(vlr_env.len() as usize);
+    let mut vlrEquivClassesUF = UnionFind::<VirtualRangeIx>::new(vlr_env.len() as usize, alloc);
 
     // Not returned to caller; for use only in this function.
     // A list of `VirtualRange`s for which the `total_cost` (hence also their
@@ -525,7 +527,7 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
     // can't do this directly in the loop below due to borrowing constraints,
     // hence we collect the required info in this vector and do it in a second
     // loop.
-    let mut decVLRcosts = Vec::<(VirtualRangeIx, VirtualRangeIx, u32)>::new();
+    let mut decVLRcosts = alloc.vec(16);
 
     for MoveInfoElem {
         dst,
@@ -631,7 +633,7 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
     }
 
     let vlrEquivClasses: UnionFindEquivClasses<VirtualRangeIx> =
-        vlrEquivClassesUF.get_equiv_classes();
+        vlrEquivClassesUF.get_equiv_classes(alloc);
 
     if log_enabled!(Level::Debug) {
         debug!("Revised VLRs:");
