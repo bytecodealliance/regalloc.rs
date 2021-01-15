@@ -1,10 +1,6 @@
 //! Performs a simple taint analysis, to find all live ranges that are reftyped.
 
-use crate::data_structures::{
-    InstPoint, Map, MoveInfo, MoveInfoElem, RangeFrag, RangeFragIx, RangeId, RealRange,
-    RealRangeIx, Reg, RegClass, RegToRangesMaps, TypedIxVec, VirtualRange, VirtualRangeIx,
-    VirtualReg,
-};
+use crate::data_structures::*;
 use crate::sparse_set::{SparseSet, SparseSetU};
 use std::{fmt, hash::Hash};
 
@@ -25,83 +21,6 @@ pub(crate) trait ReftypeAnalysis {
 
     /// Mark a given RangeId as being reffy.
     fn mark_reffy(&mut self, range_id: &Self::RangeId);
-}
-
-/// Implementation of the reftype analysis for the backtracking algorithm.
-struct BacktrackingReftypeAnalysis<'a> {
-    rlr_env: &'a mut TypedIxVec<RealRangeIx, RealRange>,
-    vlr_env: &'a mut TypedIxVec<VirtualRangeIx, VirtualRange>,
-    frag_env: &'a TypedIxVec<RangeFragIx, RangeFrag>,
-    reg_to_ranges_maps: &'a RegToRangesMaps,
-}
-
-impl<'a> ReftypeAnalysis for BacktrackingReftypeAnalysis<'a> {
-    type RangeId = RangeId;
-
-    #[inline(always)]
-    fn find_range_id_for_reg(&self, pt: InstPoint, reg: Reg) -> Self::RangeId {
-        if reg.is_real() {
-            for &rlrix in &self.reg_to_ranges_maps.rreg_to_rlrs_map[reg.get_index() as usize] {
-                if self.rlr_env[rlrix]
-                    .sorted_frags
-                    .contains_pt(self.frag_env, pt)
-                {
-                    return RangeId::new_real(rlrix);
-                }
-            }
-        } else {
-            for &vlrix in &self.reg_to_ranges_maps.vreg_to_vlrs_map[reg.get_index() as usize] {
-                if self.vlr_env[vlrix].sorted_frags.contains_pt(pt) {
-                    return RangeId::new_virtual(vlrix);
-                }
-            }
-        }
-        panic!("do_reftypes_analysis::find_range_for_reg: can't find range");
-    }
-
-    #[inline(always)]
-    fn mark_reffy(&mut self, range: &Self::RangeId) {
-        if range.is_real() {
-            let rrange = &mut self.rlr_env[range.to_real()];
-            debug_assert!(!rrange.is_ref);
-            debug!(" -> rrange {:?} is reffy", range.to_real());
-            rrange.is_ref = true;
-        } else {
-            let vrange = &mut self.vlr_env[range.to_virtual()];
-            debug_assert!(!vrange.is_ref);
-            debug!(" -> rrange {:?} is reffy", range.to_virtual());
-            vrange.is_ref = true;
-        }
-    }
-
-    #[inline(always)]
-    fn insert_reffy_ranges(&self, vreg: VirtualReg, set: &mut SparseSet<Self::RangeId>) {
-        for vlr_ix in &self.reg_to_ranges_maps.vreg_to_vlrs_map[vreg.get_index()] {
-            debug!("range {:?} is reffy due to reffy vreg {:?}", vlr_ix, vreg);
-            set.insert(RangeId::new_virtual(*vlr_ix));
-        }
-    }
-}
-
-pub(crate) fn do_reftypes_analysis(
-    // From dataflow/liveness analysis.  Modified by setting their is_ref bit.
-    rlr_env: &mut TypedIxVec<RealRangeIx, RealRange>,
-    vlr_env: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
-    // From dataflow analysis
-    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
-    reg_to_ranges_maps: &RegToRangesMaps,
-    move_info: &MoveInfo,
-    // As supplied by the client
-    reftype_class: RegClass,
-    reftyped_vregs: &Vec<VirtualReg>,
-) {
-    let mut analysis = BacktrackingReftypeAnalysis {
-        rlr_env,
-        vlr_env,
-        frag_env,
-        reg_to_ranges_maps,
-    };
-    core_reftypes_analysis(&mut analysis, move_info, reftype_class, reftyped_vregs);
 }
 
 pub(crate) fn core_reftypes_analysis<RA: ReftypeAnalysis>(
