@@ -31,78 +31,13 @@ mod reg_maps;
 mod snapshot;
 mod sparse_set;
 mod union_find;
+mod bump;
 
 use log::{info, log_enabled, Level};
 use std::default;
 use std::{borrow::Cow, fmt};
 
-// Allocation with bumpalo
-pub use bumpalo::Bump;
-use hashbrown::raw::{AllocError, Allocator};
-use std::alloc::Layout;
-use std::hash::BuildHasherDefault;
-
-/// An arena allocator wrapped around a `bumpalo::Bump`.
-#[derive(Clone)]
-pub struct Alloc<'a>(pub &'a Bump);
-
-// Export arena-allocated container types.
-pub use bumpalo::collections::Vec as BumpVec;
-type BuildHasher = BuildHasherDefault<rustc_hash::FxHasher>;
-pub type BumpMap<'bump, K, V> = hashbrown::HashMap<K, V, BuildHasher, Alloc<'bump>>;
-pub type BumpSet<'bump, T> = hashbrown::HashSet<T, BuildHasher, Alloc<'bump>>;
-use core::ptr::NonNull;
-
-// Implement the allocator for hashbrown.
-unsafe impl<'a> Allocator for Alloc<'a> {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<u8>, AllocError> {
-        Ok(self.0.alloc_layout(layout))
-    }
-    unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
-}
-
-impl<'a> Alloc<'a> {
-    /// Allocate a new BumpVec.
-    pub fn vec<T>(&self, capacity: usize) -> BumpVec<'a, T> {
-        BumpVec::with_capacity_in(capacity, self.0)
-    }
-    /// Allocate a new BumpMap.
-    pub fn map<K, V>(&self, capacity: usize) -> BumpMap<'a, K, V> {
-        BumpMap::with_capacity_and_hasher_in(capacity, BuildHasher::default(), self.clone())
-    }
-    /// Allocate a new BumpSet.
-    pub fn set<T: Eq + std::hash::Hash>(&self, capacity: usize) -> BumpSet<'a, T> {
-        BumpSet::with_capacity_and_hasher_in(capacity, BuildHasher::default(), self.clone())
-    }
-    /// Collect into a BumpVec.
-    pub fn collect<T>(&self, iter: impl Iterator<Item = T>) -> BumpVec<'a, T> {
-        let mut v = self.vec(0);
-        v.extend(iter);
-        v
-    }
-    /// Clone a BumpSet.
-    pub fn clone_set<'b, T: Clone + Eq + std::hash::Hash>(
-        &self,
-        set: &BumpSet<'b, T>,
-    ) -> BumpSet<'a, T> {
-        let mut ret = self.set(set.len());
-        for item in set.iter() {
-            ret.insert(item.clone());
-        }
-        ret
-    }
-    /// Clone a BumpMap.
-    pub fn clone_map<'b, K: Clone + Eq + std::hash::Hash, V: Clone>(
-        &self,
-        map: &BumpMap<'b, K, V>,
-    ) -> BumpMap<'a, K, V> {
-        let mut ret = self.map(map.len());
-        for (k, v) in map.iter() {
-            ret.insert(k.clone(), v.clone());
-        }
-        ret
-    }
-}
+pub use bump::*;
 
 // Stuff that is defined by the library
 
