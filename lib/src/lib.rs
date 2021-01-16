@@ -40,6 +40,7 @@ use std::{borrow::Cow, fmt};
 pub use bumpalo::Bump;
 use hashbrown::raw::{AllocError, Allocator};
 use std::alloc::Layout;
+use std::hash::BuildHasherDefault;
 
 /// An arena allocator wrapped around a `bumpalo::Bump`.
 #[derive(Clone)]
@@ -47,10 +48,9 @@ pub struct Alloc<'a>(pub &'a Bump);
 
 // Export arena-allocated container types.
 pub use bumpalo::collections::Vec as BumpVec;
-pub type BumpMap<'bump, K, V> =
-    hashbrown::HashMap<K, V, hashbrown::hash_map::DefaultHashBuilder, Alloc<'bump>>;
-pub type BumpSet<'bump, T> =
-    hashbrown::HashSet<T, hashbrown::hash_map::DefaultHashBuilder, Alloc<'bump>>;
+type BuildHasher = BuildHasherDefault<rustc_hash::FxHasher>;
+pub type BumpMap<'bump, K, V> = hashbrown::HashMap<K, V, BuildHasher, Alloc<'bump>>;
+pub type BumpSet<'bump, T> = hashbrown::HashSet<T, BuildHasher, Alloc<'bump>>;
 use core::ptr::NonNull;
 
 // Implement the allocator for hashbrown.
@@ -68,11 +68,11 @@ impl<'a> Alloc<'a> {
     }
     /// Allocate a new BumpMap.
     pub fn map<K, V>(&self, capacity: usize) -> BumpMap<'a, K, V> {
-        BumpMap::with_capacity_in(capacity, self.clone())
+        BumpMap::with_capacity_and_hasher_in(capacity, BuildHasher::default(), self.clone())
     }
     /// Allocate a new BumpSet.
     pub fn set<T: Eq + std::hash::Hash>(&self, capacity: usize) -> BumpSet<'a, T> {
-        BumpSet::with_capacity_in(capacity, self.clone())
+        BumpSet::with_capacity_and_hasher_in(capacity, BuildHasher::default(), self.clone())
     }
     /// Collect into a BumpVec.
     pub fn collect<T>(&self, iter: impl Iterator<Item = T>) -> BumpVec<'a, T> {
