@@ -13,7 +13,7 @@ use crate::{
     union_find::UnionFind,
     AnalysisError, Function, RealRegUniverse, RegClass, StackmapRequestInfo, TypedIxVec,
 };
-use crate::{Alloc, BumpVec};
+use crate::{Alloc, BumpSmallVec, BumpVec};
 use log::{debug, info, log_enabled, trace, Level};
 use std::{cmp::Ordering, fmt, mem};
 
@@ -323,8 +323,7 @@ impl<'a, 'b> ReftypeAnalysis for LsraReftypeAnalysis<'a, 'b> {
         let vranges = &self.vreg_to_vranges[vreg.get_index()];
         for vrange in vranges {
             // If any fragment in the range contains the point, then the whole range must be reffy.
-            let found = vrange
-                .frag_ixs
+            let found = vrange.frag_ixs[..]
                 .binary_search_by(|&ix| {
                     let frag = &self.frag_env[ix.get() as usize];
                     if pt < frag.first {
@@ -484,10 +483,10 @@ fn get_range_frags_for_block<'a, F: Function>(
         let reg_state_ix = reg_to_reg_ix(num_real_regs, *reg) as usize;
         debug_assert!(state[reg_state_ix].is_none());
         state[reg_state_ix] = Some(RangeFrag {
-            mentions: alloc.vec(0),
+            mentions: BumpSmallVec::new(alloc),
             first: first_pt_in_block,
             last: first_pt_in_block,
-            safepoints: alloc.vec(0),
+            safepoints: BumpSmallVec::new(alloc),
             ref_typed: false,
         });
         visited.push(reg_state_ix as u32);
@@ -568,9 +567,12 @@ fn get_range_frags_for_block<'a, F: Function>(
                     state[reg_state_ix] = Some(RangeFrag {
                         first: new_pt,
                         last: new_pt,
-                        mentions: alloc.collect(std::iter::once((inst_ix, mention_set))),
+                        mentions: BumpSmallVec::from(
+                            std::iter::once((inst_ix, mention_set)),
+                            alloc,
+                        ),
                         ref_typed: false,
-                        safepoints: alloc.vec(0),
+                        safepoints: BumpSmallVec::new(alloc),
                     })
                 }
 
@@ -584,8 +586,8 @@ fn get_range_frags_for_block<'a, F: Function>(
                     ref mut safepoints,
                 }) => {
                     // Steal the mentions and replace the mutable ref by an empty vector for reuse.
-                    let stolen_mentions = mem::replace(mentions, alloc.vec(0));
-                    let stolen_safepoints = mem::replace(safepoints, alloc.vec(0));
+                    let stolen_mentions = mem::replace(mentions, BumpSmallVec::new(alloc));
+                    let stolen_safepoints = mem::replace(safepoints, BumpSmallVec::new(alloc));
 
                     let (frag, frag_metrics) = RangeFrag::new(
                         func,
@@ -643,9 +645,9 @@ fn get_range_frags_for_block<'a, F: Function>(
                 bix,
                 prev_frag.first,
                 prev_frag.last,
-                mem::replace(&mut prev_frag.mentions, alloc.vec(0)),
+                mem::replace(&mut prev_frag.mentions, BumpSmallVec::new(alloc)),
                 prev_frag.ref_typed,
-                mem::replace(&mut prev_frag.safepoints, alloc.vec(0)),
+                mem::replace(&mut prev_frag.safepoints, BumpSmallVec::new(alloc)),
             );
             emit_range_frag(r, frag, frag_metrics, num_real_regs);
             state[*r_state_ix as usize] = None;
@@ -767,7 +769,7 @@ fn get_range_frags<'a, F: Function>(
 #[derive(Clone)]
 struct SimplifiedVirtualRange<'a> {
     int: IntId,
-    frag_ixs: BumpVec<'a, RangeFragIx>,
+    frag_ixs: BumpSmallVec<'a, [RangeFragIx; 4]>,
 }
 
 type VirtualRegToRanges<'a> = BumpVec<'a, BumpVec<'a, SimplifiedVirtualRange<'a>>>;
@@ -1057,9 +1059,7 @@ fn merge_range_frags<'a, F: Function>(
     // on when doing the reftype analysis.
     for entry in vreg_to_vranges.iter_mut() {
         for vrange in entry {
-            vrange
-                .frag_ixs
-                .sort_unstable_by_key(|&fix| frag_env[fix.get() as usize].first);
+            vrange.frag_ixs[..].sort_unstable_by_key(|&fix| frag_env[fix.get() as usize].first);
         }
     }
 
@@ -1089,9 +1089,9 @@ fn flush_interval<'a>(
             fixed_int.frags.push(RangeFrag {
                 first: frag.first,
                 last: frag.last,
-                mentions: mem::replace(&mut frag.mentions, alloc.vec(2)),
+                mentions: mem::replace(&mut frag.mentions, BumpSmallVec::new(alloc)),
                 ref_typed: false,
-                safepoints: alloc.vec(0),
+                safepoints: BumpSmallVec::new(alloc),
             })
         }
         return Ok(());
@@ -1112,16 +1112,16 @@ fn flush_interval<'a>(
         // Merge all the register mentions and safepoints together.
 
         // TODO rework this!
-        let mut mentions = alloc.vec(capacity);
-        let mut safepoints: Safepoints = alloc.vec(0);
+        let mut mentions = MentionMap::with_capacity(capacity, alloc);
+        let mut safepoints: Safepoints = BumpSmallVec::new(alloc);
         for frag in frag_ixs.iter().map(|fix| &frags[fix.get() as usize]) {
             mentions.extend(frag.mentions.iter().cloned());
             safepoints.extend(frag.safepoints.iter().cloned());
             start = InstPoint::min(start, frag.first);
             end = InstPoint::max(end, frag.last);
         }
-        safepoints.sort_unstable_by_key(|tuple| tuple.0);
-        mentions.sort_unstable_by_key(|tuple| tuple.0);
+        safepoints[..].sort_unstable_by_key(|tuple| tuple.0);
+        mentions[..].sort_unstable_by_key(|tuple| tuple.0);
 
         // Merge mention set that are at the same instruction.
         let mut s = 0;
@@ -1226,7 +1226,7 @@ fn flush_interval<'a>(
     if wants_stackmaps {
         vreg_to_vranges[reg.get_index()].push(SimplifiedVirtualRange {
             int: id,
-            frag_ixs: alloc.collect(frag_ixs.into_iter().cloned()),
+            frag_ixs: BumpSmallVec::from(frag_ixs.into_iter().cloned(), alloc),
         })
     }
 

@@ -6,10 +6,9 @@ use crate::{
     sparse_set::SparseSet,
     Function, RealReg, Reg, SpillSlot, TypedIxVec, VirtualReg, Writable,
 };
-use crate::{Alloc, BumpVec};
+use crate::{Alloc, BumpSmallVec, BumpVec};
 
 use log::{debug, info, trace};
-use smallvec::SmallVec;
 use std::fmt;
 
 fn resolve_moves_in_block<'a, F: Function>(
@@ -173,15 +172,15 @@ fn resolve_moves_in_block<'a, F: Function>(
     moves_in_blocks.append(&mut spills_at_inst);
 }
 
-#[derive(Default, Clone)]
-struct BlockInfo {
-    start: SmallVec<[(VirtualReg, IntId); 4]>,
-    end: SmallVec<[(VirtualReg, IntId); 4]>,
+#[derive(Clone)]
+struct BlockInfo<'a> {
+    start: BumpSmallVec<'a, [(VirtualReg, IntId); 4]>,
+    end: BumpSmallVec<'a, [(VirtualReg, IntId); 4]>,
 }
 
 static UNSORTED_THRESHOLD: usize = 8;
 
-impl BlockInfo {
+impl<'a> BlockInfo<'a> {
     #[inline(never)]
     fn insert(&mut self, pos: BlockPos, vreg: VirtualReg, id: IntId) {
         match pos {
@@ -201,10 +200,10 @@ impl BlockInfo {
     #[inline(never)]
     fn finish(&mut self) {
         if self.start.len() >= UNSORTED_THRESHOLD {
-            self.start.sort_unstable_by_key(|pair| pair.0);
+            self.start[..].sort_unstable_by_key(|pair| pair.0);
         }
         if self.end.len() >= UNSORTED_THRESHOLD {
-            self.end.sort_unstable_by_key(|pair| pair.0);
+            self.end[..].sort_unstable_by_key(|pair| pair.0);
         }
     }
 
@@ -215,7 +214,7 @@ impl BlockInfo {
             BlockPos::End => &self.end,
         };
         if array.len() >= UNSORTED_THRESHOLD {
-            array[array.binary_search_by_key(vreg, |pair| pair.0).unwrap()].1
+            array[array[..].binary_search_by_key(vreg, |pair| pair.0).unwrap()].1
         } else {
             array
                 .iter()
@@ -235,13 +234,13 @@ fn collect_block_infos<'a, F: Function>(
     liveins: &TypedIxVec<'a, BlockIx, SparseSet<Reg>>,
     liveouts: &TypedIxVec<'a, BlockIx, SparseSet<Reg>>,
     alloc: &Alloc<'a>,
-) -> BumpVec<'a, BlockInfo> {
+) -> BumpVec<'a, BlockInfo<'a>> {
     // Preallocate the block information, with the final size of each vector.
     let mut infos = alloc.vec(func.blocks().len());
     for bix in func.blocks() {
         infos.push(BlockInfo {
-            start: SmallVec::with_capacity(liveins[bix].card()),
-            end: SmallVec::with_capacity(liveouts[bix].card()),
+            start: BumpSmallVec::with_capacity(liveins[bix].card(), alloc),
+            end: BumpSmallVec::with_capacity(liveouts[bix].card(), alloc),
         });
     }
 

@@ -22,7 +22,7 @@ use crate::{
     data_structures::{BlockIx, InstIx, InstPoint, Point, RealReg, RegVecsAndBounds},
     CheckerErrors, StackmapRequestInfo,
 };
-use crate::{Alloc, BumpSet, BumpVec};
+use crate::{Alloc, BumpSet, BumpSmallVec, BumpVec};
 
 use analysis::{AnalysisInfo, RangeFrag};
 
@@ -185,7 +185,7 @@ impl<'a> FixedInterval<'a> {
     }
 }
 
-type Safepoints<'a> = BumpVec<'a, (InstIx, usize)>;
+type Safepoints<'a> = BumpSmallVec<'a, [(InstIx, usize); 8]>;
 
 #[derive(Clone)]
 pub(crate) struct VirtualInterval<'a> {
@@ -369,7 +369,7 @@ impl Mention {
     }
 }
 
-pub type MentionMap<'a> = BumpVec<'a, (InstIx, Mention)>;
+pub type MentionMap<'a> = BumpSmallVec<'a, [(InstIx, Mention); 2]>;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Location {
@@ -463,7 +463,7 @@ fn next_use(interval: &VirtualInterval, pos: InstPoint, _reg_uses: &RegUses) -> 
     let mentions = interval.mentions();
     let target = InstPoint::max(pos, interval.start);
 
-    let ret = match mentions.binary_search_by_key(&target.iix(), |mention| mention.0) {
+    let ret = match mentions[..].binary_search_by_key(&target.iix(), |mention| mention.0) {
         Ok(index) => {
             // Either the selected index is a perfect match, or the next mention is
             // the correct answer.
@@ -531,7 +531,7 @@ fn last_use(interval: &VirtualInterval, pos: InstPoint, _reg_uses: &RegUses) -> 
 
     let target = InstPoint::min(pos, interval.end);
 
-    let ret = match mentions.binary_search_by_key(&target.iix(), |mention| mention.0) {
+    let ret = match mentions[..].binary_search_by_key(&target.iix(), |mention| mention.0) {
         Ok(index) => {
             // Either the selected index is a perfect match, or the previous mention
             // is the correct answer.
@@ -667,7 +667,7 @@ pub(crate) fn run<'a, F: Function>(
         trace!("unassigned intervals:");
         for int in &intervals.virtuals {
             trace!("{}", int);
-            for mention in &int.mentions {
+            for mention in int.mentions.iter() {
                 trace!("  mention @ {:?}: {:?}", mention.0, mention.1);
             }
         }
@@ -746,7 +746,7 @@ fn set_registers<'a, F: Function>(
         };
         trace!("int: {}", int);
         trace!("  {:?}", int.mentions);
-        for &mention in &int.mentions {
+        for &mention in int.mentions.iter() {
             mention_map.push((mention.0, mention.1, int.vreg, rreg));
         }
     }
@@ -874,7 +874,7 @@ fn compute_stackmaps<'a>(
                 continue;
             }
             if let Some(slot) = int.location.spill() {
-                for &(_sp_iix, sp_ix) in &int.safepoints {
+                for &(_sp_iix, sp_ix) in int.safepoints.iter() {
                     stackmaps[sp_ix].push(slot);
                 }
             }

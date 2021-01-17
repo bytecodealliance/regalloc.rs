@@ -7,9 +7,7 @@ use crate::analysis_main::AnalysisError;
 use crate::data_structures::{BlockIx, InstIx, Range, Set, TypedIxVec};
 use crate::sparse_set::{SparseSetU, SparseSetUIter};
 use crate::Function;
-use crate::{Alloc, BumpVec};
-
-use smallvec::SmallVec;
+use crate::{Alloc, BumpSmallVec, BumpVec};
 
 //=============================================================================
 // Debugging config.  Set all these to `false` for normal operation.
@@ -180,7 +178,7 @@ fn calc_preord_and_postord<'a, F: Function>(
 
     // Set up initial state: entry block on the stack, marked as visited, and placed at the
     // start of the pre-ord sequence.
-    let mut stack = SmallVec::<[(BlockIx, SparseSetUIter<[BlockIx; 4]>); 64]>::new();
+    let mut stack = BumpSmallVec::<[(BlockIx, SparseSetUIter<[BlockIx; 4]>); 64]>::new(alloc);
     let bix_entry = func.entry_block();
     visited[bix_entry] = true;
     pre_ord.push(bix_entry);

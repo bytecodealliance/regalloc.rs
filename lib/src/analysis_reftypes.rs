@@ -2,11 +2,10 @@
 
 use crate::data_structures::*;
 use crate::sparse_set::{SparseSet, SparseSetU};
-use crate::{Alloc, BumpMap};
+use crate::{Alloc, BumpMap, BumpSmallVec};
 use std::{fmt, hash::Hash};
 
 use log::debug;
-use smallvec::SmallVec;
 
 /// Parameters to configure a reftype analysis.
 pub(crate) trait ReftypeAnalysis {
@@ -90,7 +89,7 @@ pub(crate) fn core_reftypes_analysis<'a, RA: ReftypeAnalysis>(
 
     // ====== Compute (3) above ======
     // Almost all chains of copies will be less than 64 long, I would guess.
-    let mut stack = SmallVec::<[RA::RangeId; 64]>::new();
+    let mut stack = BumpSmallVec::<[RA::RangeId; 64]>::new(alloc);
     let mut visited = reftyped_ranges.clone();
     for start_point_range in reftyped_ranges.iter() {
         // Perform DFS from `start_point_range`.

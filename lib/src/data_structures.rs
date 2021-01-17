@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::slice::{Iter, IterMut};
 
-use crate::{Alloc, BumpVec};
+use crate::{Alloc, BumpSmallVec, BumpVec};
 use crate::{Function, RegUsageMapper};
 
 #[cfg(feature = "enable-serde")]
@@ -1760,7 +1760,7 @@ impl fmt::Debug for RangeFragMetrics {
 // RangeFragIxs refer, is not stored here.
 
 #[derive(Clone)]
-pub(crate) struct SortedRangeFragIxs<'a>(BumpVec<'a, RangeFragIx>);
+pub(crate) struct SortedRangeFragIxs<'a>(BumpSmallVec<'a, [RangeFragIx; 4]>);
 
 impl<'a> fmt::Debug for SortedRangeFragIxs<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -1769,7 +1769,7 @@ impl<'a> fmt::Debug for SortedRangeFragIxs<'a> {
 }
 
 impl<'a> Deref for SortedRangeFragIxs<'a> {
-    type Target = BumpVec<'a, RangeFragIx>;
+    type Target = BumpSmallVec<'a, [RangeFragIx; 4]>;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -1788,7 +1788,7 @@ impl<'a> SortedRangeFragIxs<'a> {
     }
 
     fn sort(&mut self, fenv: &TypedIxVec<RangeFragIx, RangeFrag>) {
-        self.0.sort_unstable_by(|fix_a, fix_b| {
+        &mut self.0[..].sort_unstable_by(|fix_a, fix_b| {
             match cmp_range_frags(&fenv[*fix_a], &fenv[*fix_b]) {
                 Some(Ordering::Less) => Ordering::Less,
                 Some(Ordering::Greater) => Ordering::Greater,
@@ -1800,7 +1800,7 @@ impl<'a> SortedRangeFragIxs<'a> {
     }
 
     pub(crate) fn new(
-        frag_ixs: BumpVec<'a, RangeFragIx>,
+        frag_ixs: BumpSmallVec<'a, [RangeFragIx; 4]>,
         fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
     ) -> Self {
         let mut res = Self(frag_ixs);
@@ -1815,7 +1815,7 @@ impl<'a> SortedRangeFragIxs<'a> {
         fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
         alloc: &Alloc<'a>,
     ) -> Self {
-        let mut res = Self(alloc.vec(1));
+        let mut res = Self(BumpSmallVec::new(alloc));
         res.0.push(fix);
         res.check(fenv);
         res
@@ -1827,7 +1827,7 @@ impl<'a> SortedRangeFragIxs<'a> {
         fenv: &TypedIxVec<RangeFragIx, RangeFrag>,
         pt: InstPoint,
     ) -> bool {
-        self.0
+        self.0[..]
             .binary_search_by(|&ix| {
                 let frag = &fenv[ix];
                 if pt < frag.first {
@@ -1845,7 +1845,7 @@ impl<'a> SortedRangeFragIxs<'a> {
 /// Vectors of RangeFrags, sorted so that they are in ascending order, per
 /// their InstPoint fields.  The RangeFrags may not overlap.
 #[derive(Clone)]
-pub(crate) struct SortedRangeFrags<'a>(BumpVec<'a, RangeFrag>);
+pub(crate) struct SortedRangeFrags<'a>(BumpSmallVec<'a, [RangeFrag; 4]>);
 
 impl<'a> fmt::Debug for SortedRangeFrags<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -1854,7 +1854,7 @@ impl<'a> fmt::Debug for SortedRangeFrags<'a> {
 }
 
 impl<'a> Deref for SortedRangeFrags<'a> {
-    type Target = BumpVec<'a, RangeFrag>;
+    type Target = BumpSmallVec<'a, [RangeFrag; 4]>;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -1870,13 +1870,13 @@ impl<'a> DerefMut for SortedRangeFrags<'a> {
 
 impl<'a> SortedRangeFrags<'a> {
     pub(crate) fn unit(frag: RangeFrag, alloc: &Alloc<'a>) -> Self {
-        let mut res = Self(alloc.vec(1));
+        let mut res = Self(BumpSmallVec::new(alloc));
         res.0.push(frag);
         res
     }
 
     pub(crate) fn empty(alloc: &Alloc<'a>) -> Self {
-        Self(alloc.vec(0))
+        Self(BumpSmallVec::new(alloc))
     }
 
     pub(crate) fn overlaps(&self, other: &Self) -> bool {
@@ -1911,7 +1911,7 @@ impl<'a> SortedRangeFrags<'a> {
 
     /// Does this sorted list of range fragments contain the given instruction point?
     pub(crate) fn contains_pt(&self, pt: InstPoint) -> bool {
-        self.0
+        self.0[..]
             .binary_search_by(|frag| {
                 if pt < frag.first {
                     Ordering::Greater
@@ -2142,11 +2142,13 @@ pub(crate) struct RegToRangesMaps<'a> {
     /// This maps RealReg indices to the set of RealRangeIxs for that RealReg. Valid indices are
     /// real register indices for all non-sanitised real regs; that is,
     /// 0..RealRegUniverse::allocable. The Vecs of RealRangeIxs are duplicate-free.
-    pub(crate) rreg_to_rlrs_map: BumpVec<'a, /*real reg ix, */ BumpVec<'a, RealRangeIx>>,
+    pub(crate) rreg_to_rlrs_map:
+        BumpVec<'a, /*real reg ix, */ BumpSmallVec<'a, [RealRangeIx; 6]>>,
 
     /// This maps VirtualReg indices to the set of VirtualRangeIxs for that VirtualReg. Valid
     /// indices are 0..Function::get_num_vregs().
-    pub(crate) vreg_to_vlrs_map: BumpVec<'a, /*virtual reg ix, */ BumpVec<'a, VirtualRangeIx>>,
+    pub(crate) vreg_to_vlrs_map:
+        BumpVec<'a, /*virtual reg ix, */ BumpSmallVec<'a, [VirtualRangeIx; 6]>>,
 
     /// As an optimisation heuristic for BT's coalescing analysis, these indicate which
     /// real/virtual registers have "many" `RangeFrag`s in their live ranges. For some definition

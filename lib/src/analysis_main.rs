@@ -377,7 +377,8 @@ impl<'arena, 'a> ReftypeAnalysis for BacktrackingReftypeAnalysis<'arena, 'a> {
     #[inline(always)]
     fn find_range_id_for_reg(&self, pt: InstPoint, reg: Reg) -> Self::RangeId {
         if reg.is_real() {
-            for &rlrix in &self.reg_to_ranges_maps.rreg_to_rlrs_map[reg.get_index() as usize] {
+            for &rlrix in self.reg_to_ranges_maps.rreg_to_rlrs_map[reg.get_index() as usize].iter()
+            {
                 if self.rlr_env[rlrix]
                     .sorted_frags
                     .contains_pt(self.frag_env, pt)
@@ -386,7 +387,8 @@ impl<'arena, 'a> ReftypeAnalysis for BacktrackingReftypeAnalysis<'arena, 'a> {
                 }
             }
         } else {
-            for &vlrix in &self.reg_to_ranges_maps.vreg_to_vlrs_map[reg.get_index() as usize] {
+            for &vlrix in self.reg_to_ranges_maps.vreg_to_vlrs_map[reg.get_index() as usize].iter()
+            {
                 if self.vlr_env[vlrix].sorted_frags.contains_pt(pt) {
                     return RangeId::new_virtual(vlrix);
                 }
@@ -412,7 +414,7 @@ impl<'arena, 'a> ReftypeAnalysis for BacktrackingReftypeAnalysis<'arena, 'a> {
 
     #[inline(always)]
     fn insert_reffy_ranges(&self, vreg: VirtualReg, set: &mut SparseSet<Self::RangeId>) {
-        for vlr_ix in &self.reg_to_ranges_maps.vreg_to_vlrs_map[vreg.get_index()] {
+        for vlr_ix in self.reg_to_ranges_maps.vreg_to_vlrs_map[vreg.get_index()].iter() {
             debug!("range {:?} is reffy due to reffy vreg {:?}", vlr_ix, vreg);
             set.insert(RangeId::new_virtual(*vlr_ix));
         }

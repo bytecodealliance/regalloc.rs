@@ -9,7 +9,7 @@ use crate::sparse_set::SparseSet;
 use crate::union_find::{ToFromU32, UnionFind};
 use crate::Function;
 use crate::{analysis_control_flow::CFGInfo, analysis_main::DepthBasedFrequencies};
-use crate::{Alloc, BumpVec};
+use crate::{Alloc, BumpSmallVec, BumpVec};
 
 //===========================================================================//
 //                                                                           //
@@ -858,7 +858,10 @@ pub(crate) fn reg_ix_to_reg(
 // duplicate entries in `out_frags` and `out_frag_metrics`.
 #[inline(always)]
 fn emit_range_frag<'a>(
-    out_map: &mut BumpVec<'a, /*rreg index, then vreg index, */ BumpVec<'a, RangeFragIx>>,
+    out_map: &mut BumpVec<
+        'a,
+        /*rreg index, then vreg index, */ BumpSmallVec<'a, [RangeFragIx; 8]>,
+    >,
     out_frags: &mut TypedIxVec<'a, RangeFragIx, RangeFrag>,
     out_frag_metrics: &mut TypedIxVec<'a, RangeFragIx, RangeFragMetrics>,
     num_real_regs: u32,
@@ -917,7 +920,10 @@ fn get_range_frags_for_block<'a, F: Function>(
     visited: &mut BumpVec<'a, u32>,
     state: &mut BumpVec<'a, /*rreg index, then vreg index, */ Option<ProtoRangeFrag>>,
     // These accumulate the results of RangeFrag/RangeFragMetrics across multiple calls here.
-    out_map: &mut BumpVec<'a, /*rreg index, then vreg index, */ BumpVec<'a, RangeFragIx>>,
+    out_map: &mut BumpVec<
+        'a,
+        /*rreg index, then vreg index, */ BumpSmallVec<'a, [RangeFragIx; 8]>,
+    >,
     out_frags: &mut TypedIxVec<'a, RangeFragIx, RangeFrag>,
     out_frag_metrics: &mut TypedIxVec<'a, RangeFragIx, RangeFragMetrics>,
 ) {
@@ -1149,7 +1155,7 @@ pub fn get_range_frags<'a, F: Function>(
     liveout_sets_per_block: &TypedIxVec<'a, BlockIx, SparseSet<Reg>>,
     alloc: &Alloc<'a>,
 ) -> (
-    BumpVec<'a, /*rreg index, then vreg index, */ BumpVec<'a, RangeFragIx>>,
+    BumpVec<'a, /*rreg index, then vreg index, */ BumpSmallVec<'a, [RangeFragIx; 8]>>,
     TypedIxVec<'a, RangeFragIx, RangeFrag>,
     TypedIxVec<'a, RangeFragIx, RangeFragMetrics>,
     BumpVec<'a, /*vreg index,*/ RegClass>,
@@ -1206,7 +1212,7 @@ pub fn get_range_frags<'a, F: Function>(
     let mut result_map = alloc.vec(num_regs);
     result_map.reserve(num_regs);
     for _ in 0..num_regs {
-        result_map.push(alloc.vec(0));
+        result_map.push(BumpSmallVec::new(alloc));
     }
 
     for bix in func.blocks() {
@@ -1515,7 +1521,7 @@ impl ToFromU32 for usize {
 pub(crate) fn merge_range_frags<'a>(
     frag_ix_vec_per_reg: &BumpVec<
         'a,
-        /*rreg index, then vreg index, */ BumpVec<'a, RangeFragIx>,
+        /*rreg index, then vreg index, */ BumpSmallVec<'a, [RangeFragIx; 8]>,
     >,
     frag_env: &TypedIxVec<'a, RangeFragIx, RangeFrag>,
     frag_metrics_env: &TypedIxVec<'a, RangeFragIx, RangeFragMetrics>,
@@ -1593,10 +1599,11 @@ pub(crate) fn merge_range_frags<'a>(
         //
         // but .. if we come across independents (RangeKind::Local), pull them out immediately.
 
-        let mut triples = alloc.vec(256);
+        let mut triples: BumpSmallVec<[(RangeFragIx, RangeFragKind, BlockIx); 256]> =
+            BumpSmallVec::new(alloc);
 
         // Create `triples`.  We will use it to guide the merging phase, but it is immutable there.
-        for fix in all_frag_ixs_for_reg {
+        for fix in all_frag_ixs_for_reg.iter() {
             let frag_metrics = &frag_metrics_env[*fix];
 
             if frag_metrics.kind == RangeFragKind::Local {
@@ -1692,7 +1699,7 @@ pub(crate) fn merge_range_frags<'a>(
             // as the simple way, except that the innermost loop, which is a linear search in
             // `triples` to find entries for some block `b`, is replaced by a binary search.  This
             // means that `triples` first needs to be sorted by block index.
-            triples.sort_unstable_by_key(|(_, _, bix)| *bix);
+            &mut triples[..].sort_unstable_by_key(|(_, _, bix)| *bix);
 
             for (ix, (_fix, kind, bix)) in triples.iter().enumerate() {
                 // Deal with liveness flows outbound from `fix`.  Meaning, (1) above.
@@ -1774,7 +1781,7 @@ pub(crate) fn merge_range_frags<'a>(
         let eclasses = eclasses_uf.get_equiv_classes(alloc);
         for leader_triple_ix in eclasses.equiv_class_leaders_iter() {
             // `leader_triple_ix` is an eclass leader.  Enumerate the whole eclass.
-            let mut frag_ixs = alloc.vec(4);
+            let mut frag_ixs: BumpSmallVec<[RangeFragIx; 4]> = BumpSmallVec::new(alloc);
             for triple_ix in eclasses.equiv_class_elems_iter(leader_triple_ix) {
                 frag_ixs.push(triples[triple_ix].0 /*first field is frag ix*/);
             }
@@ -1869,7 +1876,7 @@ pub(crate) fn compute_reg_to_ranges_maps<'a, F: Function>(
     let mut vreg_approx_frag_counts = alloc.collect(std::iter::repeat(0u8).take(num_vregs));
     let mut vreg_to_vlrs_map = alloc.vec(num_vregs);
     for _ in 0..num_vregs {
-        vreg_to_vlrs_map.push(alloc.vec(0));
+        vreg_to_vlrs_map.push(BumpSmallVec::new(alloc));
     }
     for (vlr, vlr_ix) in vlr_env.iter().zip(0..) {
         // Now we know that there's a VLR `vlr` that is for VReg `vreg`.  Update the inverse
@@ -1891,7 +1898,7 @@ pub(crate) fn compute_reg_to_ranges_maps<'a, F: Function>(
     let mut rreg_approx_frag_counts = alloc.collect(std::iter::repeat(0u8).take(num_rregs));
     let mut rreg_to_rlrs_map = alloc.vec(num_rregs);
     for _ in 0..num_rregs {
-        rreg_to_rlrs_map.push(alloc.vec(0));
+        rreg_to_rlrs_map.push(BumpSmallVec::new(alloc));
     }
     for (rlr, rlr_ix) in rlr_env.iter().zip(0..) {
         // If this array-indexing fails, it means something has gone wrong with sanitisation of

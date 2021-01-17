@@ -7,10 +7,9 @@ use crate::{
     Function, InstIx, LinearScanOptions, RealReg, RealRegUniverse, RegAllocError, SpillSlot,
     VirtualReg, NUM_REG_CLASSES,
 };
-use crate::{Alloc, BumpMap, BumpVec};
+use crate::{Alloc, BumpMap, BumpSmallVec, BumpVec};
 
 use log::{debug, info, log_enabled, trace, Level};
-use smallvec::SmallVec;
 use std::collections::BinaryHeap;
 use std::{cmp, cmp::Ordering, fmt};
 
@@ -82,13 +81,14 @@ impl<'a> ActivityTracker<'a> {
         start: InstPoint,
         stats: &mut Option<Statistics>,
         intervals: &Intervals<'a>,
+        alloc: &Alloc<'a>,
     ) {
         // From active, only possible transitions are to active or expired.
         // From inactive, only possible transitions are to inactive, active or expired.
         // => active has an upper bound.
         // => inactive only shrinks.
-        let mut to_delete: SmallVec<[usize; 16]> = SmallVec::new();
-        let mut new_inactive: SmallVec<[(RealReg, usize); 16]> = SmallVec::new();
+        let mut to_delete: BumpSmallVec<[usize; 16]> = BumpSmallVec::new(alloc);
+        let mut new_inactive: BumpSmallVec<[(RealReg, usize); 16]> = BumpSmallVec::new(alloc);
 
         for (i, id) in self.active.iter_mut().enumerate() {
             match id {
@@ -167,7 +167,7 @@ impl<'a> ActivityTracker<'a> {
         for &i in to_delete.iter().rev() {
             self.inactive.swap_remove(i);
         }
-        self.inactive.extend(new_inactive.into_vec());
+        self.inactive.extend(new_inactive.into_bumpvec());
 
         trace!("active:");
         for aid in &self.active {
@@ -236,7 +236,7 @@ pub(crate) fn run<'a, F: Function>(
 
             state
                 .activity
-                .update(int.start, &mut state.stats, &state.intervals);
+                .update(int.start, &mut state.stats, &state.intervals, alloc);
 
             let ok = try_allocate_reg(&mut reusable, id, &mut state, alloc);
             if !ok {
@@ -1226,7 +1226,7 @@ fn split<'a, F: Function>(
 
     // Split the register mentions.
     let parent_mentions = state.intervals.get_mut(id).mentions_mut();
-    let index = parent_mentions.binary_search_by(|mention| {
+    let index = parent_mentions[..].binary_search_by(|mention| {
         // The comparator function returns the position of the argument compared to the target.
 
         // Search by index first.
@@ -1264,7 +1264,7 @@ fn split<'a, F: Function>(
         Ok(index) => index,
         Err(index) => index,
     };
-    let mut child_mentions = alloc.vec(parent_mentions.len() - index);
+    let mut child_mentions = BumpSmallVec::with_capacity(parent_mentions.len() - index, alloc);
     for mention in parent_mentions.iter().skip(index) {
         child_mentions.push(mention.clone());
     }
@@ -1309,7 +1309,7 @@ fn split<'a, F: Function>(
             }
             i += 1;
         }
-        let child = alloc.collect(parent_safepoints.iter().skip(i).cloned());
+        let child = BumpSmallVec::from(parent_safepoints.iter().skip(i).cloned(), alloc);
         parent_safepoints.truncate(i);
         child
     };

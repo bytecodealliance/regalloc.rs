@@ -4,7 +4,6 @@
 //! Core implementation of the backtracking allocator.
 
 use log::{debug, info, log_enabled, Level};
-use smallvec::SmallVec;
 use std::default;
 use std::fmt;
 
@@ -27,7 +26,7 @@ use crate::inst_stream::{
 use crate::sparse_set::SparseSetU;
 use crate::union_find::UnionFindEquivClasses;
 use crate::{AlgorithmWithDefaults, Function, RegAllocError, RegAllocResult, StackmapRequestInfo};
-use crate::{Alloc, BumpVec};
+use crate::{Alloc, BumpSmallVec, BumpVec};
 
 #[derive(Clone)]
 pub struct BacktrackingOptions {
@@ -151,11 +150,12 @@ fn search_commitment_tree<'a, IsAllowedToEvict>(
     spill_cost_budget: &SpillCost,
     allowed_to_evict: &IsAllowedToEvict,
     vlr_env: &TypedIxVec<VirtualRangeIx, VirtualRange>,
+    alloc: &Alloc<'a>,
 ) -> bool
 where
     IsAllowedToEvict: Fn(VirtualRangeIx) -> bool,
 {
-    let mut stack = SmallVec::<[u32; 32]>::new();
+    let mut stack = BumpSmallVec::<[u32; 32]>::new(alloc);
     assert!(tree.root != AVL_NULL);
     stack.push(tree.root);
 
@@ -313,6 +313,7 @@ impl PerRealReg {
                 &evict_cost_budget,
                 allowed_to_evict,
                 vlr_env,
+                alloc,
             );
             if !wlta_frag_ok {
                 // This fragment won't fit, for one of the four reasons listed
@@ -728,7 +729,7 @@ pub(crate) fn alloc_main<'a, F: Function>(
         &move_info,
         alloc,
     );
-    let mut hints: TypedIxVec<VirtualRangeIx, SmallVec<[Hint; 8]>> = coalescing_info.0;
+    let mut hints: TypedIxVec<VirtualRangeIx, BumpSmallVec<[Hint; 8]>> = coalescing_info.0;
     let vlrEquivClasses: UnionFindEquivClasses<VirtualRangeIx> = coalescing_info.1;
     let is_vv_boundary_move: TypedIxVec<InstIx, bool> = coalescing_info.2;
     assert!(hints.len() == vlr_env.len());
@@ -862,7 +863,7 @@ pub(crate) fn alloc_main<'a, F: Function>(
         // present the most favoured (weighty) first, so we merely need to retain
         // that ordering when copying into `hinted_regs`.
         assert!(hints.len() == vlr_env.len());
-        let mut hinted_regs = SmallVec::<[RealReg; 8]>::new();
+        let mut hinted_regs = BumpSmallVec::<[RealReg; 8]>::new(alloc);
 
         // === BEGIN collect all hints for `curr_vlr` ===
         // `hints` has one entry per VLR, but only for VLRs which existed
@@ -870,7 +871,7 @@ pub(crate) fn alloc_main<'a, F: Function>(
         // Similarly, `vlrEquivClasses` can only map VLRs that existed initially,
         // and will panic otherwise.  Hence the following check:
         if curr_vlrix.get() < hints.len() {
-            for hint in &hints[curr_vlrix] {
+            for hint in hints[curr_vlrix].iter() {
                 // BEGIN for each hint
                 let mb_cand = match hint {
                     Hint::SameAs(other_vlrix, _weight) => {
@@ -956,7 +957,7 @@ pub(crate) fn alloc_main<'a, F: Function>(
         // === BEGIN try to use the hints for `curr_vlr` ===
         // Now work through the list of preferences, to see if we can honour any
         // of them.
-        for rreg in &hinted_regs {
+        for rreg in hinted_regs.iter() {
             let rregNo = rreg.get_index();
 
             // Find the set of ranges which we'd have to evict in order to honour
@@ -1203,7 +1204,7 @@ pub(crate) fn alloc_main<'a, F: Function>(
 
         // Most spills won't require anywhere near 32 entries, so this avoids
         // almost all heap allocation.
-        let mut sri_vec = SmallVec::<[SpillAndOrReloadInfo; 32]>::new();
+        let mut sri_vec = BumpSmallVec::<[SpillAndOrReloadInfo; 32]>::new(alloc);
 
         let curr_vlr_vreg = curr_vlr.vreg;
         let curr_vlr_reg = curr_vlr_vreg.to_reg();
@@ -1306,7 +1307,7 @@ pub(crate) fn alloc_main<'a, F: Function>(
                 .notify_spillage_of_reftyped_vlr(spill_slot_to_use, &curr_vlr.sorted_frags);
         }
 
-        for sri in sri_vec {
+        for sri in sri_vec.iter() {
             let (new_vlr_first_pt, new_vlr_last_pt) = match sri.kind {
                 BridgeKind::RtoU => (Point::Reload, Point::Use),
                 BridgeKind::RtoS => (Point::Reload, Point::Spill),
@@ -1338,7 +1339,7 @@ pub(crate) fn alloc_main<'a, F: Function>(
 
             // BEGIN (optimisation only) see if we can create any coalescing hints
             // for this new VLR.
-            let mut new_vlr_hint = SmallVec::<[Hint; 8]>::new();
+            let mut new_vlr_hint = BumpSmallVec::<[Hint; 8]>::new(alloc);
             if is_vv_boundary_move[sri.iix] {
                 // Collect the src and dst regs for the move.  It must be a
                 // move because `is_vv_boundary_move` claims that to be true.
@@ -1356,7 +1357,9 @@ pub(crate) fn alloc_main<'a, F: Function>(
                         // allocated to the same reg as the destination of the
                         // move.  That means we have to find the VLR that owns
                         // the destination vreg.
-                        for vlrix in &reg_to_ranges_maps.vreg_to_vlrs_map[dst_vreg.get_index()] {
+                        for vlrix in
+                            reg_to_ranges_maps.vreg_to_vlrs_map[dst_vreg.get_index()].iter()
+                        {
                             if vlr_env[*vlrix].vreg == dst_vreg {
                                 new_vlr_hint.push(Hint::SameAs(*vlrix, bridge_eef));
                                 break;
@@ -1367,7 +1370,9 @@ pub(crate) fn alloc_main<'a, F: Function>(
                         // Def-to-Spill bridge.  Hint that we want to be
                         // allocated to the same reg as the source of the
                         // move.
-                        for vlrix in &reg_to_ranges_maps.vreg_to_vlrs_map[src_vreg.get_index()] {
+                        for vlrix in
+                            reg_to_ranges_maps.vreg_to_vlrs_map[src_vreg.get_index()].iter()
+                        {
                             if vlr_env[*vlrix].vreg == src_vreg {
                                 new_vlr_hint.push(Hint::SameAs(*vlrix, bridge_eef));
                                 break;

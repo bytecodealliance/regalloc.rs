@@ -22,6 +22,7 @@ mod bt_commitment_map;
 mod bt_main;
 mod bt_spillslot_allocator;
 mod bt_vlr_priority_queue;
+mod bump;
 mod checker;
 mod data_structures;
 mod inst_stream;
@@ -31,7 +32,6 @@ mod reg_maps;
 mod snapshot;
 mod sparse_set;
 mod union_find;
-mod bump;
 
 use log::{info, log_enabled, Level};
 use std::default;

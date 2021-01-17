@@ -73,6 +73,7 @@ impl<'a> Alloc<'a> {
 pub struct BumpSmallVec<'a, A: smallvec::Array> {
     capacity: usize,
     len: usize,
+    alloc: Alloc<'a>,
     data: BumpSmallVecData<A>,
     _lifetime: PhantomData<&'a ()>,
 }
@@ -83,11 +84,12 @@ union BumpSmallVecData<A: smallvec::Array> {
 }
 
 impl<'a, A: smallvec::Array> BumpSmallVec<'a, A> {
-    pub fn new() -> Self {
+    pub fn new(alloc: &Alloc<'a>) -> Self {
         assert!(A::size() > 0);
         BumpSmallVec {
             capacity: A::size(),
             len: 0,
+            alloc: alloc.clone(),
             data: BumpSmallVecData {
                 data: 0 as *mut A::Item,
             },
@@ -95,34 +97,30 @@ impl<'a, A: smallvec::Array> BumpSmallVec<'a, A> {
         }
     }
 
-    pub fn clone<'b>(&self, alloc: &Alloc<'b>) -> BumpSmallVec<'b, A>
-    where
-        A::Item: Clone,
-    {
-        let mut ret = BumpSmallVec::new();
-        ret.reserve(self.len(), alloc);
-        ret.extend(self.iter().cloned(), alloc);
+    pub fn with_capacity(capacity: usize, alloc: &Alloc<'a>) -> Self {
+        let mut ret = Self::new(alloc);
+        ret.reserve(capacity);
         ret
     }
 
     pub fn from(iter: impl IntoIterator<Item = A::Item>, alloc: &Alloc<'a>) -> Self {
         let iter = iter.into_iter();
-        let mut ret = BumpSmallVec::new();
+        let mut ret = BumpSmallVec::new(alloc);
         for item in iter {
-            ret.push(item, alloc);
+            ret.push(item);
         }
         ret
     }
 
-    pub fn reserve<'b>(&'b mut self, capacity: usize, alloc: &Alloc<'a>)
+    pub fn reserve<'b>(&'b mut self, capacity: usize)
     where
         'a: 'b,
     {
         if capacity > self.capacity {
             if capacity > A::size() && self.capacity <= A::size() {
-                self.grow_into_mem(capacity, alloc);
+                self.grow_into_mem(capacity);
             } else if capacity > A::size() {
-                self.expand_mem(capacity, alloc);
+                self.expand_mem(capacity);
             } else {
                 self.capacity = capacity;
             }
@@ -150,8 +148,9 @@ impl<'a, A: smallvec::Array> BumpSmallVec<'a, A> {
         unsafe { std::mem::transmute(arr) }
     }
 
-    fn grow_into_mem(&mut self, capacity: usize, alloc: &Alloc<'a>) {
-        let mem = Self::alloc_mem(capacity, alloc);
+    fn grow_into_mem(&mut self, capacity: usize) {
+        assert!(capacity >= self.len);
+        let mem = Self::alloc_mem(capacity, &self.alloc);
         unsafe {
             std::ptr::copy_nonoverlapping(self.array_ptr(), mem, self.len);
             self.data.data = mem;
@@ -159,8 +158,8 @@ impl<'a, A: smallvec::Array> BumpSmallVec<'a, A> {
         self.capacity = capacity;
     }
 
-    fn expand_mem(&mut self, capacity: usize, alloc: &Alloc<'a>) {
-        let mem = Self::alloc_mem(capacity, alloc);
+    fn expand_mem(&mut self, capacity: usize) {
+        let mem = Self::alloc_mem(capacity, &self.alloc);
         unsafe {
             let old_data = self.data.data;
             std::ptr::copy_nonoverlapping(old_data, mem, self.len);
@@ -187,32 +186,114 @@ impl<'a, A: smallvec::Array> BumpSmallVec<'a, A> {
         unsafe { std::slice::from_raw_parts_mut(data, self.len) }
     }
 
-    pub fn push<'b>(&'b mut self, item: A::Item, alloc: &Alloc<'a>)
+    pub fn push<'b>(&'b mut self, item: A::Item)
     where
         'a: 'b,
     {
         let idx = self.len;
-        self.len += 1;
-        if self.len > self.capacity {
-            self.reserve(self.capacity * 2, alloc);
+        if self.len + 1 > self.capacity {
+            self.reserve(self.capacity * 2);
         }
+        self.len += 1;
         let item_ptr = &mut self.items_mut()[idx] as *mut A::Item;
         unsafe {
             std::ptr::write(item_ptr, item);
         }
     }
 
-    pub fn extend<'b>(&'b mut self, items: impl Iterator<Item = A::Item>, alloc: &Alloc<'a>)
+    pub fn extend<'b>(&'b mut self, items: impl Iterator<Item = A::Item>)
     where
         'a: 'b,
     {
         for item in items {
-            self.push(item, alloc);
+            self.push(item);
         }
     }
 
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.len {
+            self.len = len;
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    pub fn remove(&mut self, idx: usize) -> A::Item {
+        assert!(idx < self.len);
+        let idx = idx as isize;
+        let items = &mut self.items_mut()[0] as *mut A::Item;
+        let ret = unsafe { std::ptr::read(items.offset(idx)) };
+        unsafe {
+            if (idx as usize) < self.len - 1 {
+                std::ptr::copy(
+                    items.offset(idx + 1),
+                    items.offset(idx),
+                    self.len - (idx as usize) - 1,
+                );
+            }
+        }
+        self.len -= 1;
+        ret
+    }
+
+    pub fn get(&self, idx: usize) -> Option<&A::Item> {
+        if idx >= self.len {
+            None
+        } else {
+            Some(&self[idx])
+        }
+    }
+
+    pub fn get_mut(&mut self, idx: usize) -> Option<&mut A::Item> {
+        if idx >= self.len {
+            None
+        } else {
+            Some(&mut self[idx])
+        }
+    }
+
+    pub fn first(&self) -> Option<&A::Item> {
+        if self.len > 0 {
+            Some(&self[0])
+        } else {
+            None
+        }
+    }
+
+    pub fn first_mut(&mut self) -> Option<&mut A::Item> {
+        if self.len > 0 {
+            Some(&mut self[0])
+        } else {
+            None
+        }
+    }
+
+    pub fn last(&self) -> Option<&A::Item> {
+        if self.len > 0 {
+            let idx = self.len - 1;
+            Some(&self[idx])
+        } else {
+            None
+        }
+    }
+
+    pub fn last_mut(&mut self) -> Option<&mut A::Item> {
+        if self.len > 0 {
+            let idx = self.len - 1;
+            Some(&mut self[idx])
+        } else {
+            None
+        }
     }
 
     pub fn pop(&mut self) -> Option<A::Item> {
@@ -232,6 +313,31 @@ impl<'a, A: smallvec::Array> BumpSmallVec<'a, A> {
 
     pub fn iter_mut<'b>(&'b mut self) -> std::slice::IterMut<'b, A::Item> {
         self.items_mut().iter_mut()
+    }
+
+    pub fn into_bumpvec(mut self) -> BumpVec<'a, A::Item> {
+        let mut ret = BumpVec::with_capacity_in(self.len, self.alloc.0);
+        unsafe {
+            if self.len > 0 {
+                let dst = ret.as_mut_ptr();
+                let src = &mut self.items_mut()[0] as *mut A::Item;
+                std::ptr::copy_nonoverlapping(src, dst, self.len);
+                ret.set_len(self.len);
+            }
+        }
+        ret
+    }
+}
+
+impl<'a, A: smallvec::Array> Clone for BumpSmallVec<'a, A>
+where
+    A::Item: Clone,
+{
+    fn clone(&self) -> BumpSmallVec<'a, A> {
+        let mut ret = BumpSmallVec::new(&self.alloc);
+        ret.reserve(self.len());
+        ret.extend(self.iter().cloned());
+        ret
     }
 }
 
@@ -318,13 +424,13 @@ mod test {
         let bump = Bump::new();
         let alloc = Alloc(&bump);
 
-        let mut v: BumpSmallVec<[u32; 2]> = BumpSmallVec::new();
-        v.reserve(2, &alloc);
-        v.push(1, &alloc);
-        v.push(2, &alloc);
+        let mut v: BumpSmallVec<[u32; 2]> = BumpSmallVec::new(&alloc);
+        v.reserve(2);
+        v.push(1);
+        v.push(2);
         assert_eq!(&v[..], &[1, 2]);
-        v.push(3, &alloc);
-        v.push(4, &alloc);
+        v.push(3);
+        v.push(4);
         assert_eq!(&v[..], &[1, 2, 3, 4]);
         let vec = v.iter().cloned().collect::<Vec<_>>();
         assert_eq!(&vec[..], &v[..]);
@@ -333,9 +439,12 @@ mod test {
         assert_eq!(&v[..2], &[5, 2]);
         assert_eq!(&v[2..], &[3, 4]);
         assert_eq!(&v[1..3], &[2, 3]);
-        v.extend(vec![0, 0].into_iter(), &alloc);
+        v.extend(vec![0, 0].into_iter());
         assert_eq!(&v[..], &[5, 2, 3, 4, 0, 0]);
         assert_eq!(&format!("{:?}", v), "[5, 2, 3, 4, 0, 0]");
+        assert_eq!(v.remove(1), 2);
+        assert_eq!(&v[..], &[5, 3, 4, 0, 0]);
+        assert_eq!(&v.into_bumpvec()[..], &[5, 3, 4, 0, 0]);
 
         let v2: BumpSmallVec<[u32; 2]> = BumpSmallVec::from(vec![1, 2, 3, 4], &alloc);
         assert_eq!(&v2[..], &[1, 2, 3, 4]);

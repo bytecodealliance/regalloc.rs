@@ -27,7 +27,6 @@
 #![allow(non_camel_case_types)]
 
 use log::{debug, info, log_enabled, Level};
-use smallvec::{smallvec, SmallVec};
 
 use crate::data_structures::{
     InstIx, InstPoint, Map, MoveInfo, MoveInfoElem, RangeFrag, RangeFragIx, RealRange, RealRangeIx,
@@ -36,6 +35,7 @@ use crate::data_structures::{
 };
 use crate::union_find::{ToFromU32, UnionFind, UnionFindEquivClasses};
 use crate::Alloc;
+use crate::BumpSmallVec;
 use crate::Function;
 
 //=============================================================================
@@ -142,7 +142,7 @@ pub(crate) fn do_coalescing_analysis<'a, F: Function>(
     move_info: &MoveInfo<'a>,
     alloc: &Alloc<'a>,
 ) -> (
-    TypedIxVec<'a, VirtualRangeIx, SmallVec<[Hint; 8]>>,
+    TypedIxVec<'a, VirtualRangeIx, BumpSmallVec<'a, [Hint; 8]>>,
     UnionFindEquivClasses<'a, VirtualRangeIx>,
     TypedIxVec<'a, InstIx, bool>,
 ) {
@@ -261,7 +261,7 @@ pub(crate) fn do_coalescing_analysis<'a, F: Function>(
             sorted_lasts: Vec::with_capacity(2 * reg_to_ranges_maps.many_frags_thresh),
         };
         let rlrixs = &reg_to_ranges_maps.rreg_to_rlrs_map[*rreg_no as usize];
-        for rlrix in rlrixs {
+        for rlrix in rlrixs.iter() {
             for fix in rlr_env[*rlrix].sorted_frags.iter() {
                 let frag = &frag_env[*fix];
                 many_frags_info.sorted_firsts.push((frag.first, *rlrix));
@@ -307,7 +307,7 @@ pub(crate) fn do_coalescing_analysis<'a, F: Function>(
             sorted_lasts: Vec::with_capacity(2 * reg_to_ranges_maps.many_frags_thresh),
         };
         let vlrixs = &reg_to_ranges_maps.vreg_to_vlrs_map[*vreg_no as usize];
-        for vlrix in vlrixs {
+        for vlrix in vlrixs.iter() {
             for frag in vlr_env[*vlrix].sorted_frags.iter() {
                 many_frags_info.sorted_firsts.push((frag.first, *vlrix));
                 many_frags_info.sorted_lasts.push((frag.last, *vlrix));
@@ -345,7 +345,7 @@ pub(crate) fn do_coalescing_analysis<'a, F: Function>(
         let point_to_find = InstPoint::new_use(iix);
         let vreg_no = vreg.get_index();
         let vlrixs = &reg_to_ranges_maps.vreg_to_vlrs_map[vreg_no];
-        for vlrix in vlrixs {
+        for vlrix in vlrixs.iter() {
             for frag in vlr_env[*vlrix].sorted_frags.iter() {
                 if frag.last == point_to_find {
                     return Some(*vlrix);
@@ -384,7 +384,7 @@ pub(crate) fn do_coalescing_analysis<'a, F: Function>(
         let point_to_find = InstPoint::new_def(iix);
         let vreg_no = vreg.get_index();
         let vlrixs = &reg_to_ranges_maps.vreg_to_vlrs_map[vreg_no];
-        for vlrix in vlrixs {
+        for vlrix in vlrixs.iter() {
             for frag in vlr_env[*vlrix].sorted_frags.iter() {
                 if frag.first == point_to_find {
                     return Some(*vlrix);
@@ -423,7 +423,7 @@ pub(crate) fn do_coalescing_analysis<'a, F: Function>(
         let point_to_find = InstPoint::new_use(iix);
         let rreg_no = rreg.get_index();
         let rlrixs = &reg_to_ranges_maps.rreg_to_rlrs_map[rreg_no];
-        for rlrix in rlrixs {
+        for rlrix in rlrixs.iter() {
             let frags = &rlr_env[*rlrix].sorted_frags;
             for fix in frags.iter() {
                 let frag = &frag_env[*fix];
@@ -464,7 +464,7 @@ pub(crate) fn do_coalescing_analysis<'a, F: Function>(
         let point_to_find = InstPoint::new_def(iix);
         let rreg_no = rreg.get_index();
         let rlrixs = &reg_to_ranges_maps.rreg_to_rlrs_map[rreg_no];
-        for rlrix in rlrixs {
+        for rlrix in rlrixs.iter() {
             let frags = &rlr_env[*rlrix].sorted_frags;
             for fix in frags.iter() {
                 let frag = &frag_env[*fix];
@@ -507,8 +507,8 @@ pub(crate) fn do_coalescing_analysis<'a, F: Function>(
     // suppose, for example if there are two identical copy insns at different points on the
     // "boundary" for some VLR.  I don't think it matters though since we're going to rank the
     // hints by strength and then choose at most one.
-    let mut hints = TypedIxVec::<VirtualRangeIx, SmallVec<[Hint; 8]>>::new(alloc);
-    hints.resize(vlr_env.len(), smallvec![]);
+    let mut hints = TypedIxVec::<VirtualRangeIx, BumpSmallVec<[Hint; 8]>>::new(alloc);
+    hints.resize(vlr_env.len(), BumpSmallVec::new(alloc));
 
     // RETURNED TO CALLER
     // A vector that simply records which insns are v-to-v boundary moves, as established by the
@@ -629,7 +629,8 @@ pub(crate) fn do_coalescing_analysis<'a, F: Function>(
     // For the convenience of the allocator core, sort the hints for each VLR so
     // as to move the most preferred to the front.
     for hints_for_one_vlr in hints.iter_mut() {
-        hints_for_one_vlr.sort_by(|h1, h2| h2.get_weight().partial_cmp(&h1.get_weight()).unwrap());
+        hints_for_one_vlr[..]
+            .sort_by(|h1, h2| h2.get_weight().partial_cmp(&h1.get_weight()).unwrap());
     }
 
     let vlrEquivClasses: UnionFindEquivClasses<VirtualRangeIx> =
@@ -647,7 +648,7 @@ pub(crate) fn do_coalescing_analysis<'a, F: Function>(
         n = 0;
         for hints_for_one_vlr in hints.iter() {
             let mut s = "".to_string();
-            for hint in hints_for_one_vlr {
+            for hint in hints_for_one_vlr.iter() {
                 s = s + &show_hint(hint, &univ) + &" ".to_string();
             }
             debug!("  hintsfor {:<4?} = {}", VirtualRangeIx::new(n), s);
