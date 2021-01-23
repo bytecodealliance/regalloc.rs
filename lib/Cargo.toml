@@ -17,6 +17,7 @@ serde = { version = "1.0.94", features = ["derive"], optional = true }
 [features]
 default = []
 fuzzing = []
+lsra-tweaks = []
 
 # For dependent crates that want to serialize some parts of regalloc.
 enable-serde = ["serde", "hashbrown/serde"]

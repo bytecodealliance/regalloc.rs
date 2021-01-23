@@ -23,7 +23,7 @@ macro_rules! lsra_assert {
 
     ($arg:expr, $text:expr) => {
         #[cfg(debug_assertions)]
-        debug_assert!($arg, $text);
+        debug_assert!($arg, "{}", $text);
     };
 }
 
@@ -330,7 +330,7 @@ impl<T> core::ops::Index<RealReg> for RegisterMapping<T> {
         );
         lsra_assert!(
             Some(rreg) != self.scratch,
-            &format!("trying to const-use the scratch of {:?}", rreg.get_class())
+            format!("trying to const-use the scratch of {:?}", rreg.get_class())
         );
         &self.regs[rreg.get_index() - self.offset].1
     }
@@ -344,7 +344,7 @@ impl<T> core::ops::IndexMut<RealReg> for RegisterMapping<T> {
         );
         lsra_assert!(
             Some(rreg) != self.scratch,
-            &format!("trying to mut-use the scratch of {:?}", rreg.get_class())
+            format!("trying to mut-use the scratch of {:?}", rreg.get_class())
         );
         &mut self.regs[rreg.get_index() - self.offset].1
     }

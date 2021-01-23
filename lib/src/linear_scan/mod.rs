@@ -10,6 +10,9 @@ use alloc::{vec, vec::Vec};
 use core::default;
 use core::fmt;
 
+#[cfg(feature = "lsra-tweaks")]
+use std::env;
+
 use crate::inst_stream::{add_spills_reloads_and_moves, InstToInsertAndExtPoint};
 use crate::{
     checker::CheckerContext, reg_maps::MentionRegUsageMapper, Function, RealRegUniverse,
@@ -69,6 +72,7 @@ impl Drop for Statistics {
 /// TODO Consider loop depth to avoid splitting in the middle of a loop
 /// whenever possible.
 #[derive(Copy, Clone, Debug)]
+#[cfg_attr(not(feature = "lsra-tweaks"), allow(dead_code))]
 enum OptimalSplitStrategy {
     From,
     To,
@@ -89,6 +93,7 @@ pub struct LinearScanOptions {
 }
 
 impl default::Default for LinearScanOptions {
+    #[cfg(not(feature = "lsra-tweaks"))]
     fn default() -> Self {
         Self {
             split_strategy: OptimalSplitStrategy::From,
@@ -99,7 +104,8 @@ impl default::Default for LinearScanOptions {
         }
     }
 
-    /*fn default() -> Self {
+    #[cfg(feature = "lsra-tweaks")]
+    fn default() -> Self {
         // Useful for debugging.
         let optimal_split_strategy = match env::var("LSRA_SPLIT") {
             Ok(s) => match s.as_str() {
@@ -127,7 +133,7 @@ impl default::Default for LinearScanOptions {
             stats,
             large_stats,
         }
-    }*/
+    }
 }
 
 impl fmt::Debug for LinearScanOptions {
