@@ -551,11 +551,6 @@ pub fn allocate_registers_with_opts<F: Function>(
         ref safepoint_insns,
     }) = stackmap_info
     {
-        if let Algorithm::LinearScan(_) = opts.algorithm {
-            return Err(RegAllocError::Other(
-                "stackmap request: not currently available for Linear Scan".to_string(),
-            ));
-        }
         if reftype_class != RegClass::I64 && reftype_class != RegClass::I32 {
             return Err(RegAllocError::Other(
                 "stackmap request: invalid reftype_class".to_string(),
@@ -609,7 +604,9 @@ pub fn allocate_registers_with_opts<F: Function>(
         Algorithm::Backtracking(opts) => {
             bt_main::alloc_main(func, rreg_universe, stackmap_info, run_checker, opts)
         }
-        Algorithm::LinearScan(opts) => linear_scan::run(func, rreg_universe, run_checker, opts),
+        Algorithm::LinearScan(opts) => {
+            linear_scan::run(func, rreg_universe, stackmap_info, run_checker, opts)
+        }
     };
 
     info!("================ regalloc.rs: END function ================");

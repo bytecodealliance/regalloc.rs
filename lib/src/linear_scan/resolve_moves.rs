@@ -1,5 +1,6 @@
-use super::{next_use, IntId, Location, RegUses, VirtualInterval};
+use super::{analysis::BlockPos, next_use, IntId, Location, RegUses, VirtualInterval};
 use crate::{
+    analysis_control_flow::CFGInfo,
     data_structures::{BlockIx, InstPoint, Point},
     inst_stream::{InstExtPoint, InstToInsert, InstToInsertAndExtPoint},
     sparse_set::SparseSet,
@@ -172,12 +173,6 @@ fn resolve_moves_in_block<F: Function>(
     moves_in_blocks.append(&mut spills_at_inst);
 }
 
-#[derive(Clone, Copy)]
-enum BlockPos {
-    Start,
-    End,
-}
-
 #[derive(Default, Clone)]
 struct BlockInfo {
     start: SmallVec<[(VirtualReg, IntId); 4]>,
@@ -240,17 +235,6 @@ fn collect_block_infos<F: Function>(
     liveins: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     liveouts: &TypedIxVec<BlockIx, SparseSet<Reg>>,
 ) -> Vec<BlockInfo> {
-    // First, collect the first and last instructions of each block.
-    let mut block_start_and_ends = Vec::with_capacity(2 * func.blocks().len());
-    for bix in func.blocks() {
-        let insts = func.block_insns(bix);
-        block_start_and_ends.push((InstPoint::new_use(insts.first()), BlockPos::Start, bix));
-        block_start_and_ends.push((InstPoint::new_def(insts.last()), BlockPos::End, bix));
-    }
-
-    // Sort this array by instruction point, to be able to do binary search later.
-    block_start_and_ends.sort_unstable_by_key(|pair| pair.0);
-
     // Preallocate the block information, with the final size of each vector.
     let mut infos = Vec::with_capacity(func.blocks().len());
     for bix in func.blocks() {
@@ -260,45 +244,30 @@ fn collect_block_infos<F: Function>(
         });
     }
 
-    // For each interval:
-    // - find the first block start or end instruction that's in the interval, with a binary search
-    // on the previous array.
-    // - add an entry for each livein ou liveout variable in the block info.
+    // For each interval, add the boundary information to the block info data structure.
     for int in intervals {
-        let mut i = match block_start_and_ends.binary_search_by_key(&int.start, |pair| pair.0) {
-            Ok(i) => i,
-            Err(i) => i,
-        };
-
         let vreg = int.vreg;
         let id = int.id;
-
-        while let Some(&(inst, pos, bix)) = block_start_and_ends.get(i) {
-            if inst > int.end {
-                break;
-            }
-
-            #[cfg(debug_assertions)]
-            debug_assert!(int.covers(inst));
-
-            // Skip virtual registers that are not live-in (at start) or live-out (at end).
+        for boundary in &int.block_boundaries {
+            let bix = boundary.bix;
+            let pos = boundary.pos;
             match pos {
                 BlockPos::Start => {
+                    // In theory, this could be an assertion, if analysis was precise and meaning
+                    // that RangeFragKind::Thru/LiveIn really meant that (it actually means that
+                    // the first fragment inst coincided with the block's first inst).
                     if !liveins[bix].contains(vreg.to_reg()) {
-                        i += 1;
                         continue;
                     }
                 }
                 BlockPos::End => {
+                    // See above comment.
                     if !liveouts[bix].contains(vreg.to_reg()) {
-                        i += 1;
                         continue;
                     }
                 }
             }
-
             infos[bix.get() as usize].insert(pos, vreg, id);
-            i += 1;
         }
     }
 
@@ -322,6 +291,7 @@ fn collect_block_infos<F: Function>(
 #[inline(never)]
 fn resolve_moves_across_blocks<F: Function>(
     func: &F,
+    cfg: &CFGInfo,
     liveins: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     liveouts: &TypedIxVec<BlockIx, SparseSet<Reg>>,
     intervals: &Vec<VirtualInterval>,
@@ -338,16 +308,20 @@ fn resolve_moves_across_blocks<F: Function>(
 
     let mut seen_successors = HashSet::default();
     for block in func.blocks() {
-        let successors = func.block_succs(block);
+        let successors = &cfg.succ_map[block];
 
-        // Where to insert the fixup move, if needed? If there's more than one
-        // successor to the current block, inserting in the current block will
-        // impact all the successors.
-        //
-        // We assume critical edges have been split, so
-        // if the current block has more than one successor, then its successors
-        // have at most one predecessor.
-        let cur_has_one_succ = successors.len() == 1;
+        // Where to insert the fixup move, if needed? Per API contract, there are no more critical
+        // edges: so this block is the only successor to its predecessors, or the only predecessor
+        // to its successors in the control flow graph.
+        // If there's more than one successor to the current block, then inserting the fix-up moves
+        // in the current block may impact all the other successors: in this case, we should insert
+        // the instruction at the end of the current block. If the successors all have only one
+        // predecessor (the current block), then we can insert the fixup move at the beginning of
+        // the successors safely.
+        let all_succ_have_one_pred = successors
+            .iter()
+            .all(|succ| cfg.pred_map[*succ].card() == 1);
+        assert!(successors.card() == 1 || all_succ_have_one_pred);
 
         for &reg in liveouts[block].iter() {
             let vreg = if let Some(vreg) = reg.as_virtual_reg() {
@@ -382,13 +356,14 @@ fn resolve_moves_across_blocks<F: Function>(
 
                 let loc_at_succ_start = succ_int.location;
 
-                let (at_inst, block_pos) = if cur_has_one_succ {
+                let (at_inst, block_pos) = if all_succ_have_one_pred {
+                    // At the beginning of the successors (each only has a single predecessor).
+                    let pos = InstPoint::new_reload(func.block_insns(succ).first());
+                    (pos, BlockPos::Start)
+                } else {
                     // Before the control flow instruction.
                     let pos = InstPoint::new_reload(func.block_insns(block).last());
                     (pos, BlockPos::End)
-                } else {
-                    let pos = InstPoint::new_reload(func.block_insns(succ).first());
-                    (pos, BlockPos::Start)
                 };
 
                 let pending_moves = parallel_move_map
@@ -497,6 +472,7 @@ fn resolve_moves_across_blocks<F: Function>(
 #[inline(never)]
 pub(crate) fn run<F: Function>(
     func: &F,
+    cfg: &CFGInfo,
     reg_uses: &RegUses,
     intervals: &Vec<VirtualInterval>,
     liveins: &TypedIxVec<BlockIx, SparseSet<Reg>>,
@@ -533,6 +509,7 @@ pub(crate) fn run<F: Function>(
 
     resolve_moves_across_blocks(
         func,
+        cfg,
         liveins,
         liveouts,
         intervals,

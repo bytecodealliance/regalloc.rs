@@ -1,8 +1,11 @@
-use crate::checker::Inst as CheckerInst;
 use crate::checker::{CheckerContext, CheckerErrors};
 use crate::data_structures::{
     BlockIx, InstIx, InstPoint, Point, RangeFrag, RealReg, RealRegUniverse, Reg, SpillSlot,
     TypedIxVec, VirtualReg, Writable,
+};
+use crate::{
+    checker::{CheckerStackmapInfo, Inst as CheckerInst},
+    StackmapRequestInfo,
 };
 use crate::{reg_maps::VrangeRegUsageMapper, Function, RegAllocError};
 use log::trace;
@@ -222,21 +225,20 @@ fn map_vregs_to_rregs<F: Function>(
     iixs_to_nop_out: &Vec<InstIx>,
     reg_universe: &RealRegUniverse,
     use_checker: bool,
-    safepoint_insns: &[InstIx],
+    stackmap_request: Option<&StackmapRequestInfo>,
     stackmaps: &[Vec<SpillSlot>],
-    reftyped_vregs: &[VirtualReg],
 ) -> Result<(), CheckerErrors> {
     // Set up checker state, if indicated by our configuration.
     let mut checker: Option<CheckerContext> = None;
     let mut insn_blocks: Vec<BlockIx> = vec![];
     if use_checker {
+        let stackmap_info =
+            stackmap_request.map(|request| CheckerStackmapInfo { request, stackmaps });
         checker = Some(CheckerContext::new(
             func,
             reg_universe,
             insts_to_add,
-            safepoint_insns,
-            stackmaps,
-            reftyped_vregs,
+            stackmap_info,
         ));
         insn_blocks.resize(func.insns().len(), BlockIx::new(0));
         for block_ix in func.blocks() {
@@ -523,7 +525,7 @@ fn map_vregs_to_rregs<F: Function>(
 #[inline(never)]
 pub(crate) fn add_spills_reloads_and_moves<F: Function>(
     func: &mut F,
-    safepoint_insns: &Vec<InstIx>,
+    safepoint_insns: Option<&[InstIx]>,
     mut insts_to_add: Vec<InstToInsertAndExtPoint>,
 ) -> Result<
     (
@@ -534,6 +536,9 @@ pub(crate) fn add_spills_reloads_and_moves<F: Function>(
     ),
     String,
 > {
+    let empty_safepoint_insts = Vec::new();
+    let safepoint_insns = safepoint_insns.unwrap_or(&empty_safepoint_insts);
+
     // Construct the final code by interleaving the mapped code with the the
     // spills, reloads and moves that we have been requested to insert.  To do
     // that requires having the latter sorted by InstPoint.
@@ -631,14 +636,13 @@ pub(crate) fn add_spills_reloads_and_moves<F: Function>(
 #[inline(never)]
 pub(crate) fn edit_inst_stream<F: Function>(
     func: &mut F,
-    safepoint_insns: &Vec<InstIx>,
     insts_to_add: Vec<InstToInsertAndExtPoint>,
     iixs_to_nop_out: &Vec<InstIx>,
     frag_map: Vec<(RangeFrag, VirtualReg, RealReg)>,
     reg_universe: &RealRegUniverse,
     use_checker: bool,
+    stackmap_request: Option<&StackmapRequestInfo>,
     stackmaps: &[Vec<SpillSlot>],
-    reftyped_vregs: &[VirtualReg],
 ) -> Result<
     (
         Vec<F::Inst>,
@@ -655,11 +659,15 @@ pub(crate) fn edit_inst_stream<F: Function>(
         iixs_to_nop_out,
         reg_universe,
         use_checker,
-        &safepoint_insns[..],
+        stackmap_request,
         stackmaps,
-        reftyped_vregs,
     )
     .map_err(|e| RegAllocError::RegChecker(e))?;
-    add_spills_reloads_and_moves(func, safepoint_insns, insts_to_add)
-        .map_err(|e| RegAllocError::Other(e))
+
+    add_spills_reloads_and_moves(
+        func,
+        stackmap_request.map(|request| request.safepoint_insns.as_slice()),
+        insts_to_add,
+    )
+    .map_err(|e| RegAllocError::Other(e))
 }

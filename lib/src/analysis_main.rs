@@ -7,19 +7,20 @@ use alloc::{
 };
 use log::{debug, info};
 
-use crate::analysis_control_flow::{CFGInfo, InstIxToBlockIxMap};
-use crate::analysis_data_flow::{
-    calc_def_and_use, calc_livein_and_liveout, collect_move_info, compute_reg_to_ranges_maps,
-    get_range_frags, get_sanitized_reg_uses_for_func, merge_range_frags,
-};
-use crate::analysis_reftypes::do_reftypes_analysis;
-use crate::data_structures::{
-    BlockIx, MoveInfo, RangeFrag, RangeFragIx, RangeFragMetrics, RealRange, RealRangeIx, RealReg,
-    RealRegUniverse, RegClass, RegToRangesMaps, RegVecsAndBounds, TypedIxVec, VirtualRange,
-    VirtualRangeIx, VirtualReg,
-};
+use crate::data_structures::*;
 use crate::sparse_set::SparseSet;
 use crate::AlgorithmWithDefaults;
+use crate::{
+    analysis_control_flow::{CFGInfo, InstIxToBlockIxMap},
+    analysis_reftypes::ReftypeAnalysis,
+};
+use crate::{
+    analysis_data_flow::{
+        calc_def_and_use, calc_livein_and_liveout, collect_move_info, compute_reg_to_ranges_maps,
+        get_range_frags, get_sanitized_reg_uses_for_func, merge_range_frags,
+    },
+    analysis_reftypes::core_reftypes_analysis,
+};
 use crate::{Function, Reg};
 
 //=============================================================================
@@ -53,6 +54,17 @@ pub enum AnalysisError {
     /// Implementation limits exceeded.  The incoming function is too big.  It
     /// may contain at most 1 million basic blocks and 16 million instructions.
     ImplementationLimitsExceeded,
+
+    /// Linear scan requires that if a block ends with a control flow
+    /// instruction that has at least one register mention (use, mod or def),
+    /// then the successor blocks must have a single predecessor.
+    ///
+    /// In practice, this means that users should consider associated edges to
+    /// be "critical" and split them (and maybe remove dead blocks afterwards).
+    ///
+    /// For details, see the comment in linear_scan::analysis generating this
+    /// error.
+    LsraCriticalEdge { block: BlockIx, inst: InstIx },
 }
 
 impl ToString for AnalysisError {
@@ -73,12 +85,24 @@ impl ToString for AnalysisError {
                 )
             }
             AnalysisError::IllegalRealReg(reg) => {
-                format!("instructions mention real register {:?}, which either isn't defined in the register universe, or is a 'suggested_scratch' register", reg)
+                format!(
+                    "instructions mention real register {:?}, which either isn't defined in the
+                    register universe, or is a 'suggested_scratch' register",
+                    reg
+                )
             }
             AnalysisError::UnreachableBlocks => "at least one block is unreachable".to_string(),
             AnalysisError::ImplementationLimitsExceeded => {
                 "implementation limits exceeded (more than 1 million blocks or 16 million insns)"
                     .to_string()
+            }
+            AnalysisError::LsraCriticalEdge { block, inst } => {
+                format!(
+                    "block {:?} ends with control flow instruction {:?} that mentions a register,
+                    and at least one of the multiple successors has several predecessors; consider
+                    splitting the outgoing edges!",
+                    block, inst
+                )
             }
         }
     }
@@ -99,7 +123,7 @@ pub struct AnalysisInfo {
     /// The fragment metrics table
     pub(crate) range_metrics: TypedIxVec<RangeFragIx, RangeFragMetrics>,
     /// Estimated execution frequency per block
-    pub(crate) estimated_frequencies: TypedIxVec<BlockIx, u32>,
+    pub(crate) estimated_frequencies: DepthBasedFrequencies,
     /// Maps InstIxs to BlockIxs
     pub(crate) inst_to_block_map: InstIxToBlockIxMap,
     /// Maps from RealRegs to sets of RealRanges and VirtualRegs to sets of VirtualRanges
@@ -140,17 +164,8 @@ pub fn run_analysis<F: Function>(
     // analysis, but needs to be done at some point.
     let inst_to_block_map = InstIxToBlockIxMap::new(func);
 
-    // Annotate each Block with its estimated execution frequency
-    let mut estimated_frequencies = TypedIxVec::new();
-    for bix in func.blocks() {
-        let mut estimated_frequency = 1;
-        let depth = u32::min(cfg_info.depth_map[bix], 3);
-        for _ in 0..depth {
-            estimated_frequency *= 10;
-        }
-        assert!(bix == BlockIx::new(estimated_frequencies.len()));
-        estimated_frequencies.push(estimated_frequency);
-    }
+    // Annotate each Block with its estimated execution frequency.
+    let estimated_frequencies = DepthBasedFrequencies::new(func, &cfg_info);
 
     info!("  run_analysis: end control flow analysis");
 
@@ -312,4 +327,110 @@ pub fn run_analysis<F: Function>(
         reg_to_ranges_maps,
         move_info,
     })
+}
+
+/// A small wrapper for estimated execution frequencies, based on the block's loop depth.
+pub(crate) struct DepthBasedFrequencies(TypedIxVec<BlockIx, u32>);
+
+impl DepthBasedFrequencies {
+    pub(crate) fn new<F: Function>(func: &F, cfg_info: &CFGInfo) -> Self {
+        let mut values = TypedIxVec::new();
+        for bix in func.blocks() {
+            let mut estimated_frequency = 1;
+            let depth = u32::min(cfg_info.depth_map[bix], 3);
+            for _ in 0..depth {
+                estimated_frequency *= 10;
+            }
+            assert!(bix == BlockIx::new(values.len()));
+            values.push(estimated_frequency);
+        }
+        Self(values)
+    }
+    pub(crate) fn len(&self) -> u32 {
+        self.0.len()
+    }
+    pub(crate) fn iter(&self) -> core::slice::Iter<u32> {
+        self.0.iter()
+    }
+    #[inline(always)]
+    pub(crate) fn cost(&self, bix: BlockIx) -> u32 {
+        self.0[bix]
+    }
+}
+
+/// Implementation of the reftype analysis for the backtracking algorithm.
+struct BacktrackingReftypeAnalysis<'a> {
+    rlr_env: &'a mut TypedIxVec<RealRangeIx, RealRange>,
+    vlr_env: &'a mut TypedIxVec<VirtualRangeIx, VirtualRange>,
+    frag_env: &'a TypedIxVec<RangeFragIx, RangeFrag>,
+    reg_to_ranges_maps: &'a RegToRangesMaps,
+}
+
+impl<'a> ReftypeAnalysis for BacktrackingReftypeAnalysis<'a> {
+    type RangeId = RangeId;
+
+    #[inline(always)]
+    fn find_range_id_for_reg(&self, pt: InstPoint, reg: Reg) -> Self::RangeId {
+        if reg.is_real() {
+            for &rlrix in &self.reg_to_ranges_maps.rreg_to_rlrs_map[reg.get_index() as usize] {
+                if self.rlr_env[rlrix]
+                    .sorted_frags
+                    .contains_pt(self.frag_env, pt)
+                {
+                    return RangeId::new_real(rlrix);
+                }
+            }
+        } else {
+            for &vlrix in &self.reg_to_ranges_maps.vreg_to_vlrs_map[reg.get_index() as usize] {
+                if self.vlr_env[vlrix].sorted_frags.contains_pt(pt) {
+                    return RangeId::new_virtual(vlrix);
+                }
+            }
+        }
+        panic!("do_reftypes_analysis::find_range_for_reg: can't find range");
+    }
+
+    #[inline(always)]
+    fn mark_reffy(&mut self, range: &Self::RangeId) {
+        if range.is_real() {
+            let rrange = &mut self.rlr_env[range.to_real()];
+            debug_assert!(!rrange.is_ref);
+            debug!(" -> rrange {:?} is reffy", range.to_real());
+            rrange.is_ref = true;
+        } else {
+            let vrange = &mut self.vlr_env[range.to_virtual()];
+            debug_assert!(!vrange.is_ref);
+            debug!(" -> rrange {:?} is reffy", range.to_virtual());
+            vrange.is_ref = true;
+        }
+    }
+
+    #[inline(always)]
+    fn insert_reffy_ranges(&self, vreg: VirtualReg, set: &mut SparseSet<Self::RangeId>) {
+        for vlr_ix in &self.reg_to_ranges_maps.vreg_to_vlrs_map[vreg.get_index()] {
+            debug!("range {:?} is reffy due to reffy vreg {:?}", vlr_ix, vreg);
+            set.insert(RangeId::new_virtual(*vlr_ix));
+        }
+    }
+}
+
+fn do_reftypes_analysis(
+    // From dataflow/liveness analysis.  Modified by setting their is_ref bit.
+    rlr_env: &mut TypedIxVec<RealRangeIx, RealRange>,
+    vlr_env: &mut TypedIxVec<VirtualRangeIx, VirtualRange>,
+    // From dataflow analysis
+    frag_env: &TypedIxVec<RangeFragIx, RangeFrag>,
+    reg_to_ranges_maps: &RegToRangesMaps,
+    move_info: &MoveInfo,
+    // As supplied by the client
+    reftype_class: RegClass,
+    reftyped_vregs: &Vec<VirtualReg>,
+) {
+    let mut analysis = BacktrackingReftypeAnalysis {
+        rlr_env,
+        vlr_env,
+        frag_env,
+        reg_to_ranges_maps,
+    };
+    core_reftypes_analysis(&mut analysis, move_info, reftype_class, reftyped_vregs);
 }

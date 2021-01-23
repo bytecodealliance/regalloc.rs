@@ -1340,7 +1340,7 @@ pub fn alloc_main<F: Function>(
                 assert!(src_reg.is_virtual() && dst_reg.is_virtual());
                 let dst_vreg: VirtualReg = dst_reg.to_virtual_reg();
                 let src_vreg: VirtualReg = src_reg.to_virtual_reg();
-                let bridge_eef = est_freqs[sri.bix];
+                let bridge_eef = est_freqs.cost(sri.bix);
                 match sri.kind {
                     BridgeKind::RtoU => {
                         // Reload-to-Use bridge.  Hint that we want to be
@@ -1726,14 +1726,13 @@ pub fn alloc_main<F: Function>(
 
     let final_insns_and_targetmap_and_new_safepoints__or_err = edit_inst_stream(
         func,
-        &safepoint_insns,
         spills_n_reloads,
         &iixs_to_nop_out,
         frag_map,
         &reg_universe,
         use_checker,
+        stackmap_request,
         &stackmaps[..],
-        &reftyped_vregs[..],
     );
 
     // ======== END Create final instruction stream ========

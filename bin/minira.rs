@@ -343,7 +343,8 @@ mod test_utils {
             .allocate(opts.clone())
             .expect("generic allocator failed!");
 
-        let result = allocate_registers_with_opts(&mut func, &reg_universe, None, opts)
+        let sri = func.get_stackmap_request();
+        let result = allocate_registers_with_opts(&mut func, &reg_universe, sri.as_ref(), opts)
             .unwrap_or_else(|err| {
                 panic!("allocation failed: {}", err);
             });
@@ -373,6 +374,7 @@ mod test_utils {
             RunStage::BeforeRegalloc,
         );
         func.print("BEFORE", &None);
+        let sri = func.get_stackmap_request();
 
         let opts = Options {
             run_checker: false,
@@ -389,8 +391,9 @@ mod test_utils {
                 .allocate(opts.clone())
                 .expect("generic allocator failed!");
 
-            let result = allocate_registers_with_opts(&mut func, &reg_universe, None, opts.clone())
-                .expect("regalloc failure");
+            let result =
+                allocate_registers_with_opts(&mut func, &reg_universe, sri.as_ref(), opts.clone())
+                    .expect("regalloc failure");
 
             func.update_from_alloc(result);
             func.print("AFTER", &None);
@@ -626,6 +629,19 @@ fn lsra_qsort_18() {
     test_utils::check_lsra("qsort", 18, 0);
 }
 
+#[test]
+fn lsra_critical_edge_invariant() {
+    assert!(matches!(
+        test_utils::run_lsra("lsra_invariant_incorrect", 5, 0),
+        Err(regalloc::RegAllocError::Analysis(regalloc::AnalysisError::LsraCriticalEdge { .. }))
+    ));
+}
+
+#[test]
+fn lsra_fuzz_block_start_end() {
+    test_utils::check_lsra("lsra_fuzz_block_start_end", 5, 0);
+}
+
 // Requires at least 3 registers (r2 is mentioned explicitly).
 #[test]
 fn bt_fill_then_sum_2a() {
@@ -764,4 +780,20 @@ fn lsra_analysis_fuzz2() {
 #[test]
 fn lsra_sort_fixed() {
     test_utils::check_lsra("lsra_sort_fixed", 5, 5);
+}
+
+#[test]
+fn bt_fuzz_stackmap() {
+    test_utils::check_bt("stackmap", 5, 5);
+    test_utils::check_bt("fuzz_stackmap", 5, 5);
+    test_utils::check_bt("fuzz_stackmap2", 5, 5);
+    test_utils::check_bt("fuzz_stackmap3", 5, 5);
+}
+
+#[test]
+fn lsra_fuzz_stackmap() {
+    test_utils::check_lsra("stackmap", 5, 5);
+    test_utils::check_lsra("fuzz_stackmap", 5, 5);
+    test_utils::check_lsra("fuzz_stackmap2", 5, 5);
+    test_utils::check_lsra("fuzz_stackmap3", 5, 5);
 }

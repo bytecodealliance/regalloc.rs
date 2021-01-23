@@ -1,6 +1,6 @@
 use super::{
-    last_use, next_use, IntId, Intervals, Mention, MentionMap, OptimalSplitStrategy, RegUses,
-    Statistics, VirtualInterval,
+    analysis::BlockPos, last_use, next_use, IntId, Intervals, Mention, MentionMap,
+    OptimalSplitStrategy, RegUses, Statistics, VirtualInterval,
 };
 use crate::{
     data_structures::{InstPoint, Point, RegVecsAndBounds},
@@ -227,7 +227,11 @@ pub(crate) fn run<F: Function>(
             }
 
             if state.intervals.get(id).location.reg().is_some() {
-                state.activity.set_active(id);
+                if maybe_handle_safepoints(&mut state, id) {
+                    // Even it if may have been spilled (because of a safepoint), the parent
+                    // interval may still be active.
+                    state.activity.set_active(id);
+                }
             }
 
             // Reset reusable state.
@@ -909,6 +913,49 @@ fn allocate_blocked_reg<F: Function>(
     Ok(())
 }
 
+/// Handle safepoints by causing a spill/reload sequence across safepoint instructions, if needed.
+///
+/// Returns true if the original interval still lives in a register, after this function has been
+/// called.
+fn maybe_handle_safepoints<F: Function>(state: &mut State<F>, id: IntId) -> bool {
+    let int = state.intervals.get(id);
+    if !int.ref_typed {
+        return true;
+    }
+
+    let next_safepoint = int.safepoints().first().clone();
+    let sp_iix = match next_safepoint {
+        Some(&(sp_iix, _)) => sp_iix,
+        None => return true,
+    };
+
+    lsra_assert!(int.start.iix() <= sp_iix && sp_iix <= int.end.iix());
+
+    let sp_def = InstPoint::new_def(sp_iix);
+    if let Some(prev_use) = last_use(&state.intervals.get(id), sp_def, &state.reg_uses) {
+        if prev_use == sp_def {
+            // The value is being redefined by the instruction; there's no need to keep it alive on the
+            // stack, and we can use the same register assignment before and after the safepoint.
+            return true;
+        }
+
+        // The value is not redefined by the instruction, split and spill before the safepoint.
+        split_and_spill(state, id, InstPoint::new_use(sp_iix));
+        return true;
+    }
+
+    // No use before the safepoint! Split the interval so a new child is put on the allocation
+    // queue at its next use, and spill the interval.
+    if let Some(nu) = next_use(&state.intervals.get(id), sp_def, &state.reg_uses) {
+        let child = split(state, id, nu);
+        state.insert_unhandled(child);
+    }
+
+    // Not in a register anymore.
+    state.spill(id);
+    return false;
+}
+
 /// Finds an optimal split position, whenever we're given a range of possible
 /// positions where to split.
 fn find_optimal_split_pos<F: Function>(
@@ -1132,7 +1179,9 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
 
     let vreg = int.vreg;
     let ancestor = int.ancestor;
+    let ref_typed = int.ref_typed;
 
+    // Split the register mentions.
     let parent_mentions = state.intervals.get_mut(id).mentions_mut();
     let index = parent_mentions.binary_search_by(|mention| {
         // The comparator function returns the position of the argument compared to the target.
@@ -1168,39 +1217,74 @@ fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> Int
         }
     });
 
-    let (index, may_need_fixup) = match index {
-        Ok(index) => (index, true),
-        Err(index) => (index, false),
+    let index = match index {
+        Ok(index) => index,
+        Err(index) => index,
     };
-
-    // Emulate split_off for SmallVec here.
     let mut child_mentions = MentionMap::with_capacity(parent_mentions.len() - index);
     for mention in parent_mentions.iter().skip(index) {
         child_mentions.push(mention.clone());
     }
     parent_mentions.truncate(index);
 
-    // In the situation where we split at the def point of an instruction, and the mention set
-    // contains the use point, we need to refine the sets:
-    // - the parent must still contain the use point (and the modified point if present)
-    // - the child must only contain the def point (and the modified point if present).
-    // Note that if we split at the use point of an instruction, and the mention set contains the
-    // def point, it is fine: we're not splitting between the two of them.
-    if may_need_fixup && at_pos.pt() == Point::Def && child_mentions.first().unwrap().1.is_use() {
-        let first_child_mention = child_mentions.first_mut().unwrap();
-        first_child_mention.1.remove_use();
-
-        let last_parent_mention = parent_mentions.last_mut().unwrap();
-        last_parent_mention.1.add_use();
-
-        if first_child_mention.1.is_mod() {
-            last_parent_mention.1.add_mod();
+    // Now split block boundaries.
+    let parent_boundaries = state.intervals.get(id).block_boundaries();
+    let index = parent_boundaries.binary_search_by(|boundary| {
+        let inst_range = state.func.block_insns(boundary.bix);
+        match boundary.pos {
+            BlockPos::Start => {
+                let first_inst = InstPoint::new_use(inst_range.first());
+                return first_inst.cmp(&at_pos);
+            }
+            BlockPos::End => {
+                let last_inst = InstPoint::new_def(inst_range.last());
+                return last_inst.cmp(&at_pos);
+            }
         }
-    }
+    });
 
+    // It's possible that the binary search returns Err, for the edges (if the split position is
+    // before the first block boundary, or after the last).
+    let index = match index {
+        Ok(index) => index,
+        Err(index) => index,
+    };
+    let child_boundaries = state
+        .intervals
+        .get_mut(id)
+        .block_boundaries_mut()
+        .split_off(index);
+
+    // Now split the safepoints.
+    let child_safepoints = {
+        // Remove from the parent all the safepoints that aren't included in the new bounds.
+        let mut i = 0;
+        let parent_safepoints = state.intervals.get_mut(id).safepoints_mut();
+        while let Some(&(sp_iix, _sp_ix)) = parent_safepoints.get(i) {
+            if InstPoint::new_use(sp_iix) >= child_start {
+                break;
+            }
+            i += 1;
+        }
+        let child = parent_safepoints.iter().skip(i).cloned().collect();
+        parent_safepoints.truncate(i);
+        child
+    };
+
+    trace!("child interval has safepoints {:?}", child_safepoints);
+
+    // Phew: eventually create the child interval.
     let child_id = IntId(state.intervals.num_virtual_intervals());
-    let mut child_int =
-        VirtualInterval::new(child_id, vreg, child_start, child_end, child_mentions);
+    let mut child_int = VirtualInterval::new(
+        child_id,
+        vreg,
+        child_start,
+        child_end,
+        child_mentions,
+        child_boundaries,
+        ref_typed,
+        child_safepoints,
+    );
     child_int.parent = Some(id);
     child_int.ancestor = ancestor;
 

@@ -59,8 +59,8 @@ pub enum SparseSetU<A: Array> {
 
 impl<A> SparseSetU<A>
 where
-    A: Array + Eq + Ord + Hash + Copy + fmt::Debug,
-    A::Item: Eq + Ord + Hash + Copy + fmt::Debug,
+    A: Array,
+    A::Item: Eq + Hash + Copy,
 {
     #[cfg(test)]
     fn is_small(&self) -> bool {
@@ -69,10 +69,12 @@ where
             SparseSetU::Small { .. } => true,
         }
     }
+
     #[cfg(test)]
     fn is_large(&self) -> bool {
         !self.is_small()
     }
+
     #[inline(never)]
     fn upgrade(&mut self) {
         match self {
@@ -90,6 +92,7 @@ where
             }
         }
     }
+
     // A large set is only downgradeable if its card does not exceed this value.
     #[inline(always)]
     fn small_halfmax_card(&self) -> usize {
@@ -124,6 +127,7 @@ where
             }
         }
     }
+
     // If we have a large-format set, but the cardinality has fallen below half
     // the size of a small format set, convert it to the small format.  This
     // isn't done at the point when the cardinality falls to the max capacity of
@@ -152,6 +156,7 @@ where
             }
         }
     }
+
     #[inline(always)]
     fn insert_no_dup_check(&mut self, item: A::Item) {
         match self {
@@ -184,6 +189,7 @@ where
         }
     }
 }
+
 #[inline(always)]
 fn small_contains<A>(card: usize, arr: &MaybeUninit<A>, item: A::Item) -> bool
 where
@@ -203,8 +209,8 @@ where
 
 impl<A> SparseSetU<A>
 where
-    A: Array + Eq + Ord + Hash + Copy + fmt::Debug,
-    A::Item: Eq + Ord + Hash + Copy + fmt::Debug,
+    A: Array,
+    A::Item: Eq + Hash + Copy,
 {
     #[inline(always)]
     pub fn empty() -> Self {
@@ -479,27 +485,6 @@ where
     }
 
     #[inline(never)]
-    pub fn to_vec(&self) -> Vec<A::Item> {
-        let mut res = Vec::<A::Item>::new();
-        match self {
-            SparseSetU::Large { set } => {
-                for item in set.iter() {
-                    res.push(*item);
-                }
-            }
-            SparseSetU::Small { card, arr } => {
-                let arr_p = arr.as_ptr() as *const A::Item;
-                for i in 0..*card {
-                    res.push(unsafe { read(arr_p.add(i)) });
-                }
-            }
-        }
-        // Don't delete this.  It is important.
-        res.sort_unstable();
-        res
-    }
-
-    #[inline(never)]
     pub fn from_vec(vec: Vec<A::Item>) -> Self {
         let vec_len = vec.len();
         if vec_len <= A::size() {
@@ -579,6 +564,33 @@ where
     }
 }
 
+impl<A> SparseSetU<A>
+where
+    A: Array,
+    A::Item: Eq + Ord + Hash + Copy + fmt::Debug,
+{
+    #[inline(never)]
+    pub fn to_vec(&self) -> Vec<A::Item> {
+        let mut res = Vec::<A::Item>::new();
+        match self {
+            SparseSetU::Large { set } => {
+                for item in set.iter() {
+                    res.push(*item);
+                }
+            }
+            SparseSetU::Small { card, arr } => {
+                let arr_p = arr.as_ptr() as *const A::Item;
+                for i in 0..*card {
+                    res.push(unsafe { read(arr_p.add(i)) });
+                }
+            }
+        }
+        // Don't delete this.  It is important.
+        res.sort_unstable();
+        res
+    }
+}
+
 impl<A> fmt::Debug for SparseSetU<A>
 where
     A: Array + Eq + Ord + Hash + Copy + fmt::Debug,
@@ -605,8 +617,8 @@ where
 
 impl<A> Clone for SparseSetU<A>
 where
-    A: Array + Eq + Ord + Hash + Copy + Clone + fmt::Debug,
-    A::Item: Eq + Ord + Hash + Copy + Clone + fmt::Debug,
+    A: Array + Eq + Hash + Copy + Clone,
+    A::Item: Eq + Hash + Copy + Clone,
 {
     #[inline(never)]
     fn clone(&self) -> Self {
