@@ -560,12 +560,12 @@ pub const NUM_REG_CLASSES: usize = 5;
 impl RegClass {
     /// Convert a register class to a u32 index.
     #[inline(always)]
-    pub fn rc_to_u32(self) -> u32 {
+    pub const fn rc_to_u32(self) -> u32 {
         self as u32
     }
     /// Convert a register class to a usize index.
     #[inline(always)]
-    pub fn rc_to_usize(self) -> usize {
+    pub const fn rc_to_usize(self) -> usize {
         self as usize
     }
     /// Construct a register class from a u32.
@@ -641,7 +641,7 @@ pub struct Reg {
     bits: u32,
 }
 
-static INVALID_REG: u32 = 0xffffffff;
+const INVALID_REG: u32 = 0xffffffff;
 
 impl Reg {
     #[inline(always)]
@@ -652,7 +652,7 @@ impl Reg {
     pub fn is_real(self) -> bool {
         self.is_valid() && (self.bits & 0x8000_0000) == 0
     }
-    pub fn new_real(rc: RegClass, enc: u8, index: u8) -> Self {
+    pub const fn new_real(rc: RegClass, enc: u8, index: u8) -> Self {
         let n = (0 << 31) | (rc.rc_to_u32() << 28) | ((enc as u32) << 8) | ((index as u32) << 0);
         Reg { bits: n }
     }
@@ -663,7 +663,7 @@ impl Reg {
         let n = (1 << 31) | (rc.rc_to_u32() << 28) | (index << 0);
         Reg { bits: n }
     }
-    pub fn invalid() -> Reg {
+    pub const fn invalid() -> Reg {
         Reg { bits: INVALID_REG }
     }
     #[inline(always)]
