@@ -917,7 +917,7 @@ impl Reg {
 /// error.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
-pub struct Writable<R: WritableBase> {
+pub struct Writable<R> {
     reg: R,
 }
 
@@ -931,15 +931,17 @@ impl WritableBase for Reg {}
 impl WritableBase for RealReg {}
 impl WritableBase for VirtualReg {}
 
-impl<R: WritableBase> Writable<R> {
+impl<R> Writable<R> {
     /// Create a Writable<R> from an R. The client should carefully audit where
     /// it calls this constructor to ensure correctness (see `Writable<..>`
     /// struct documentation).
     #[inline(always)]
-    pub fn from_reg(reg: R) -> Writable<R> {
+    pub const fn from_reg(reg: R) -> Writable<R> {
         Writable { reg }
     }
+}
 
+impl<R: WritableBase> Writable<R> {
     /// Get the inner Reg.
     pub fn to_reg(&self) -> R {
         self.reg
