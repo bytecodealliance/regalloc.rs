@@ -633,7 +633,9 @@ fn lsra_qsort_18() {
 fn lsra_critical_edge_invariant() {
     assert!(matches!(
         test_utils::run_lsra("lsra_invariant_incorrect", 5, 0),
-        Err(regalloc::RegAllocError::Analysis(regalloc::AnalysisError::LsraCriticalEdge { .. }))
+        Err(regalloc::RegAllocError::Analysis(
+            regalloc::AnalysisError::LsraCriticalEdge { .. }
+        ))
     ));
 }
 
