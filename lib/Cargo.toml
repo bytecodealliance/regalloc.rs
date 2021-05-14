@@ -6,6 +6,7 @@ edition = "2018"
 license = "Apache-2.0 WITH LLVM-exception"
 description = "Modular register allocation algorithms"
 repository = "https://github.com/bytecodealliance/regalloc.rs"
+readme = "README.md"
 
 [dependencies]
 rustc-hash = "1.0.1"
