@@ -1,6 +1,6 @@
 //! Top level module for all analysis activities.
 
-use log::{debug, info};
+use log::trace;
 
 use crate::data_structures::*;
 use crate::sparse_set::SparseSet;
@@ -139,8 +139,8 @@ pub fn run_analysis<F: Function>(
     reftype_class: RegClass,
     reftyped_vregs: &Vec<VirtualReg>, // as supplied by the client
 ) -> Result<AnalysisInfo, AnalysisError> {
-    info!("run_analysis: begin");
-    info!(
+    trace!("run_analysis: begin");
+    trace!(
         "  run_analysis: {} blocks, {} insns",
         func.blocks().len(),
         func.insns().len()
@@ -149,7 +149,7 @@ pub fn run_analysis<F: Function>(
     // LSRA uses its own analysis.
     assert!(!client_wants_stackmaps || algorithm != AlgorithmWithDefaults::LinearScan);
 
-    info!("  run_analysis: begin control flow analysis");
+    trace!("  run_analysis: begin control flow analysis");
 
     // First do control flow analysis.  This is (relatively) simple.  Note that
     // this can fail, for various reasons; we propagate the failure if so.
@@ -162,10 +162,10 @@ pub fn run_analysis<F: Function>(
     // Annotate each Block with its estimated execution frequency.
     let estimated_frequencies = DepthBasedFrequencies::new(func, &cfg_info);
 
-    info!("  run_analysis: end control flow analysis");
+    trace!("  run_analysis: end control flow analysis");
 
     // Now perform dataflow analysis.  This is somewhat more complex.
-    info!("  run_analysis: begin data flow analysis");
+    trace!("  run_analysis: begin data flow analysis");
 
     // See `get_sanitized_reg_uses_for_func` for the meaning of "sanitized".
     let reg_vecs_and_bounds = get_sanitized_reg_uses_for_func(func, reg_universe)
@@ -222,13 +222,13 @@ pub fn run_analysis<F: Function>(
         }
     }
 
-    info!("  run_analysis: end data flow analysis");
+    trace!("  run_analysis: end data flow analysis");
 
     // Dataflow analysis is now complete.  Now compute the virtual and real live
     // ranges, in two steps: (1) compute RangeFrags, and (2) merge them
     // together, guided by flow and liveness info, so as to create the final
     // VirtualRanges and RealRanges.
-    info!("  run_analysis: begin liveness analysis");
+    trace!("  run_analysis: begin liveness analysis");
 
     let (frag_ixs_per_reg, frag_env, frag_metrics_env, vreg_classes) = get_range_frags(
         func,
@@ -252,10 +252,10 @@ pub fn run_analysis<F: Function>(
 
     debug_assert!(liveout_sets_per_block.len() == estimated_frequencies.len());
 
-    debug!("");
+    trace!("");
     let mut n = 0;
     for rlr in rlr_env.iter() {
-        debug!(
+        trace!(
             "{:<4?}   {}",
             RealRangeIx::new(n),
             rlr.show_with_rru(&reg_universe)
@@ -263,10 +263,10 @@ pub fn run_analysis<F: Function>(
         n += 1;
     }
 
-    debug!("");
+    trace!("");
     n = 0;
     for vlr in vlr_env.iter() {
-        debug!("{:<4?}   {:?}", VirtualRangeIx::new(n), vlr);
+        trace!("{:<4?}   {:?}", VirtualRangeIx::new(n), vlr);
         n += 1;
     }
 
@@ -293,10 +293,10 @@ pub fn run_analysis<F: Function>(
             (None, None)
         };
 
-    info!("  run_analysis: end liveness analysis");
+    trace!("  run_analysis: end liveness analysis");
 
     if client_wants_stackmaps {
-        info!("  run_analysis: begin reftypes analysis");
+        trace!("  run_analysis: begin reftypes analysis");
         do_reftypes_analysis(
             &mut rlr_env,
             &mut vlr_env,
@@ -306,10 +306,10 @@ pub fn run_analysis<F: Function>(
             reftype_class,
             reftyped_vregs,
         );
-        info!("  run_analysis: end reftypes analysis");
+        trace!("  run_analysis: end reftypes analysis");
     }
 
-    info!("run_analysis: end");
+    trace!("run_analysis: end");
 
     Ok(AnalysisInfo {
         reg_vecs_and_bounds,
@@ -390,12 +390,12 @@ impl<'a> ReftypeAnalysis for BacktrackingReftypeAnalysis<'a> {
         if range.is_real() {
             let rrange = &mut self.rlr_env[range.to_real()];
             debug_assert!(!rrange.is_ref);
-            debug!(" -> rrange {:?} is reffy", range.to_real());
+            trace!(" -> rrange {:?} is reffy", range.to_real());
             rrange.is_ref = true;
         } else {
             let vrange = &mut self.vlr_env[range.to_virtual()];
             debug_assert!(!vrange.is_ref);
-            debug!(" -> rrange {:?} is reffy", range.to_virtual());
+            trace!(" -> rrange {:?} is reffy", range.to_virtual());
             vrange.is_ref = true;
         }
     }
@@ -403,7 +403,7 @@ impl<'a> ReftypeAnalysis for BacktrackingReftypeAnalysis<'a> {
     #[inline(always)]
     fn insert_reffy_ranges(&self, vreg: VirtualReg, set: &mut SparseSet<Self::RangeId>) {
         for vlr_ix in &self.reg_to_ranges_maps.vreg_to_vlrs_map[vreg.get_index()] {
-            debug!("range {:?} is reffy due to reffy vreg {:?}", vlr_ix, vreg);
+            trace!("range {:?} is reffy due to reffy vreg {:?}", vlr_ix, vreg);
             set.insert(RangeId::new_virtual(*vlr_ix));
         }
     }

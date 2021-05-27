@@ -8,7 +8,7 @@ use crate::{
     VirtualReg, NUM_REG_CLASSES,
 };
 
-use log::{debug, info, log_enabled, trace, Level};
+use log::{trace, log_enabled, Level};
 use rustc_hash::FxHashMap as HashMap;
 use smallvec::SmallVec;
 use std::collections::BinaryHeap;
@@ -204,7 +204,7 @@ pub(crate) fn run<F: Function>(
     let mut prev_start = InstPoint::min_value();
 
     while let Some(id) = state.next_unhandled() {
-        info!("main loop: allocating {}", state.intervals.get(id));
+        trace!("main loop: allocating {}", state.intervals.get(id));
 
         #[cfg(debug_assertions)]
         {
@@ -237,15 +237,15 @@ pub(crate) fn run<F: Function>(
             reusable.computed_inactive = false;
         }
 
-        debug!("");
+        trace!("");
     }
 
-    if log_enabled!(Level::Debug) {
-        debug!("allocation results (in order):");
+    if log_enabled!(Level::Trace) {
+        trace!("allocation results (in order):");
         for int in state.intervals.virtuals.iter() {
-            debug!("{}", int);
+            trace!("{}", int);
         }
-        debug!("");
+        trace!("");
     }
 
     Ok((state.intervals, state.next_spill_slot.get()))
@@ -506,7 +506,7 @@ impl<'a, F: Function> State<'a, F> {
     fn spill(&mut self, id: IntId) {
         let int = self.intervals.get(id);
         debug_assert!(int.location.spill().is_none(), "already spilled");
-        debug!("spilling {:?}", id);
+        trace!("spilling {:?}", id);
 
         let vreg = int.vreg;
         let spill_slot = if let Some(spill_slot) = self.spill_map.get(&vreg) {
@@ -680,10 +680,10 @@ fn try_allocate_reg<F: Function>(
     let (best_reg, best_pos) = if let Some(solution) = select_naive_reg(reusable, state, id) {
         solution
     } else {
-        debug!("try_allocate_reg: all registers taken, need to spill.");
+        trace!("try_allocate_reg: all registers taken, need to spill.");
         return false;
     };
-    debug!(
+    trace!(
         "try_allocate_reg: best register {:?} has next use at {:?}",
         best_reg, best_pos
     );
@@ -695,7 +695,7 @@ fn try_allocate_reg<F: Function>(
     }
 
     // At least a partial match: allocate.
-    debug!(
+    trace!(
         "{:?}: {:?} <- {:?}",
         id,
         state.intervals.get(id).vreg,
@@ -829,7 +829,7 @@ fn allocate_blocked_reg<F: Function>(
             }
         }
     };
-    debug!(
+    trace!(
         "selecting blocked register {:?} with furthest next use at {:?}",
         best_reg, next_use_pos[best_reg]
     );
@@ -837,7 +837,7 @@ fn allocate_blocked_reg<F: Function>(
     // Step 3: if the next use of the current interval is after the furthest use
     // of the selected register, then we should spill the current interval.
     // Otherwise, spill other intervals.
-    debug!(
+    trace!(
         "current first used at {:?}, next use of best reg at {:?}",
         first_use, next_use_pos[best_reg]
     );
@@ -846,12 +846,12 @@ fn allocate_blocked_reg<F: Function>(
         if first_use == start_pos {
             return Err(RegAllocError::OutOfRegisters(reg_class));
         }
-        debug!("spill current interval");
+        trace!("spill current interval");
         let new_int = split(state, cur_id, first_use);
         state.insert_unhandled(new_int);
         state.spill(cur_id);
     } else {
-        debug!("taking over register, spilling intersecting intervals");
+        trace!("taking over register, spilling intersecting intervals");
 
         // Spill intervals that currently block the selected register.
         state.intervals.set_reg(cur_id, best_reg);
@@ -860,7 +860,7 @@ fn allocate_blocked_reg<F: Function>(
         // intersection.
         let int_end = state.intervals.get(cur_id).end;
         if block_pos[best_reg] <= int_end {
-            debug!(
+            trace!(
                 "allocate_blocked_reg: fixed conflict! blocked at {:?}, while ending at {:?}",
                 block_pos[best_reg], int_end
             );
@@ -880,7 +880,7 @@ fn allocate_blocked_reg<F: Function>(
                     if let Some(reg) = int.location.reg() {
                         if reg == best_reg {
                             // spill it!
-                            debug!("allocate_blocked_reg: split and spill active stolen reg");
+                            trace!("allocate_blocked_reg: split and spill active stolen reg");
                             split_and_spill(state, int_id, start_pos);
                             break;
                         }
@@ -1034,7 +1034,7 @@ fn next_pos(mut pos: InstPoint) -> InstPoint {
 fn split_and_spill<F: Function>(state: &mut State<F>, id: IntId, split_pos: InstPoint) {
     let child = match last_use(&state.intervals.get(id), split_pos, &state.reg_uses) {
         Some(last_use) => {
-            debug!(
+            trace!(
                 "split_and_spill {:?}: spill between {:?} and {:?}",
                 id, last_use, split_pos
             );
@@ -1054,7 +1054,7 @@ fn split_and_spill<F: Function>(state: &mut State<F>, id: IntId, split_pos: Inst
         None => {
             // The current interval has no uses before the split position, it can
             // safely be spilled.
-            debug!(
+            trace!(
                 "split_and_spill {:?}: spilling it since no uses before split position",
                 id
             );
@@ -1066,7 +1066,7 @@ fn split_and_spill<F: Function>(state: &mut State<F>, id: IntId, split_pos: Inst
     // Split until the next register use.
     match next_use(&state.intervals.get(child), split_pos, &state.reg_uses) {
         Some(next_use_pos) => {
-            debug!(
+            trace!(
                 "split spilled interval before next use @ {:?}",
                 next_use_pos
             );
@@ -1079,7 +1079,7 @@ fn split_and_spill<F: Function>(state: &mut State<F>, id: IntId, split_pos: Inst
     }
 
     // In both cases, the spilled child interval can remain on the stack.
-    debug!("spilled split child {:?} silently expires", child);
+    trace!("spilled split child {:?} silently expires", child);
 }
 
 /// Try to find a (use) position where to split the interval until the next point at which it
@@ -1145,7 +1145,7 @@ fn try_split_regs<F: Function>(
 /// in place. The child interval starts after (including) at_pos.
 #[inline(never)]
 fn split<F: Function>(state: &mut State<F>, id: IntId, at_pos: InstPoint) -> IntId {
-    debug!("split {:?} at {:?}", id, at_pos);
+    trace!("split {:?} at {:?}", id, at_pos);
     trace!("interval: {}", state.intervals.get(id));
 
     let int = state.intervals.get(id);

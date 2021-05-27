@@ -3,7 +3,7 @@
 
 //! Core implementation of the backtracking allocator.
 
-use log::{debug, info, log_enabled, Level};
+use log::{debug, log_enabled, Level};
 use smallvec::SmallVec;
 use std::default;
 use std::fmt;
@@ -723,14 +723,14 @@ pub fn alloc_main<F: Function>(
     // -------- Alloc main --------
 
     // Create initial state
-    info!("alloc_main: begin");
-    info!(
+    debug!("alloc_main: begin");
+    debug!(
         "alloc_main:   in: {} insns in {} blocks",
         func.insns().len(),
         func.blocks().len()
     );
     let num_vlrs_initial = vlr_env.len();
-    info!(
+    debug!(
         "alloc_main:   in: {} VLRs, {} RLRs",
         num_vlrs_initial,
         rlr_env.len()
@@ -798,7 +798,7 @@ pub fn alloc_main<F: Function>(
     debug!("");
     debug!("-- MAIN ALLOCATION LOOP (DI means 'direct', CO means 'coalesced'):");
 
-    info!("alloc_main:   main allocation loop: begin");
+    debug!("alloc_main:   main allocation loop: begin");
 
     // ======== BEGIN Main allocation loop ========
     let mut num_vlrs_processed = 0; // stats only
@@ -1396,7 +1396,7 @@ pub fn alloc_main<F: Function>(
     }
     // ======== END Main allocation loop ========
 
-    info!("alloc_main:   main allocation loop: end");
+    debug!("alloc_main:   main allocation loop: end");
 
     if log_enabled!(Level::Debug) {
         debug!("");
@@ -1415,7 +1415,7 @@ pub fn alloc_main<F: Function>(
     // ======== BEGIN Do spill slot coalescing ========
 
     debug!("");
-    info!("alloc_main:   create spills_n_reloads for MOVE insns");
+    debug!("alloc_main:   create spills_n_reloads for MOVE insns");
 
     // Sort `edit_list_move` by the insn with which each item is associated.
     edit_list_move.sort_unstable_by(|eli1, eli2| eli1.iix.cmp(&eli2.iix));
@@ -1559,7 +1559,7 @@ pub fn alloc_main<F: Function>(
     // ======== BEGIN Create all other spills and reloads ========
 
     debug!("");
-    info!("alloc_main:   create spills_n_reloads for other insns");
+    debug!("alloc_main:   create spills_n_reloads for other insns");
 
     // Reload and spill instructions are missing.  To generate them, go through
     // the "edit list", which contains info on both how to generate the
@@ -1642,7 +1642,7 @@ pub fn alloc_main<F: Function>(
     // not take account of spill or reload instructions.  Dealing with those
     // is relatively simple and happens later.
 
-    info!("alloc_main:   create frag_map");
+    debug!("alloc_main:   create frag_map");
 
     let mut frag_map = Vec::<(RangeFrag, VirtualReg, RealReg)>::new();
     // For each real register under our control ..
@@ -1667,7 +1667,7 @@ pub fn alloc_main<F: Function>(
     let mut stackmaps = Vec::<Vec<SpillSlot>>::new();
 
     if !safepoint_insns.is_empty() {
-        info!("alloc_main:   create safepoints and stackmaps");
+        debug!("alloc_main:   create safepoints and stackmaps");
         for safepoint_iix in safepoint_insns {
             // Create the stackmap artefacts for `safepoint_iix`.  Save the stackmap (the
             // reftyped spillslots); we'll have to return it to the client as part of the
@@ -1716,7 +1716,7 @@ pub fn alloc_main<F: Function>(
         }
     }
 
-    info!("alloc_main:   edit_inst_stream");
+    debug!("alloc_main:   edit_inst_stream");
 
     let final_insns_and_targetmap_and_new_safepoints__or_err = edit_inst_stream(
         func,
@@ -1735,39 +1735,39 @@ pub fn alloc_main<F: Function>(
 
     match final_insns_and_targetmap_and_new_safepoints__or_err {
         Ok((ref final_insns, ..)) => {
-            info!(
+            debug!(
                 "alloc_main:   out: VLRs: {} initially, {} processed",
                 num_vlrs_initial, num_vlrs_processed
             );
-            info!(
+            debug!(
                 "alloc_main:   out: VLRs: {} evicted, {} spilled",
                 num_vlrs_evicted, num_vlrs_spilled
             );
-            info!(
+            debug!(
                 "alloc_main:   out: insns: {} total, {} spills, {} reloads, {} nopzs",
                 final_insns.len(),
                 num_spills,
                 num_reloads,
                 iixs_to_nop_out.len()
             );
-            info!(
+            debug!(
                 "alloc_main:   out: spill slots: {} used",
                 spill_slot_allocator.num_slots_in_use()
             );
         }
         Err(_) => {
-            info!("alloc_main:   allocation failed!");
+            debug!("alloc_main:   allocation failed!");
         }
     }
 
     let (final_insns, target_map, new_to_old_insn_map, new_safepoint_insns) =
         match final_insns_and_targetmap_and_new_safepoints__or_err {
             Err(e) => {
-                info!("alloc_main: fail");
+                debug!("alloc_main: fail");
                 return Err(e);
             }
             Ok(quad) => {
-                info!("alloc_main:   creating RegAllocResult");
+                debug!("alloc_main:   creating RegAllocResult");
                 quad
             }
         };
@@ -1835,7 +1835,7 @@ pub fn alloc_main<F: Function>(
         new_safepoint_insns,
     };
 
-    info!("alloc_main: end");
+    debug!("alloc_main: end");
 
     // ======== END Create the RegAllocResult ========
 
