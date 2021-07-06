@@ -1,6 +1,6 @@
 //! Performs dataflow and liveness analysis, including live range construction.
 
-use log::{trace, log_enabled, Level};
+use log::{log_enabled, trace, Level};
 use smallvec::{smallvec, SmallVec};
 use std::cmp::min;
 use std::fmt;
@@ -409,7 +409,10 @@ pub fn get_sanitized_reg_uses_for_func<F: Function>(
             );
             trace!(
                 "{:?}  SAN_RU: use {{ {}}} mod {{ {}}} def {{ {}}}",
-                iix, s_use, s_mod, s_def
+                iix,
+                s_use,
+                s_mod,
+                s_def
             );
         }
     }
@@ -711,7 +714,9 @@ pub fn calc_livein_and_liveout<F: Function>(
     let ratio: f32 = (num_evals as f32) / ((if num_blocks == 0 { 1 } else { num_blocks }) as f32);
     trace!(
         "    calc_livein_and_liveout:   {} blocks, {} evals ({:<.2} per block)",
-        num_blocks, num_evals, ratio
+        num_blocks,
+        num_evals,
+        ratio
     );
 
     if log_enabled!(Level::Trace) {
@@ -1523,7 +1528,8 @@ pub(crate) fn merge_range_frags(
     trace!("      in: {} in frag_env", frag_env.len());
     trace!(
         "      in: {} regs containing in total {} frags",
-        stats_num_total_incoming_regs, stats_num_total_incoming_frags
+        stats_num_total_incoming_regs,
+        stats_num_total_incoming_frags
     );
 
     let mut stats_num_single_grps = 0;
@@ -1784,11 +1790,13 @@ pub(crate) fn merge_range_frags(
     );
     trace!(
         "      in: {} small multi groups, {} small multi group total size",
-        stats_num_multi_grps_small, stats_size_multi_grps_small
+        stats_num_multi_grps_small,
+        stats_size_multi_grps_small
     );
     trace!(
         "      in: {} large multi groups, {} large multi group total size",
-        stats_num_multi_grps_large, stats_size_multi_grps_large
+        stats_num_multi_grps_large,
+        stats_size_multi_grps_large
     );
     trace!(
         "      out: {} VLRs, {} RLRs",
@@ -1797,7 +1805,8 @@ pub(crate) fn merge_range_frags(
     );
     trace!(
         "      compress vfrags: in {}, out {}",
-        stats_num_vfrags_uncompressed, stats_num_vfrags_compressed
+        stats_num_vfrags_uncompressed,
+        stats_num_vfrags_compressed
     );
     trace!("    merge_range_frags: end");
 

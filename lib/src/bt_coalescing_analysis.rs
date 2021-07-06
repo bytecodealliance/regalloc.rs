@@ -26,7 +26,7 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
-use log::{trace, log_enabled, Level};
+use log::{log_enabled, trace, Level};
 use smallvec::{smallvec, SmallVec};
 
 use crate::data_structures::{
@@ -537,7 +537,10 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
     {
         trace!(
             "connected by moves: {:?} {:?} <- {:?} (est_freq {})",
-            iix, dst, src, est_freq
+            iix,
+            dst,
+            src,
+            est_freq
         );
         match (dst.is_virtual(), src.is_virtual()) {
             (true, true) => {

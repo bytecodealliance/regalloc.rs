@@ -79,26 +79,22 @@ impl ToString for AnalysisError {
                     regs_string
                 )
             }
-            AnalysisError::IllegalRealReg(reg) => {
-                format!(
-                    "instructions mention real register {:?}, which either isn't defined in the
+            AnalysisError::IllegalRealReg(reg) => format!(
+                "instructions mention real register {:?}, which either isn't defined in the
                     register universe, or is a 'suggested_scratch' register",
-                    reg
-                )
-            }
+                reg
+            ),
             AnalysisError::UnreachableBlocks => "at least one block is unreachable".to_string(),
             AnalysisError::ImplementationLimitsExceeded => {
                 "implementation limits exceeded (more than 1 million blocks or 16 million insns)"
                     .to_string()
             }
-            AnalysisError::LsraCriticalEdge { block, inst } => {
-                format!(
-                    "block {:?} ends with control flow instruction {:?} that mentions a register,
+            AnalysisError::LsraCriticalEdge { block, inst } => format!(
+                "block {:?} ends with control flow instruction {:?} that mentions a register,
                     and at least one of the multiple successors has several predecessors; consider
                     splitting the outgoing edges!",
-                    block, inst
-                )
-            }
+                block, inst
+            ),
         }
     }
 }

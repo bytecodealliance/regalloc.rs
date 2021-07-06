@@ -341,7 +341,8 @@ impl<'a> ReftypeAnalysis for LsraReftypeAnalysis<'a> {
         for vrange in &self.vreg_to_vranges[vreg.get_index()] {
             trace!(
                 "range {:?} is reffy due to reffy vreg {:?}",
-                vrange.int, vreg
+                vrange.int,
+                vreg
             );
             set.insert(RangeId::Virtual(vrange.int.0));
         }
