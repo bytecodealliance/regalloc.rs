@@ -26,7 +26,7 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
-use log::{debug, info, log_enabled, Level};
+use log::{log_enabled, trace, Level};
 use smallvec::{smallvec, SmallVec};
 
 use crate::data_structures::{
@@ -144,8 +144,8 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
     UnionFindEquivClasses<VirtualRangeIx>,
     TypedIxVec<InstIx, bool>,
 ) {
-    info!("");
-    info!("do_coalescing_analysis: begin");
+    trace!("");
+    trace!("do_coalescing_analysis: begin");
 
     // This function contains significant additional complexity due to the requirement to handle
     // pathological cases in reasonable time without unduly burdening the common cases.
@@ -535,9 +535,12 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
         ..
     } in move_info.iter()
     {
-        debug!(
+        trace!(
             "connected by moves: {:?} {:?} <- {:?} (est_freq {})",
-            iix, dst, src, est_freq
+            iix,
+            dst,
+            src,
+            est_freq
         );
         match (dst.is_virtual(), src.is_virtual()) {
             (true, true) => {
@@ -565,7 +568,7 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
                         // both `vlrixSrc` and `vlrixDst`.  This is so as to reduce to
                         // zero, the cost of a VLR whose only instructions are its
                         // v-v boundary copies.
-                        debug!("reduce cost of {:?} and {:?}", vlrixSrc, vlrixDst);
+                        trace!("reduce cost of {:?} and {:?}", vlrixSrc, vlrixDst);
                         decVLRcosts.push((vlrixSrc, vlrixDst, 1 * est_freq));
                     }
                 }
@@ -633,22 +636,22 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
     let vlrEquivClasses: UnionFindEquivClasses<VirtualRangeIx> =
         vlrEquivClassesUF.get_equiv_classes();
 
-    if log_enabled!(Level::Debug) {
-        debug!("Revised VLRs:");
+    if log_enabled!(Level::Trace) {
+        trace!("Revised VLRs:");
         let mut n = 0;
         for vlr in vlr_env.iter() {
-            debug!("{:<4?}   {:?}", VirtualRangeIx::new(n), vlr);
+            trace!("{:<4?}   {:?}", VirtualRangeIx::new(n), vlr);
             n += 1;
         }
 
-        debug!("Coalescing hints:");
+        trace!("Coalescing hints:");
         n = 0;
         for hints_for_one_vlr in hints.iter() {
             let mut s = "".to_string();
             for hint in hints_for_one_vlr {
                 s = s + &show_hint(hint, &univ) + &" ".to_string();
             }
-            debug!("  hintsfor {:<4?} = {}", VirtualRangeIx::new(n), s);
+            trace!("  hintsfor {:<4?} = {}", VirtualRangeIx::new(n), s);
             n += 1;
         }
 
@@ -659,18 +662,18 @@ pub(crate) fn do_coalescing_analysis<F: Function>(
                 tmpvec.reverse();
                 tmpvec.push(elem);
             }
-            debug!("  eclassof {:?} = {:?}", vlrix, tmpvec);
+            trace!("  eclassof {:?} = {:?}", vlrix, tmpvec);
         }
 
         for (b, i) in is_vv_boundary_move.iter().zip(0..) {
             if *b {
-                debug!("  vv_boundary_move at {:?}", InstIx::new(i));
+                trace!("  vv_boundary_move at {:?}", InstIx::new(i));
             }
         }
     }
 
-    info!("do_coalescing_analysis: end");
-    info!("");
+    trace!("do_coalescing_analysis: end");
+    trace!("");
 
     (hints, vlrEquivClasses, is_vv_boundary_move)
 }

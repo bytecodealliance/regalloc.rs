@@ -32,7 +32,7 @@ mod snapshot;
 mod sparse_set;
 mod union_find;
 
-use log::{info, log_enabled, Level};
+use log::{debug, log_enabled, Level};
 use std::default;
 use std::{borrow::Cow, fmt};
 
@@ -522,15 +522,15 @@ pub fn allocate_registers_with_opts<F: Function>(
     stackmap_info: Option<&StackmapRequestInfo>,
     opts: Options,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
-    info!("");
-    info!("================ regalloc.rs: BEGIN function ================");
+    debug!("");
+    debug!("================ regalloc.rs: BEGIN function ================");
 
-    if log_enabled!(Level::Info) {
-        info!("with options: {:?}", opts);
+    if log_enabled!(Level::Debug) {
+        debug!("with options: {:?}", opts);
         let strs = rreg_universe.show();
-        info!("using RealRegUniverse:");
+        debug!("using RealRegUniverse:");
         for s in strs {
-            info!("  {}", s);
+            debug!("  {}", s);
         }
     }
 
@@ -599,7 +599,7 @@ pub fn allocate_registers_with_opts<F: Function>(
         }
     };
 
-    info!("================ regalloc.rs: END function ================");
+    debug!("================ regalloc.rs: END function ================");
     res
 }
 

@@ -477,7 +477,7 @@ pub(crate) fn run<F: Function>(
     spill_slot: &mut u32,
     scratches_by_rc: &[Option<RealReg>],
 ) -> Vec<InstToInsertAndExtPoint> {
-    info!("resolve_moves");
+    debug!("resolve_moves");
 
     // Keep three lists of moves to insert:
     // - moves across blocks, that must happen at the start of blocks,

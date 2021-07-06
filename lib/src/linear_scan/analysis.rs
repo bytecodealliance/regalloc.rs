@@ -13,7 +13,7 @@ use crate::{
     union_find::UnionFind,
     AnalysisError, Function, RealRegUniverse, RegClass, StackmapRequestInfo, TypedIxVec,
 };
-use log::{debug, info, log_enabled, trace, Level};
+use log::{log_enabled, trace, Level};
 use smallvec::{smallvec, SmallVec};
 use std::{cmp::Ordering, fmt, mem};
 
@@ -138,7 +138,7 @@ pub(crate) fn run<F: Function>(
     reg_universe: &RealRegUniverse,
     stackmap_request: Option<&StackmapRequestInfo>,
 ) -> Result<AnalysisInfo, AnalysisError> {
-    info!(
+    trace!(
         "run_analysis: begin: {} blocks, {} insns",
         func.blocks().len(),
         func.insns().len()
@@ -148,12 +148,12 @@ pub(crate) fn run<F: Function>(
     // various reasons; we propagate the failure if so.  Also create the InstIx-to-BlockIx map;
     // this isn't really control-flow analysis, but needs to be done at some point.
 
-    info!("  run_analysis: begin control flow analysis");
+    trace!("  run_analysis: begin control flow analysis");
     let cfg_info = CFGInfo::create(func)?;
     let inst_to_block_map = InstIxToBlockIxMap::new(func);
-    info!("  run_analysis: end control flow analysis");
+    trace!("  run_analysis: end control flow analysis");
 
-    info!("  run_analysis: begin data flow analysis");
+    trace!("  run_analysis: begin data flow analysis");
 
     // See `get_sanitized_reg_uses_for_func` for the meaning of "sanitized".
     let reg_vecs_and_bounds = get_sanitized_reg_uses_for_func(func, reg_universe)
@@ -228,9 +228,9 @@ pub(crate) fn run<F: Function>(
         }
     }
 
-    info!("  run_analysis: end data flow analysis");
+    trace!("  run_analysis: end data flow analysis");
 
-    info!("  run_analysis: begin liveness analysis");
+    trace!("  run_analysis: begin liveness analysis");
     let (frag_ixs_per_reg, mut frag_env, frag_metrics_env, vreg_classes) = get_range_frags(
         func,
         &reg_universe,
@@ -250,7 +250,7 @@ pub(crate) fn run<F: Function>(
         &vreg_classes,
         stackmap_request.is_some(),
     )?;
-    info!("  run_analysis: end liveness analysis");
+    trace!("  run_analysis: end liveness analysis");
 
     // Make sure the fixed interval's fragment are sorted, to allow for binary search in misc
     // contexts.
@@ -278,7 +278,7 @@ pub(crate) fn run<F: Function>(
         fixeds: fixed_intervals,
     };
 
-    info!("run_analysis: end");
+    trace!("run_analysis: end");
 
     Ok(AnalysisInfo {
         cfg: cfg_info,
@@ -339,9 +339,10 @@ impl<'a> ReftypeAnalysis for LsraReftypeAnalysis<'a> {
 
     fn insert_reffy_ranges(&self, vreg: VirtualReg, set: &mut SparseSet<Self::RangeId>) {
         for vrange in &self.vreg_to_vranges[vreg.get_index()] {
-            debug!(
+            trace!(
                 "range {:?} is reffy due to reffy vreg {:?}",
-                vrange.int, vreg
+                vrange.int,
+                vreg
             );
             set.insert(RangeId::Virtual(vrange.int.0));
         }
@@ -652,7 +653,7 @@ fn get_range_frags<F: Function>(
     Vec<RangeFragMetrics>,
     Vec</*vreg index,*/ RegClass>,
 ) {
-    info!("    get_range_frags: begin");
+    trace!("    get_range_frags: begin");
     debug_assert!(liveins.len() == func.blocks().len() as u32);
     debug_assert!(liveouts.len() == func.blocks().len() as u32);
     debug_assert!(rvb.is_sanitized());
@@ -715,21 +716,21 @@ fn get_range_frags<F: Function>(
         assert!(state_elem.is_none());
     }
 
-    if log_enabled!(Level::Debug) {
-        debug!("");
+    if log_enabled!(Level::Trace) {
+        trace!("");
         let mut n = 0;
         for frag in result_frags.iter() {
-            debug!("{:<3?}   {:?}", RangeFragIx::new(n), frag);
+            trace!("{:<3?}   {:?}", RangeFragIx::new(n), frag);
             n += 1;
         }
 
-        debug!("");
+        trace!("");
         for (reg_ix, frag_ixs) in result_map.iter().enumerate() {
             if frag_ixs.len() == 0 {
                 continue;
             }
             let reg = reg_ix_to_reg(reg_universe, &vreg_classes, reg_ix as u32);
-            debug!(
+            trace!(
                 "frags for {}   {:?}",
                 reg.show_with_rru(reg_universe),
                 frag_ixs
@@ -737,7 +738,7 @@ fn get_range_frags<F: Function>(
         }
     }
 
-    info!("    get_range_frags: end");
+    trace!("    get_range_frags: end");
     assert!(result_frags.len() == result_frag_metrics.len());
 
     (result_map, result_frags, result_frag_metrics, vreg_classes)
@@ -762,14 +763,14 @@ fn merge_range_frags<F: Function>(
     vreg_classes: &Vec</*vreg index,*/ RegClass>,
     wants_stackmaps: bool,
 ) -> Result<(Vec<FixedInterval>, Vec<VirtualInterval>, VirtualRegToRanges), AnalysisError> {
-    info!("    merge_range_frags: begin");
-    if log_enabled!(Level::Info) {
+    trace!("    merge_range_frags: begin");
+    if log_enabled!(Level::Trace) {
         let mut stats_num_total_incoming_frags = 0;
         for all_frag_ixs_for_reg in frag_ix_vec_per_reg.iter() {
             stats_num_total_incoming_frags += all_frag_ixs_for_reg.len();
         }
-        info!("      in: {} in frag_env", frag_env.len());
-        info!(
+        trace!("      in: {} in frag_env", frag_env.len());
+        trace!(
             "      in: {} regs containing in total {} frags",
             frag_ix_vec_per_reg.len(),
             stats_num_total_incoming_frags
@@ -1031,7 +1032,7 @@ fn merge_range_frags<F: Function>(
         }
     }
 
-    info!("    merge_range_frags: end");
+    trace!("    merge_range_frags: end");
 
     Ok((result_fixed, result_virtual, vreg_to_vranges))
 }

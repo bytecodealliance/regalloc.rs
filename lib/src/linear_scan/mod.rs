@@ -4,7 +4,7 @@
 //!   Optimized Interval Splitting in a Linear Scan Register Allocator,
 //!     by Wimmer et al., 2005
 
-use log::{info, log_enabled, trace, Level};
+use log::{log_enabled, trace, Level};
 
 use std::env;
 use std::fmt;
@@ -716,7 +716,7 @@ fn set_registers<F: Function>(
     stackmap_request: Option<&StackmapRequestInfo>,
     stackmaps: &[Vec<SpillSlot>],
 ) -> Result<Set<RealReg>, CheckerErrors> {
-    info!("set_registers");
+    trace!("set_registers");
 
     let mut clobbered_registers = Set::empty();
 
@@ -885,7 +885,7 @@ fn apply_registers<F: Function>(
     use_checker: bool,
     stackmap_request: Option<&StackmapRequestInfo>,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
-    info!("apply_registers");
+    trace!("apply_registers");
 
     let stackmaps = compute_stackmaps(virtual_intervals, stackmap_request.clone());
 

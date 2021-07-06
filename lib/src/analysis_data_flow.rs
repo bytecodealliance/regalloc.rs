@@ -1,6 +1,6 @@
 //! Performs dataflow and liveness analysis, including live range construction.
 
-use log::{debug, info, log_enabled, Level};
+use log::{log_enabled, trace, Level};
 use smallvec::{smallvec, SmallVec};
 use std::cmp::min;
 use std::fmt;
@@ -377,7 +377,7 @@ pub fn get_sanitized_reg_uses_for_func<F: Function>(
     assert!(!reg_vecs.is_sanitized());
     reg_vecs.set_sanitized(true);
 
-    if log_enabled!(Level::Debug) {
+    if log_enabled!(Level::Trace) {
         let show_reg = |r: Reg| {
             if r.is_real() {
                 reg_universe.regs[r.get_index()].1.clone()
@@ -407,9 +407,12 @@ pub fn get_sanitized_reg_uses_for_func<F: Function>(
                 &reg_vecs.defs[bounds_vec[iix].defs_start as usize
                     ..bounds_vec[iix].defs_start as usize + bounds_vec[iix].defs_len as usize],
             );
-            debug!(
+            trace!(
                 "{:?}  SAN_RU: use {{ {}}} mod {{ {}}} def {{ {}}}",
-                iix, s_use, s_mod, s_def
+                iix,
+                s_use,
+                s_mod,
+                s_def
             );
         }
     }
@@ -520,7 +523,7 @@ pub fn calc_def_and_use<F: Function>(
     TypedIxVec<BlockIx, SparseSet<Reg>>,
     TypedIxVec<BlockIx, SparseSet<Reg>>,
 ) {
-    info!("    calc_def_and_use: begin");
+    trace!("    calc_def_and_use: begin");
     assert!(rvb.is_sanitized());
     let mut def_sets = TypedIxVec::new();
     let mut use_sets = TypedIxVec::new();
@@ -578,9 +581,9 @@ pub fn calc_def_and_use<F: Function>(
 
     assert!(def_sets.len() == use_sets.len());
 
-    if log_enabled!(Level::Debug) {
+    if log_enabled!(Level::Trace) {
         let mut n = 0;
-        debug!("");
+        trace!("");
         for (def_set, use_set) in def_sets.iter().zip(use_sets.iter()) {
             let mut first = true;
             let mut defs_str = "".to_string();
@@ -600,7 +603,7 @@ pub fn calc_def_and_use<F: Function>(
                 first = false;
                 uses_str = uses_str + &uce.show_with_rru(univ);
             }
-            debug!(
+            trace!(
                 "{:<3?}   def {{{}}}  use {{{}}}",
                 BlockIx::new(n),
                 defs_str,
@@ -610,7 +613,7 @@ pub fn calc_def_and_use<F: Function>(
         }
     }
 
-    info!("    calc_def_and_use: end");
+    trace!("    calc_def_and_use: end");
     (def_sets, use_sets)
 }
 
@@ -630,7 +633,7 @@ pub fn calc_livein_and_liveout<F: Function>(
     TypedIxVec<BlockIx, SparseSet<Reg>>,
     TypedIxVec<BlockIx, SparseSet<Reg>>,
 ) {
-    info!("    calc_livein_and_liveout: begin");
+    trace!("    calc_livein_and_liveout: begin");
     let num_blocks = func.blocks().len() as u32;
     let empty = SparseSet::<Reg>::empty();
 
@@ -709,14 +712,16 @@ pub fn calc_livein_and_liveout<F: Function>(
     }
 
     let ratio: f32 = (num_evals as f32) / ((if num_blocks == 0 { 1 } else { num_blocks }) as f32);
-    info!(
+    trace!(
         "    calc_livein_and_liveout:   {} blocks, {} evals ({:<.2} per block)",
-        num_blocks, num_evals, ratio
+        num_blocks,
+        num_evals,
+        ratio
     );
 
-    if log_enabled!(Level::Debug) {
+    if log_enabled!(Level::Trace) {
         let mut n = 0;
-        debug!("");
+        trace!("");
         for (livein, liveout) in liveins.iter().zip(liveouts.iter()) {
             let mut first = true;
             let mut li_str = "".to_string();
@@ -736,7 +741,7 @@ pub fn calc_livein_and_liveout<F: Function>(
                 first = false;
                 lo_str = lo_str + &lo.show_with_rru(univ);
             }
-            debug!(
+            trace!(
                 "{:<3?}   livein {{{}}}  liveout {{{}}}",
                 BlockIx::new(n),
                 li_str,
@@ -746,7 +751,7 @@ pub fn calc_livein_and_liveout<F: Function>(
         }
     }
 
-    info!("    calc_livein_and_liveout: end");
+    trace!("    calc_livein_and_liveout: end");
     (liveins, liveouts)
 }
 
@@ -1146,7 +1151,7 @@ pub fn get_range_frags<F: Function>(
     TypedIxVec<RangeFragIx, RangeFragMetrics>,
     Vec</*vreg index,*/ RegClass>,
 ) {
-    info!("    get_range_frags: begin");
+    trace!("    get_range_frags: begin");
     assert!(livein_sets_per_block.len() == func.blocks().len() as u32);
     assert!(liveout_sets_per_block.len() == func.blocks().len() as u32);
     assert!(rvb.is_sanitized());
@@ -1224,21 +1229,21 @@ pub fn get_range_frags<F: Function>(
         assert!(state_elem.is_none());
     }
 
-    if log_enabled!(Level::Debug) {
-        debug!("");
+    if log_enabled!(Level::Trace) {
+        trace!("");
         let mut n = 0;
         for frag in result_frags.iter() {
-            debug!("{:<3?}   {:?}", RangeFragIx::new(n), frag);
+            trace!("{:<3?}   {:?}", RangeFragIx::new(n), frag);
             n += 1;
         }
 
-        debug!("");
+        trace!("");
         for (reg_ix, frag_ixs) in result_map.iter().enumerate() {
             if frag_ixs.len() == 0 {
                 continue;
             }
             let reg = reg_ix_to_reg(reg_universe, &vreg_classes, reg_ix as u32);
-            debug!(
+            trace!(
                 "frags for {}   {:?}",
                 reg.show_with_rru(reg_universe),
                 frag_ixs
@@ -1246,7 +1251,7 @@ pub fn get_range_frags<F: Function>(
         }
     }
 
-    info!("    get_range_frags: end");
+    trace!("    get_range_frags: end");
     assert!(result_frags.len() == result_frag_metrics.len());
     (result_map, result_frags, result_frag_metrics, vreg_classes)
 }
@@ -1519,11 +1524,12 @@ pub(crate) fn merge_range_frags(
             stats_num_total_incoming_regs += 1;
         }
     }
-    info!("    merge_range_frags: begin");
-    info!("      in: {} in frag_env", frag_env.len());
-    info!(
+    trace!("    merge_range_frags: begin");
+    trace!("      in: {} in frag_env", frag_env.len());
+    trace!(
         "      in: {} regs containing in total {} frags",
-        stats_num_total_incoming_regs, stats_num_total_incoming_frags
+        stats_num_total_incoming_regs,
+        stats_num_total_incoming_frags
     );
 
     let mut stats_num_single_grps = 0;
@@ -1777,29 +1783,32 @@ pub(crate) fn merge_range_frags(
         // END merge `all_frag_ixs_for_reg` entries as much as possible
     } // END per reg loop
 
-    info!("      in: {} single groups", stats_num_single_grps);
-    info!(
+    trace!("      in: {} single groups", stats_num_single_grps);
+    trace!(
         "      in: {} local frags in multi groups",
         stats_num_local_frags
     );
-    info!(
+    trace!(
         "      in: {} small multi groups, {} small multi group total size",
-        stats_num_multi_grps_small, stats_size_multi_grps_small
+        stats_num_multi_grps_small,
+        stats_size_multi_grps_small
     );
-    info!(
+    trace!(
         "      in: {} large multi groups, {} large multi group total size",
-        stats_num_multi_grps_large, stats_size_multi_grps_large
+        stats_num_multi_grps_large,
+        stats_size_multi_grps_large
     );
-    info!(
+    trace!(
         "      out: {} VLRs, {} RLRs",
         result_virtual.len(),
         result_real.len()
     );
-    info!(
+    trace!(
         "      compress vfrags: in {}, out {}",
-        stats_num_vfrags_uncompressed, stats_num_vfrags_compressed
+        stats_num_vfrags_uncompressed,
+        stats_num_vfrags_compressed
     );
-    info!("    merge_range_frags: end");
+    trace!("    merge_range_frags: end");
 
     (result_real, result_virtual)
 }

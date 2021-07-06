@@ -204,7 +204,7 @@ pub(crate) fn run<F: Function>(
     let mut prev_start = InstPoint::min_value();
 
     while let Some(id) = state.next_unhandled() {
-        info!("main loop: allocating {}", state.intervals.get(id));
+        debug!("main loop: allocating {}", state.intervals.get(id));
 
         #[cfg(debug_assertions)]
         {
