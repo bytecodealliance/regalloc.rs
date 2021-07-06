@@ -7,7 +7,7 @@ use crate::{
     Function, RealReg, Reg, SpillSlot, TypedIxVec, VirtualReg, Writable,
 };
 
-use log::trace;
+use log::{debug, info, trace};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use smallvec::SmallVec;
 use std::fmt;
@@ -96,7 +96,7 @@ fn resolve_moves_in_block<F: Function>(
 
                     Location::Reg(from_rreg) => {
                         if from_rreg != rreg {
-                            trace!(
+                            debug!(
                                 "inblock fixup: {:?} move {:?} -> {:?} at {:?}",
                                 interval.id, from_rreg, rreg, at_inst
                             );
@@ -105,7 +105,7 @@ fn resolve_moves_in_block<F: Function>(
                     }
 
                     Location::Stack(spill) => {
-                        trace!(
+                        debug!(
                             "inblock fixup: {:?} reload {:?} -> {:?} at {:?}",
                             interval.id, spill, rreg, at_inst
                         );
@@ -129,7 +129,7 @@ fn resolve_moves_in_block<F: Function>(
                     Location::None => unreachable!(),
 
                     Location::Reg(rreg) => {
-                        trace!(
+                        debug!(
                             "inblock fixup: {:?} spill {:?} -> {:?} at {:?}",
                             interval.id, rreg, spill, at_inst
                         );
@@ -372,7 +372,7 @@ fn resolve_moves_across_blocks<F: Function>(
                         if cur_rreg == succ_rreg {
                             continue;
                         }
-                        trace!(
+                        debug!(
                           "boundary fixup: move {:?} -> {:?} at {:?} for {:?} between {:?} and {:?}",
                           cur_rreg,
                           succ_rreg,
@@ -387,7 +387,7 @@ fn resolve_moves_across_blocks<F: Function>(
                     }
 
                     (Location::Reg(cur_rreg), Location::Stack(spillslot)) => {
-                        trace!(
+                        debug!(
                           "boundary fixup: spill {:?} -> {:?} at {:?} for {:?} between {:?} and {:?}",
                           cur_rreg,
                           spillslot,
@@ -402,7 +402,7 @@ fn resolve_moves_across_blocks<F: Function>(
                     }
 
                     (Location::Stack(spillslot), Location::Reg(rreg)) => {
-                        trace!(
+                        debug!(
                           "boundary fixup: reload {:?} -> {:?} at {:?} for {:?} between {:?} and {:?}",
                           spillslot,
                           rreg,
@@ -463,7 +463,7 @@ fn resolve_moves_across_blocks<F: Function>(
         parallel_move_map.clear();
     }
 
-    trace!("");
+    debug!("");
 }
 
 #[inline(never)]
@@ -477,7 +477,7 @@ pub(crate) fn run<F: Function>(
     spill_slot: &mut u32,
     scratches_by_rc: &[Option<RealReg>],
 ) -> Vec<InstToInsertAndExtPoint> {
-    trace!("resolve_moves");
+    debug!("resolve_moves");
 
     // Keep three lists of moves to insert:
     // - moves across blocks, that must happen at the start of blocks,
