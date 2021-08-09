@@ -22,8 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - name: Build
-      run: cargo build
     - name: Run tests
       run: cargo test --all --verbose
     # make sure code builds in release mode as well
