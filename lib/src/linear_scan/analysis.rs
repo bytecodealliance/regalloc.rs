@@ -106,7 +106,6 @@ impl RangeFrag {
     }
 
     #[inline(always)]
-    #[cfg(debug_assertions)]
     pub(crate) fn contains(&self, inst: &InstPoint) -> bool {
         self.first <= *inst && *inst <= self.last
     }
