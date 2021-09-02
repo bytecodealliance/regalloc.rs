@@ -63,7 +63,7 @@ pub enum RI {
 
 #[allow(non_snake_case)]
 pub fn RI_R(reg: Reg) -> RI {
-    debug_assert!(reg.get_class() == RegClass::I32);
+    debug_assert!(reg.get_class() == RegClass::I64);
     RI::Reg { reg }
 }
 
@@ -97,7 +97,7 @@ impl RI {
     }
     fn type_checks(&self, cx: &mut ValidatorContext) -> bool {
         match self {
-            RI::Reg { reg } => cx.check_reg_rc(reg, RegRef::Use, RegClass::I32),
+            RI::Reg { reg } => cx.check_reg_rc(reg, RegRef::Use, RegClass::I64),
             RI::Imm { .. } => true,
         }
     }
@@ -111,20 +111,20 @@ pub enum AM {
 
 #[allow(non_snake_case)]
 pub fn AM_R(base: Reg) -> AM {
-    debug_assert!(base.get_class() == RegClass::I32);
+    debug_assert!(base.get_class() == RegClass::I64);
     AM::RI { base, offset: 0 }
 }
 
 #[allow(non_snake_case)]
 pub fn AM_RI(base: Reg, offset: u32) -> AM {
-    debug_assert!(base.get_class() == RegClass::I32);
+    debug_assert!(base.get_class() == RegClass::I64);
     AM::RI { base, offset }
 }
 
 #[allow(non_snake_case)]
 pub fn AM_RR(base: Reg, offset: Reg) -> AM {
-    debug_assert!(base.get_class() == RegClass::I32);
-    debug_assert!(offset.get_class() == RegClass::I32);
+    debug_assert!(base.get_class() == RegClass::I64);
+    debug_assert!(offset.get_class() == RegClass::I64);
     AM::RR { base, offset }
 }
 
@@ -166,9 +166,9 @@ impl AM {
     fn type_checks(&self, cx: &mut ValidatorContext) -> bool {
         use RegClass::*;
         match self {
-            AM::RI { base, .. } => cx.check_reg_rc(base, RegRef::Use, I32),
+            AM::RI { base, .. } => cx.check_reg_rc(base, RegRef::Use, I64),
             AM::RR { base, offset } => {
-                cx.check_reg_rc(base, RegRef::Use, I32) && cx.check_reg_rc(offset, RegRef::Use, I32)
+                cx.check_reg_rc(base, RegRef::Use, I64) && cx.check_reg_rc(offset, RegRef::Use, I64)
             }
         }
     }
@@ -415,55 +415,55 @@ pub enum Inst {
 }
 
 pub fn i_imm(dst: Reg, imm: u32) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::Imm { dst, imm }
 }
 pub fn i_immf(dst: Reg, imm: f32) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::F32);
+    debug_assert!(dst.get_class() == RegClass::V128);
     Inst::ImmF { dst, imm }
 }
 pub fn i_copy(dst: Reg, src: Reg) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
-    debug_assert!(src.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
+    debug_assert!(src.get_class() == RegClass::I64);
     Inst::Copy { dst, src }
 }
 pub fn i_copyf(dst: Reg, src: Reg) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::F32);
-    debug_assert!(src.get_class() == RegClass::F32);
+    debug_assert!(dst.get_class() == RegClass::V128);
+    debug_assert!(src.get_class() == RegClass::V128);
     Inst::CopyF { dst, src }
 }
 // For BinOp variants see below
 
 pub fn i_load(dst: Reg, addr: AM) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::Load { dst, addr }
 }
 pub fn i_loadf(dst: Reg, addr: AM) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::F32);
+    debug_assert!(dst.get_class() == RegClass::V128);
     Inst::LoadF { dst, addr }
 }
 pub fn i_store(addr: AM, src: Reg) -> Inst {
-    debug_assert!(src.get_class() == RegClass::I32);
+    debug_assert!(src.get_class() == RegClass::I64);
     Inst::Store { addr, src }
 }
 pub fn i_storef(addr: AM, src: Reg) -> Inst {
-    debug_assert!(src.get_class() == RegClass::F32);
+    debug_assert!(src.get_class() == RegClass::V128);
     Inst::StoreF { addr, src }
 }
 fn i_spill(dst: SpillSlot, src: RealReg) -> Inst {
-    debug_assert!(src.get_class() == RegClass::I32);
+    debug_assert!(src.get_class() == RegClass::I64);
     Inst::Spill { dst, src }
 }
 fn i_spillf(dst: SpillSlot, src: RealReg) -> Inst {
-    debug_assert!(src.get_class() == RegClass::F32);
+    debug_assert!(src.get_class() == RegClass::V128);
     Inst::SpillF { dst, src }
 }
 fn i_reload(dst: RealReg, src: SpillSlot) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::Reload { dst, src }
 }
 fn i_reloadf(dst: RealReg, src: SpillSlot) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::F32);
+    debug_assert!(dst.get_class() == RegClass::V128);
     Inst::ReloadF { dst, src }
 }
 pub fn i_goto<'a>(target: &'a str) -> Inst {
@@ -472,7 +472,7 @@ pub fn i_goto<'a>(target: &'a str) -> Inst {
     }
 }
 pub fn i_goto_ctf<'a>(cond: Reg, target_true: &'a str, target_false: &'a str) -> Inst {
-    debug_assert!(cond.get_class() == RegClass::I32);
+    debug_assert!(cond.get_class() == RegClass::I64);
     Inst::GotoCTF {
         cond,
         target_true: Label::new_unresolved(target_true.to_string()),
@@ -485,11 +485,11 @@ pub fn i_print_s<'a>(str: &'a str) -> Inst {
     }
 }
 pub fn i_print_i(reg: Reg) -> Inst {
-    debug_assert!(reg.get_class() == RegClass::I32);
+    debug_assert!(reg.get_class() == RegClass::I64);
     Inst::PrintI { reg }
 }
 pub fn i_print_f(reg: Reg) -> Inst {
-    debug_assert!(reg.get_class() == RegClass::F32);
+    debug_assert!(reg.get_class() == RegClass::V128);
     Inst::PrintF { reg }
 }
 pub fn i_finish(reg: Option<Reg>) -> Inst {
@@ -497,8 +497,8 @@ pub fn i_finish(reg: Option<Reg>) -> Inst {
 }
 
 pub fn i_add(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
-    debug_assert!(src_left.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
+    debug_assert!(src_left.get_class() == RegClass::I64);
     Inst::BinOp {
         op: BinOp::Add,
         dst,
@@ -507,8 +507,8 @@ pub fn i_add(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_sub(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
-    debug_assert!(src_left.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
+    debug_assert!(src_left.get_class() == RegClass::I64);
     Inst::BinOp {
         op: BinOp::Sub,
         dst,
@@ -517,8 +517,8 @@ pub fn i_sub(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_mul(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
-    debug_assert!(src_left.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
+    debug_assert!(src_left.get_class() == RegClass::I64);
     Inst::BinOp {
         op: BinOp::Mul,
         dst,
@@ -527,8 +527,8 @@ pub fn i_mul(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_mod(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
-    debug_assert!(src_left.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
+    debug_assert!(src_left.get_class() == RegClass::I64);
     Inst::BinOp {
         op: BinOp::Mod,
         dst,
@@ -537,8 +537,8 @@ pub fn i_mod(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_shr(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
-    debug_assert!(src_left.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
+    debug_assert!(src_left.get_class() == RegClass::I64);
     Inst::BinOp {
         op: BinOp::Shr,
         dst,
@@ -547,8 +547,8 @@ pub fn i_shr(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_and(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
-    debug_assert!(src_left.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
+    debug_assert!(src_left.get_class() == RegClass::I64);
     Inst::BinOp {
         op: BinOp::And,
         dst,
@@ -557,8 +557,8 @@ pub fn i_and(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_cmp_eq(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
-    debug_assert!(src_left.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
+    debug_assert!(src_left.get_class() == RegClass::I64);
     Inst::BinOp {
         op: BinOp::CmpEQ,
         dst,
@@ -567,8 +567,8 @@ pub fn i_cmp_eq(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_cmp_lt(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
-    debug_assert!(src_left.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
+    debug_assert!(src_left.get_class() == RegClass::I64);
     Inst::BinOp {
         op: BinOp::CmpLT,
         dst,
@@ -577,8 +577,8 @@ pub fn i_cmp_lt(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_cmp_le(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
-    debug_assert!(src_left.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
+    debug_assert!(src_left.get_class() == RegClass::I64);
     Inst::BinOp {
         op: BinOp::CmpLE,
         dst,
@@ -587,8 +587,8 @@ pub fn i_cmp_le(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_cmp_ge(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
-    debug_assert!(src_left.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
+    debug_assert!(src_left.get_class() == RegClass::I64);
     Inst::BinOp {
         op: BinOp::CmpGE,
         dst,
@@ -597,8 +597,8 @@ pub fn i_cmp_ge(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_cmp_gt(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
-    debug_assert!(src_left.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
+    debug_assert!(src_left.get_class() == RegClass::I64);
     Inst::BinOp {
         op: BinOp::CmpGT,
         dst,
@@ -609,7 +609,7 @@ pub fn i_cmp_gt(dst: Reg, src_left: Reg, src_right: RI) -> Inst {
 
 // 2-operand versions of i_add and i_sub, for experimentation
 pub fn i_addm(dst: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::BinOpM {
         op: BinOp::Add,
         dst,
@@ -617,7 +617,7 @@ pub fn i_addm(dst: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_andm(dst: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::BinOpM {
         op: BinOp::And,
         dst,
@@ -625,7 +625,7 @@ pub fn i_andm(dst: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_modm(dst: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::BinOpM {
         op: BinOp::Mod,
         dst,
@@ -633,7 +633,7 @@ pub fn i_modm(dst: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_mulm(dst: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::BinOpM {
         op: BinOp::Mul,
         dst,
@@ -641,7 +641,7 @@ pub fn i_mulm(dst: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_shrm(dst: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::BinOpM {
         op: BinOp::Shr,
         dst,
@@ -649,7 +649,7 @@ pub fn i_shrm(dst: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_subm(dst: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::BinOpM {
         op: BinOp::Sub,
         dst,
@@ -657,7 +657,7 @@ pub fn i_subm(dst: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_cmp_eqm(dst: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::BinOpM {
         op: BinOp::CmpEQ,
         dst,
@@ -665,7 +665,7 @@ pub fn i_cmp_eqm(dst: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_cmp_gem(dst: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::BinOpM {
         op: BinOp::CmpGE,
         dst,
@@ -673,7 +673,7 @@ pub fn i_cmp_gem(dst: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_cmp_gtm(dst: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::BinOpM {
         op: BinOp::CmpGT,
         dst,
@@ -681,7 +681,7 @@ pub fn i_cmp_gtm(dst: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_cmp_lem(dst: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::BinOpM {
         op: BinOp::CmpLE,
         dst,
@@ -689,7 +689,7 @@ pub fn i_cmp_lem(dst: Reg, src_right: RI) -> Inst {
     }
 }
 pub fn i_cmp_ltm(dst: Reg, src_right: RI) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::I32);
+    debug_assert!(dst.get_class() == RegClass::I64);
     Inst::BinOpM {
         op: BinOp::CmpLT,
         dst,
@@ -698,9 +698,9 @@ pub fn i_cmp_ltm(dst: Reg, src_right: RI) -> Inst {
 }
 
 pub fn i_fadd(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::F32);
-    debug_assert!(src_left.get_class() == RegClass::F32);
-    debug_assert!(src_right.get_class() == RegClass::F32);
+    debug_assert!(dst.get_class() == RegClass::V128);
+    debug_assert!(src_left.get_class() == RegClass::V128);
+    debug_assert!(src_right.get_class() == RegClass::V128);
     Inst::BinOpF {
         op: BinOpF::FAdd,
         dst,
@@ -709,9 +709,9 @@ pub fn i_fadd(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
     }
 }
 pub fn i_fsub(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::F32);
-    debug_assert!(src_left.get_class() == RegClass::F32);
-    debug_assert!(src_right.get_class() == RegClass::F32);
+    debug_assert!(dst.get_class() == RegClass::V128);
+    debug_assert!(src_left.get_class() == RegClass::V128);
+    debug_assert!(src_right.get_class() == RegClass::V128);
     Inst::BinOpF {
         op: BinOpF::FSub,
         dst,
@@ -720,9 +720,9 @@ pub fn i_fsub(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
     }
 }
 pub fn i_fmul(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::F32);
-    debug_assert!(src_left.get_class() == RegClass::F32);
-    debug_assert!(src_right.get_class() == RegClass::F32);
+    debug_assert!(dst.get_class() == RegClass::V128);
+    debug_assert!(src_left.get_class() == RegClass::V128);
+    debug_assert!(src_right.get_class() == RegClass::V128);
     Inst::BinOpF {
         op: BinOpF::FMul,
         dst,
@@ -731,9 +731,9 @@ pub fn i_fmul(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
     }
 }
 pub fn i_fdiv(dst: Reg, src_left: Reg, src_right: Reg) -> Inst {
-    debug_assert!(dst.get_class() == RegClass::F32);
-    debug_assert!(src_left.get_class() == RegClass::F32);
-    debug_assert!(src_right.get_class() == RegClass::F32);
+    debug_assert!(dst.get_class() == RegClass::V128);
+    debug_assert!(src_left.get_class() == RegClass::V128);
+    debug_assert!(src_right.get_class() == RegClass::V128);
     Inst::BinOpF {
         op: BinOpF::FDiv,
         dst,
@@ -1096,28 +1096,28 @@ impl Inst {
         // Always check uses before defs.
         match self {
             Inst::NopZ {} => true,
-            Inst::Imm { dst, imm: _ } => cx.check_reg_rc(dst, RegRef::Def, I32),
-            Inst::ImmF { dst, imm: _ } => cx.check_reg_rc(dst, RegRef::Def, F32),
+            Inst::Imm { dst, imm: _ } => cx.check_reg_rc(dst, RegRef::Def, I64),
+            Inst::ImmF { dst, imm: _ } => cx.check_reg_rc(dst, RegRef::Def, V128),
             // MakeRef and UseRef are like copy instructions; the typecheck only
             // reasons about register classes, not reffyness, so the
             // distinctions between the three are irrelevant here.
             Inst::Copy { dst, src } | Inst::MakeRef { dst, src } | Inst::UseRef { dst, src } => {
-                cx.check_reg_rc(src, RegRef::Use, I32) && cx.check_reg_rc(dst, RegRef::Def, I32)
+                cx.check_reg_rc(src, RegRef::Use, I64) && cx.check_reg_rc(dst, RegRef::Def, I64)
             }
             Inst::CopyF { dst, src } => {
-                cx.check_reg_rc(src, RegRef::Use, F32) && cx.check_reg_rc(dst, RegRef::Def, F32)
+                cx.check_reg_rc(src, RegRef::Use, V128) && cx.check_reg_rc(dst, RegRef::Def, V128)
             }
             Inst::Load { dst, addr } => {
-                addr.type_checks(cx) && cx.check_reg_rc(dst, RegRef::Def, I32)
+                addr.type_checks(cx) && cx.check_reg_rc(dst, RegRef::Def, I64)
             }
             Inst::LoadF { dst, addr } => {
-                addr.type_checks(cx) && cx.check_reg_rc(dst, RegRef::Def, F32)
+                addr.type_checks(cx) && cx.check_reg_rc(dst, RegRef::Def, V128)
             }
             Inst::Store { addr, src } => {
-                cx.check_reg_rc(src, RegRef::Use, I32) && addr.type_checks(cx)
+                cx.check_reg_rc(src, RegRef::Use, I64) && addr.type_checks(cx)
             }
             Inst::StoreF { addr, src } => {
-                cx.check_reg_rc(src, RegRef::Use, F32) && addr.type_checks(cx)
+                cx.check_reg_rc(src, RegRef::Use, V128) && addr.type_checks(cx)
             }
             Inst::Goto { target } => target.type_checks(cx),
             Inst::GotoCTF {
@@ -1125,13 +1125,13 @@ impl Inst {
                 target_true,
                 target_false,
             } => {
-                cx.check_reg_rc(cond, RegRef::Use, I32)
+                cx.check_reg_rc(cond, RegRef::Use, I64)
                     && target_true.type_checks(cx)
                     && target_false.type_checks(cx)
             }
             Inst::PrintS { .. } => true,
-            Inst::PrintI { reg } => cx.check_reg_rc(reg, RegRef::Use, I32),
-            Inst::PrintF { reg } => cx.check_reg_rc(reg, RegRef::Use, F32),
+            Inst::PrintI { reg } => cx.check_reg_rc(reg, RegRef::Use, I64),
+            Inst::PrintF { reg } => cx.check_reg_rc(reg, RegRef::Use, V128),
             Inst::Finish { reg } => reg.map_or(true, |reg| cx.check_reg(reg, RegRef::Use)),
             Inst::BinOp {
                 op: _,
@@ -1139,18 +1139,18 @@ impl Inst {
                 src_left,
                 src_right,
             } => {
-                cx.check_reg_rc(src_left, RegRef::Use, I32)
+                cx.check_reg_rc(src_left, RegRef::Use, I64)
                     && src_right.type_checks(cx)
-                    && cx.check_reg_rc(dst, RegRef::Def, I32)
+                    && cx.check_reg_rc(dst, RegRef::Def, I64)
             }
             Inst::BinOpM {
                 op: _,
                 dst,
                 src_right,
             } => {
-                cx.check_reg_rc(dst, RegRef::Use, I32)
+                cx.check_reg_rc(dst, RegRef::Use, I64)
                     && src_right.type_checks(cx)
-                    && cx.check_reg_rc(dst, RegRef::Def, I32)
+                    && cx.check_reg_rc(dst, RegRef::Def, I64)
             }
             Inst::BinOpF {
                 op: _,
@@ -1158,9 +1158,9 @@ impl Inst {
                 src_left,
                 src_right,
             } => {
-                cx.check_reg_rc(src_left, RegRef::Use, F32)
-                    && cx.check_reg_rc(src_right, RegRef::Use, F32)
-                    && cx.check_reg_rc(dst, RegRef::Def, F32)
+                cx.check_reg_rc(src_left, RegRef::Use, V128)
+                    && cx.check_reg_rc(src_right, RegRef::Use, V128)
+                    && cx.check_reg_rc(dst, RegRef::Def, V128)
             }
             Inst::Safepoint => true,
 
@@ -1181,7 +1181,7 @@ impl Inst {
 #[derive(Copy, Clone)]
 pub enum Value {
     U32(u32),
-    F32(f32),
+    V128(f32),
     Ref(u32),
 }
 
@@ -1193,8 +1193,8 @@ impl PartialEq for Value {
                 _ => false,
             },
 
-            Value::F32(x) => match other {
-                Value::F32(y) => (x.is_nan() && y.is_nan()) || x == y,
+            Value::V128(x) => match other {
+                Value::V128(y) => (x.is_nan() && y.is_nan()) || x == y,
                 _ => false,
             },
 
@@ -1210,15 +1210,15 @@ impl Value {
     fn to_u32(self) -> u32 {
         match self {
             Value::U32(n) => n,
-            Value::F32(_) => panic!("Value::toU32: this is a F32"),
+            Value::V128(_) => panic!("Value::toU32: this is a V128"),
             Value::Ref(_) => panic!("Value::toU32: this is a ref"),
         }
     }
     fn to_f32(self) -> f32 {
         match self {
-            Value::U32(_) => panic!("Value::toF32: this is a U32"),
-            Value::Ref(_) => panic!("Value::toF32: this is a ref"),
-            Value::F32(n) => n,
+            Value::U32(_) => panic!("Value::toV128: this is a U32"),
+            Value::Ref(_) => panic!("Value::toV128: this is a ref"),
+            Value::V128(n) => n,
         }
     }
     fn to_ref(self) -> u32 {
@@ -1230,14 +1230,14 @@ impl Value {
     fn cast_to_u32(self) -> u32 {
         match self {
             Value::U32(n) => n,
-            Value::F32(f) => f as u32,
+            Value::V128(f) => f as u32,
             Value::Ref(n) => n,
         }
     }
     fn cast_to_f32(self) -> f32 {
         match self {
             Value::U32(n) => n as f32,
-            Value::F32(f) => f,
+            Value::V128(f) => f,
             Value::Ref(n) => n as f32,
         }
     }
@@ -1247,7 +1247,7 @@ impl fmt::Debug for Value {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Value::U32(n) => write!(fmt, "{}", n),
-            Value::F32(n) => write!(fmt, "{}", n),
+            Value::V128(n) => write!(fmt, "{}", n),
             Value::Ref(n) => write!(fmt, "@{}", n),
         }
     }
@@ -1389,7 +1389,7 @@ impl<'a> IState<'a> {
             self.slots.resize(ix + 1, None);
         }
         debug_assert!(ix < self.slots.len());
-        self.slots[ix] = Some(Value::F32(val));
+        self.slots[ix] = Some(Value::V128(val));
     }
 
     fn get_reg(&self, reg: Reg) -> IResult<Value> {
@@ -1405,7 +1405,7 @@ impl<'a> IState<'a> {
     }
 
     fn set_reg_f32(&mut self, reg: Reg, val: f32) {
-        self.set_reg(reg, Value::F32(val))
+        self.set_reg(reg, Value::V128(val))
     }
 
     fn set_reg_ref(&mut self, reg: Reg, val: u32) {
@@ -1447,7 +1447,7 @@ impl<'a> IState<'a> {
         // No auto resizing of the memory
         match self.mem.get_mut(addr as usize) {
             None => return Err(format!("IState::set_mem_f32: invalid addr {}", addr))?,
-            Some(val_p) => *val_p = Some(Value::F32(val)),
+            Some(val_p) => *val_p = Some(Value::V128(val)),
         }
         Ok(())
     }
@@ -1934,7 +1934,7 @@ impl Func {
                 None
             } else {
                 let reftyped_vregs = (reftype_reg_start..self.num_virtual_regs)
-                    .map(|index| Reg::new_virtual(RegClass::I32, index).to_virtual_reg())
+                    .map(|index| Reg::new_virtual(RegClass::I64, index).to_virtual_reg())
                     .collect::<Vec<_>>();
                 let mut safepoint_insns = vec![];
                 for iix in self.insns.range() {
@@ -1950,7 +1950,7 @@ impl Func {
                     reftyped_vregs, safepoint_insns
                 );
                 Some(StackmapRequestInfo {
-                    reftype_class: RegClass::I32,
+                    reftype_class: RegClass::I64,
                     reftyped_vregs,
                     safepoint_insns,
                 })
@@ -2330,7 +2330,7 @@ impl regalloc::Function for Func {
     /// 64-bit machine, spill slots may nominally be 64-bit words, but a 128-bit
     /// vector value will require two slots.  The regalloc will always align on
     /// this size.
-    fn get_spillslot_size(&self, _regclass: RegClass, _for_vreg: VirtualReg) -> u32 {
+    fn get_spillslot_size(&self, _regclass: RegClass, _for_vreg: Option<VirtualReg>) -> u32 {
         // For our simple test ISA, every value occupies one spill slot.
         1
     }
@@ -2343,8 +2343,8 @@ impl regalloc::Function for Func {
         _for_vreg: Option<VirtualReg>,
     ) -> Self::Inst {
         match from_reg.get_class() {
-            RegClass::I32 => i_spill(to_slot, from_reg),
-            RegClass::F32 => i_spillf(to_slot, from_reg),
+            RegClass::I64 => i_spill(to_slot, from_reg),
+            RegClass::V128 => i_spillf(to_slot, from_reg),
             _ => panic!("Unused register class in test ISA was used"),
         }
     }
@@ -2357,8 +2357,8 @@ impl regalloc::Function for Func {
         _for_vreg: Option<VirtualReg>,
     ) -> Self::Inst {
         match to_reg.to_reg().get_class() {
-            RegClass::I32 => i_reload(to_reg.to_reg(), from_slot),
-            RegClass::F32 => i_reloadf(to_reg.to_reg(), from_slot),
+            RegClass::I64 => i_reload(to_reg.to_reg(), from_slot),
+            RegClass::V128 => i_reloadf(to_reg.to_reg(), from_slot),
             _ => panic!("Unused register class in test ISA was used"),
         }
     }
@@ -2369,14 +2369,14 @@ impl regalloc::Function for Func {
         &self,
         to_reg: Writable<RealReg>,
         from_reg: RealReg,
-        _for_vreg: VirtualReg,
+        _for_vreg: Option<VirtualReg>,
     ) -> Self::Inst {
         match to_reg.to_reg().get_class() {
-            RegClass::I32 => Inst::Copy {
+            RegClass::I64 => Inst::Copy {
                 src: from_reg.to_reg(),
                 dst: to_reg.to_reg().to_reg(),
             },
-            RegClass::F32 => Inst::CopyF {
+            RegClass::V128 => Inst::CopyF {
                 src: from_reg.to_reg(),
                 dst: to_reg.to_reg().to_reg(),
             },
@@ -2416,7 +2416,7 @@ impl regalloc::Function for Func {
     }
 }
 
-/// Create a universe for testing, with nI32 `I32` class regs and nF32 `F32`
+/// Create a universe for testing, with nI64 `I64` class regs and nV128 `V128`
 /// class regs.
 pub fn make_universe(num_i32: usize, num_f32: usize) -> RealRegUniverse {
     let total_regs = num_i32 + num_f32;
@@ -2432,12 +2432,12 @@ pub fn make_universe(num_i32: usize, num_f32: usize) -> RealRegUniverse {
         let first = index as usize;
         for i in 0..num_i32 {
             let name = format!("R{}", i).to_string();
-            let reg = Reg::new_real(RegClass::I32, /*enc=*/ 0, index).to_real_reg();
+            let reg = Reg::new_real(RegClass::I64, /*enc=*/ 0, index).to_real_reg();
             regs.push((reg, name));
             index += 1;
         }
         let last = index as usize - 1;
-        allocable_by_class[RegClass::I32.rc_to_usize()] = Some(RegClassInfo {
+        allocable_by_class[RegClass::I64.rc_to_usize()] = Some(RegClassInfo {
             first,
             last,
             suggested_scratch: Some(last),
@@ -2448,12 +2448,12 @@ pub fn make_universe(num_i32: usize, num_f32: usize) -> RealRegUniverse {
         let first = index as usize;
         for i in 0..num_f32 {
             let name = format!("F{}", i).to_string();
-            let reg = Reg::new_real(RegClass::F32, /*enc=*/ 0, index).to_real_reg();
+            let reg = Reg::new_real(RegClass::V128, /*enc=*/ 0, index).to_real_reg();
             regs.push((reg, name));
             index += 1;
         }
         let last = index as usize - 1;
-        allocable_by_class[RegClass::F32.rc_to_usize()] = Some(RegClassInfo {
+        allocable_by_class[RegClass::V128.rc_to_usize()] = Some(RegClassInfo {
             first,
             last,
             suggested_scratch: Some(last),

@@ -340,7 +340,7 @@ impl SpillSlotAllocator {
         // must have the same regclass.  (If they don't, the client's is_move
         // function has been giving us wrong information.)
         let vlrix_vreg = vlr_env[vlrix].vreg;
-        let req_size = func.get_spillslot_size(vlrix_vreg.get_class(), vlrix_vreg);
+        let req_size = func.get_spillslot_size(vlrix_vreg.get_class(), Some(vlrix_vreg));
         assert!(req_size == 1 || req_size == 2 || req_size == 4 || req_size == 8);
 
         // Sanity check: if the VLR is reftyped, then it must need a 1-word slot

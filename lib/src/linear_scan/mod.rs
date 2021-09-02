@@ -835,7 +835,13 @@ fn set_registers<F: Function>(
         if let Some(ref mut checker) = checker {
             let block_ix = insn_blocks[func_inst_ix.get() as usize];
             checker
-                .handle_insn(reg_universe, func, block_ix, func_inst_ix, &mapper)
+                .handle_insn::<F, _>(
+                    reg_universe,
+                    block_ix,
+                    func_inst_ix,
+                    func.get_insn(func_inst_ix),
+                    &mapper,
+                )
                 .unwrap();
         }
 

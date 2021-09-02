@@ -366,6 +366,12 @@ impl<'f, 'str> Parser<'f, 'str> {
             Ok(RegClass::I32)
         } else if ident == "f32" || ident == "F32" {
             Ok(RegClass::F32)
+        } else if ident == "i64" || ident == "I64" {
+            Ok(RegClass::I64)
+        } else if ident == "f64" || ident == "F64" {
+            Ok(RegClass::F64)
+        } else if ident == "v128" || ident == "V128" {
+            Ok(RegClass::V128)
         } else {
             self.error("unknown register class")
         }

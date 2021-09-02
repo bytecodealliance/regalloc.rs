@@ -27,10 +27,11 @@ fuzz_target!(|func: ir::Func| {
     let num_regs = minira::fuzzing::NUM_REAL_REGS_PER_RC as usize + 1;
     let reg_universe = ir::make_universe(num_regs, num_regs);
 
+    let env = regalloc::RegEnv::from_rru_and_opts(reg_universe, &opts);
     let sri = func.get_stackmap_request();
     let result = match regalloc::allocate_registers_with_opts(
         &mut func,
-        &reg_universe,
+        &env,
         sri.as_ref(),
         regalloc::Options {
             run_checker: true,

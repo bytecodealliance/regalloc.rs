@@ -12,6 +12,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 minira-util = { path = ".." }
 regalloc = { path = "../lib", features = ["fuzzing"] }
+env_logger = "*"
+log = "*"
 
 [[bin]]
 name = "bt"
@@ -22,6 +24,12 @@ doc = false
 [[bin]]
 name = "bt_differential"
 path = "fuzz_targets/bt_differential.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "regalloc2"
+path = "fuzz_targets/regalloc2.rs"
 test = false
 doc = false
 

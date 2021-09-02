@@ -239,6 +239,7 @@ fn sanitize_should_retain_reg(
         // This is a serious error which should be investigated.  It means the
         // client gave us an instruction which mentions a RealReg which isn't
         // listed in the RealRegUniverse it gave us.  That's not allowed.
+        log::debug!("un-alloc'able reg is mentioned: {:?}", reg);
         return Err(reg.as_real_reg().unwrap());
     }
 
@@ -257,6 +258,7 @@ fn sanitize_should_retain_reg(
                 if reg.to_real_reg() == scratch_reg {
                     if !reg_is_defd {
                         // This is an error (on the part of the client).
+                        log::debug!("scratch reg is read from: {:?}", reg);
                         return Err(reg.as_real_reg().unwrap());
                     }
                 }
@@ -489,6 +491,7 @@ pub fn get_raw_reg_sets_for_insn<F: Function>(inst: &F::Inst) -> RegSets {
 // This is even slower.  This applies `get_regs` to `inst`, performs cleanups
 // (1) (2) and (3).  The results are wrapped up as Sets for convenience.  Note
 // this function can fail.
+#[allow(dead_code)]
 #[inline(never)]
 pub fn get_san_reg_sets_for_insn<F: Function>(
     inst: &F::Inst,

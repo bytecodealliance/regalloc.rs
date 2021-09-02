@@ -12,16 +12,16 @@ fn test_sort2() -> Func {
     let mut func = Func::new("ssort2");
     func.set_entry("Lstart");
 
-    let lo = func.new_virtual_reg(RegClass::I32);
-    let hi = func.new_virtual_reg(RegClass::I32);
-    let i = func.new_virtual_reg(RegClass::I32);
-    let j = func.new_virtual_reg(RegClass::I32);
-    let h = func.new_virtual_reg(RegClass::I32);
-    let big_n = func.new_virtual_reg(RegClass::I32);
-    let v = func.new_virtual_reg(RegClass::I32);
-    let hp = func.new_virtual_reg(RegClass::I32);
-    let t0 = func.new_virtual_reg(RegClass::I32);
-    let zero = func.new_virtual_reg(RegClass::I32);
+    let lo = func.new_virtual_reg(RegClass::I64);
+    let hi = func.new_virtual_reg(RegClass::I64);
+    let i = func.new_virtual_reg(RegClass::I64);
+    let j = func.new_virtual_reg(RegClass::I64);
+    let h = func.new_virtual_reg(RegClass::I64);
+    let big_n = func.new_virtual_reg(RegClass::I64);
+    let v = func.new_virtual_reg(RegClass::I64);
+    let hp = func.new_virtual_reg(RegClass::I64);
+    let t0 = func.new_virtual_reg(RegClass::I64);
+    let zero = func.new_virtual_reg(RegClass::I64);
 
     func.block(
         "Lstart",
@@ -111,16 +111,16 @@ fn test_sort() -> Func {
     // some live ranges which span parts of the loop nest.  So it's an
     // interesting test case.
 
-    let lo = func.new_virtual_reg(RegClass::I32);
-    let hi = func.new_virtual_reg(RegClass::I32);
-    let i = func.new_virtual_reg(RegClass::I32);
-    let j = func.new_virtual_reg(RegClass::I32);
-    let h = func.new_virtual_reg(RegClass::I32);
-    let big_n = func.new_virtual_reg(RegClass::I32);
-    let v = func.new_virtual_reg(RegClass::I32);
-    let hp = func.new_virtual_reg(RegClass::I32);
-    let t0 = func.new_virtual_reg(RegClass::I32);
-    let zero = func.new_virtual_reg(RegClass::I32);
+    let lo = func.new_virtual_reg(RegClass::I64);
+    let hi = func.new_virtual_reg(RegClass::I64);
+    let i = func.new_virtual_reg(RegClass::I64);
+    let j = func.new_virtual_reg(RegClass::I64);
+    let h = func.new_virtual_reg(RegClass::I64);
+    let big_n = func.new_virtual_reg(RegClass::I64);
+    let v = func.new_virtual_reg(RegClass::I64);
+    let hp = func.new_virtual_reg(RegClass::I64);
+    let t0 = func.new_virtual_reg(RegClass::I64);
+    let zero = func.new_virtual_reg(RegClass::I64);
 
     func.block(
         "Lstart",
@@ -301,21 +301,21 @@ fn test_3_loops() -> Func {
     let mut func = Func::new("3_loops");
     func.set_entry("start");
 
-    let v00 = func.new_virtual_reg(RegClass::I32);
-    let v01 = func.new_virtual_reg(RegClass::I32);
-    let v02 = func.new_virtual_reg(RegClass::I32);
-    let v03 = func.new_virtual_reg(RegClass::I32);
-    let v04 = func.new_virtual_reg(RegClass::I32);
-    let v05 = func.new_virtual_reg(RegClass::I32);
-    let v06 = func.new_virtual_reg(RegClass::I32);
-    let v07 = func.new_virtual_reg(RegClass::I32);
-    let v08 = func.new_virtual_reg(RegClass::I32);
-    let v09 = func.new_virtual_reg(RegClass::I32);
-    let v10 = func.new_virtual_reg(RegClass::I32);
-    let v11 = func.new_virtual_reg(RegClass::I32);
-    let v_i = func.new_virtual_reg(RegClass::I32);
-    let v_sum = func.new_virtual_reg(RegClass::I32);
-    let v_tmp = func.new_virtual_reg(RegClass::I32);
+    let v00 = func.new_virtual_reg(RegClass::I64);
+    let v01 = func.new_virtual_reg(RegClass::I64);
+    let v02 = func.new_virtual_reg(RegClass::I64);
+    let v03 = func.new_virtual_reg(RegClass::I64);
+    let v04 = func.new_virtual_reg(RegClass::I64);
+    let v05 = func.new_virtual_reg(RegClass::I64);
+    let v06 = func.new_virtual_reg(RegClass::I64);
+    let v07 = func.new_virtual_reg(RegClass::I64);
+    let v08 = func.new_virtual_reg(RegClass::I64);
+    let v09 = func.new_virtual_reg(RegClass::I64);
+    let v10 = func.new_virtual_reg(RegClass::I64);
+    let v11 = func.new_virtual_reg(RegClass::I64);
+    let v_i = func.new_virtual_reg(RegClass::I64);
+    let v_sum = func.new_virtual_reg(RegClass::I64);
+    let v_tmp = func.new_virtual_reg(RegClass::I64);
 
     // Loop pre-header for filling array with numbers.
     // This is also the entry point.
@@ -390,10 +390,10 @@ fn test_3_loops() -> Func {
 
 fn test_stmts() -> Func {
     let mut bif = Blockifier::new("stmts");
-    let v_i = bif.new_virtual_reg(RegClass::I32);
-    let v_j = bif.new_virtual_reg(RegClass::I32);
-    let v_sum = bif.new_virtual_reg(RegClass::I32);
-    let v_tmp = bif.new_virtual_reg(RegClass::I32);
+    let v_i = bif.new_virtual_reg(RegClass::I64);
+    let v_j = bif.new_virtual_reg(RegClass::I64);
+    let v_sum = bif.new_virtual_reg(RegClass::I64);
+    let v_tmp = bif.new_virtual_reg(RegClass::I64);
     let stmts = vec![
         s_imm(v_sum, 0),
         s_imm(v_i, 0),
@@ -464,17 +464,17 @@ fn test_stmts() -> Func {
 
 fn test_needs_splitting() -> Func {
     let mut bif = Blockifier::new("needs_splitting");
-    let v10 = bif.new_virtual_reg(RegClass::I32);
-    let v11 = bif.new_virtual_reg(RegClass::I32);
-    let v12 = bif.new_virtual_reg(RegClass::I32);
+    let v10 = bif.new_virtual_reg(RegClass::I64);
+    let v11 = bif.new_virtual_reg(RegClass::I64);
+    let v12 = bif.new_virtual_reg(RegClass::I64);
 
-    let v20 = bif.new_virtual_reg(RegClass::I32);
-    let v21 = bif.new_virtual_reg(RegClass::I32);
-    let v22 = bif.new_virtual_reg(RegClass::I32);
+    let v20 = bif.new_virtual_reg(RegClass::I64);
+    let v21 = bif.new_virtual_reg(RegClass::I64);
+    let v22 = bif.new_virtual_reg(RegClass::I64);
 
-    let v_i = bif.new_virtual_reg(RegClass::I32);
-    let v_sum = bif.new_virtual_reg(RegClass::I32);
-    let v_tmp = bif.new_virtual_reg(RegClass::I32);
+    let v_i = bif.new_virtual_reg(RegClass::I64);
+    let v_sum = bif.new_virtual_reg(RegClass::I64);
+    let v_tmp = bif.new_virtual_reg(RegClass::I64);
 
     let stmts = vec![
         // Both the v1x and the v2x set become live at this point
@@ -530,30 +530,30 @@ fn test_needs_splitting() -> Func {
 // "manually"
 fn test_needs_splitting2() -> Func {
     let mut bif = Blockifier::new("needs_splitting2");
-    let v10 = bif.new_virtual_reg(RegClass::I32);
-    let v11 = bif.new_virtual_reg(RegClass::I32);
-    let v12 = bif.new_virtual_reg(RegClass::I32);
+    let v10 = bif.new_virtual_reg(RegClass::I64);
+    let v11 = bif.new_virtual_reg(RegClass::I64);
+    let v12 = bif.new_virtual_reg(RegClass::I64);
 
-    let v20 = bif.new_virtual_reg(RegClass::I32);
-    let v21 = bif.new_virtual_reg(RegClass::I32);
-    let v22 = bif.new_virtual_reg(RegClass::I32);
+    let v20 = bif.new_virtual_reg(RegClass::I64);
+    let v21 = bif.new_virtual_reg(RegClass::I64);
+    let v22 = bif.new_virtual_reg(RegClass::I64);
 
     // Post-split versions of v10 .. v22
-    let s1v10 = bif.new_virtual_reg(RegClass::I32);
-    let s1v11 = bif.new_virtual_reg(RegClass::I32);
-    let s1v12 = bif.new_virtual_reg(RegClass::I32);
+    let s1v10 = bif.new_virtual_reg(RegClass::I64);
+    let s1v11 = bif.new_virtual_reg(RegClass::I64);
+    let s1v12 = bif.new_virtual_reg(RegClass::I64);
 
-    let s1v20 = bif.new_virtual_reg(RegClass::I32);
-    let s1v21 = bif.new_virtual_reg(RegClass::I32);
-    let s1v22 = bif.new_virtual_reg(RegClass::I32);
+    let s1v20 = bif.new_virtual_reg(RegClass::I64);
+    let s1v21 = bif.new_virtual_reg(RegClass::I64);
+    let s1v22 = bif.new_virtual_reg(RegClass::I64);
 
-    let s2v20 = bif.new_virtual_reg(RegClass::I32);
-    let s2v21 = bif.new_virtual_reg(RegClass::I32);
-    let s2v22 = bif.new_virtual_reg(RegClass::I32);
+    let s2v20 = bif.new_virtual_reg(RegClass::I64);
+    let s2v21 = bif.new_virtual_reg(RegClass::I64);
+    let s2v22 = bif.new_virtual_reg(RegClass::I64);
 
-    let v_i = bif.new_virtual_reg(RegClass::I32);
-    let v_sum = bif.new_virtual_reg(RegClass::I32);
-    let v_tmp = bif.new_virtual_reg(RegClass::I32);
+    let v_i = bif.new_virtual_reg(RegClass::I64);
+    let v_sum = bif.new_virtual_reg(RegClass::I64);
+    let v_tmp = bif.new_virtual_reg(RegClass::I64);
 
     let stmts = vec![
         // Both the v1x and the v2x set become live at this point
@@ -616,10 +616,10 @@ fn test_needs_splitting2() -> Func {
 
 fn test_stmt_loop() -> Func {
     let mut bif = Blockifier::new("stmt_loop");
-    let v_x = bif.new_virtual_reg(RegClass::I32);
-    let v_y = bif.new_virtual_reg(RegClass::I32);
-    let v_i = bif.new_virtual_reg(RegClass::I32);
-    let v_tmp = bif.new_virtual_reg(RegClass::I32);
+    let v_x = bif.new_virtual_reg(RegClass::I64);
+    let v_y = bif.new_virtual_reg(RegClass::I64);
+    let v_i = bif.new_virtual_reg(RegClass::I64);
+    let v_tmp = bif.new_virtual_reg(RegClass::I64);
     let stmts = vec![
         s_imm(v_x, 1),
         s_imm(v_y, 2),
@@ -671,42 +671,42 @@ fn test_qsort() -> Func {
     let mut bif = Blockifier::new("qsort");
 
     // All your virtual register are belong to me.  Bwahaha.  Ha.  Ha.
-    let offs_stack_lo = bif.new_virtual_reg(RegClass::I32);
-    let offs_stack_hi = bif.new_virtual_reg(RegClass::I32);
-    let offs_numbers = bif.new_virtual_reg(RegClass::I32);
-    let num_numbers = bif.new_virtual_reg(RegClass::I32);
-    let rand = bif.new_virtual_reg(RegClass::I32);
-    let lo_st = bif.new_virtual_reg(RegClass::I32);
-    let hi_st = bif.new_virtual_reg(RegClass::I32);
-    let keep_going_i = bif.new_virtual_reg(RegClass::I32);
-    let keep_going_o = bif.new_virtual_reg(RegClass::I32);
-    let un_lo = bif.new_virtual_reg(RegClass::I32);
-    let un_hi = bif.new_virtual_reg(RegClass::I32);
-    let lt_lo = bif.new_virtual_reg(RegClass::I32);
-    let gt_hi = bif.new_virtual_reg(RegClass::I32);
-    let n = bif.new_virtual_reg(RegClass::I32);
-    let m = bif.new_virtual_reg(RegClass::I32);
-    let sp = bif.new_virtual_reg(RegClass::I32);
-    let lo = bif.new_virtual_reg(RegClass::I32);
-    let hi = bif.new_virtual_reg(RegClass::I32);
-    let med = bif.new_virtual_reg(RegClass::I32);
-    let r3 = bif.new_virtual_reg(RegClass::I32);
-    let yyp1 = bif.new_virtual_reg(RegClass::I32);
-    let yyp2 = bif.new_virtual_reg(RegClass::I32);
-    let yyn = bif.new_virtual_reg(RegClass::I32);
-    let t0 = bif.new_virtual_reg(RegClass::I32);
-    let t1 = bif.new_virtual_reg(RegClass::I32);
-    let t2 = bif.new_virtual_reg(RegClass::I32);
-    let zztmp1 = bif.new_virtual_reg(RegClass::I32);
-    let zztmp2 = bif.new_virtual_reg(RegClass::I32);
-    let taa = bif.new_virtual_reg(RegClass::I32);
-    let tbb = bif.new_virtual_reg(RegClass::I32);
-    let i = bif.new_virtual_reg(RegClass::I32);
-    let in_order = bif.new_virtual_reg(RegClass::I32);
-    let sum = bif.new_virtual_reg(RegClass::I32);
-    let pass = bif.new_virtual_reg(RegClass::I32);
-    let sp_gt_zero = bif.new_virtual_reg(RegClass::I32);
-    let guard = bif.new_virtual_reg(RegClass::I32);
+    let offs_stack_lo = bif.new_virtual_reg(RegClass::I64);
+    let offs_stack_hi = bif.new_virtual_reg(RegClass::I64);
+    let offs_numbers = bif.new_virtual_reg(RegClass::I64);
+    let num_numbers = bif.new_virtual_reg(RegClass::I64);
+    let rand = bif.new_virtual_reg(RegClass::I64);
+    let lo_st = bif.new_virtual_reg(RegClass::I64);
+    let hi_st = bif.new_virtual_reg(RegClass::I64);
+    let keep_going_i = bif.new_virtual_reg(RegClass::I64);
+    let keep_going_o = bif.new_virtual_reg(RegClass::I64);
+    let un_lo = bif.new_virtual_reg(RegClass::I64);
+    let un_hi = bif.new_virtual_reg(RegClass::I64);
+    let lt_lo = bif.new_virtual_reg(RegClass::I64);
+    let gt_hi = bif.new_virtual_reg(RegClass::I64);
+    let n = bif.new_virtual_reg(RegClass::I64);
+    let m = bif.new_virtual_reg(RegClass::I64);
+    let sp = bif.new_virtual_reg(RegClass::I64);
+    let lo = bif.new_virtual_reg(RegClass::I64);
+    let hi = bif.new_virtual_reg(RegClass::I64);
+    let med = bif.new_virtual_reg(RegClass::I64);
+    let r3 = bif.new_virtual_reg(RegClass::I64);
+    let yyp1 = bif.new_virtual_reg(RegClass::I64);
+    let yyp2 = bif.new_virtual_reg(RegClass::I64);
+    let yyn = bif.new_virtual_reg(RegClass::I64);
+    let t0 = bif.new_virtual_reg(RegClass::I64);
+    let t1 = bif.new_virtual_reg(RegClass::I64);
+    let t2 = bif.new_virtual_reg(RegClass::I64);
+    let zztmp1 = bif.new_virtual_reg(RegClass::I64);
+    let zztmp2 = bif.new_virtual_reg(RegClass::I64);
+    let taa = bif.new_virtual_reg(RegClass::I64);
+    let tbb = bif.new_virtual_reg(RegClass::I64);
+    let i = bif.new_virtual_reg(RegClass::I64);
+    let in_order = bif.new_virtual_reg(RegClass::I64);
+    let sum = bif.new_virtual_reg(RegClass::I64);
+    let pass = bif.new_virtual_reg(RegClass::I64);
+    let sp_gt_zero = bif.new_virtual_reg(RegClass::I64);
+    let guard = bif.new_virtual_reg(RegClass::I64);
 
     let stmts = vec![
         // mem[] layout and base offsets
@@ -982,12 +982,12 @@ fn test_fill_then_sum_2a() -> Func {
     func.set_entry("set-loop-pre");
 
     // Regs, virtual and real, that we want to use.
-    let v_nent = func.new_virtual_reg(RegClass::I32);
-    let v_i = func.new_virtual_reg(RegClass::I32);
-    let v_sum = func.new_virtual_reg(RegClass::I32);
+    let v_nent = func.new_virtual_reg(RegClass::I64);
+    let v_i = func.new_virtual_reg(RegClass::I64);
+    let v_sum = func.new_virtual_reg(RegClass::I64);
     // "index=2" is arbitrary.
-    let r_tmp = Reg::new_real(RegClass::I32, 0x0, /*index=*/ 2);
-    let v_tmp2 = func.new_virtual_reg(RegClass::I32);
+    let r_tmp = Reg::new_real(RegClass::I64, 0x0, /*index=*/ 2);
+    let v_tmp2 = func.new_virtual_reg(RegClass::I64);
 
     // Loop pre-header for filling array with numbers.
     // This is also the entry point.
@@ -1062,16 +1062,16 @@ fn test_ssort_2a() -> Func {
     // some live ranges which span parts of the loop nest.  So it's an
     // interesting test case.
 
-    let lo = func.new_virtual_reg(RegClass::I32);
-    let hi = func.new_virtual_reg(RegClass::I32);
-    let i = func.new_virtual_reg(RegClass::I32);
-    let j = func.new_virtual_reg(RegClass::I32);
-    let h = func.new_virtual_reg(RegClass::I32);
-    let big_n = func.new_virtual_reg(RegClass::I32);
-    let v = func.new_virtual_reg(RegClass::I32);
-    let hp = func.new_virtual_reg(RegClass::I32);
-    let t0 = func.new_virtual_reg(RegClass::I32);
-    let zero = func.new_virtual_reg(RegClass::I32);
+    let lo = func.new_virtual_reg(RegClass::I64);
+    let hi = func.new_virtual_reg(RegClass::I64);
+    let i = func.new_virtual_reg(RegClass::I64);
+    let j = func.new_virtual_reg(RegClass::I64);
+    let h = func.new_virtual_reg(RegClass::I64);
+    let big_n = func.new_virtual_reg(RegClass::I64);
+    let v = func.new_virtual_reg(RegClass::I64);
+    let hp = func.new_virtual_reg(RegClass::I64);
+    let t0 = func.new_virtual_reg(RegClass::I64);
+    let zero = func.new_virtual_reg(RegClass::I64);
 
     func.block(
         "Lstart",
@@ -1256,10 +1256,10 @@ fn test_ssort_2a() -> Func {
 
 fn test_fp1() -> Func {
     let mut bif = Blockifier::new("fp1");
-    let zz = bif.new_virtual_reg(RegClass::I32);
-    let f0 = bif.new_virtual_reg(RegClass::F32);
-    let f1 = bif.new_virtual_reg(RegClass::F32);
-    let f2 = bif.new_virtual_reg(RegClass::F32);
+    let zz = bif.new_virtual_reg(RegClass::I64);
+    let f0 = bif.new_virtual_reg(RegClass::V128);
+    let f1 = bif.new_virtual_reg(RegClass::V128);
+    let f2 = bif.new_virtual_reg(RegClass::V128);
     // Do some extremely lame FP things.  This tests insns (storef, loadf) that
     // use more than one register class.
 
@@ -1282,17 +1282,17 @@ fn test_fp1() -> Func {
 
 fn test_fp2() -> Func {
     let mut bif = Blockifier::new("fp2");
-    let num_items = bif.new_virtual_reg(RegClass::I32);
-    let num_items_m2 = bif.new_virtual_reg(RegClass::I32);
-    let zero = bif.new_virtual_reg(RegClass::I32);
-    let i = bif.new_virtual_reg(RegClass::I32);
-    let j = bif.new_virtual_reg(RegClass::I32);
-    let k = bif.new_virtual_reg(RegClass::I32);
-    let bi = bif.new_virtual_reg(RegClass::I32);
-    let bj = bif.new_virtual_reg(RegClass::I32);
-    let f0 = bif.new_virtual_reg(RegClass::F32);
-    let f1 = bif.new_virtual_reg(RegClass::F32);
-    let f2 = bif.new_virtual_reg(RegClass::F32);
+    let num_items = bif.new_virtual_reg(RegClass::I64);
+    let num_items_m2 = bif.new_virtual_reg(RegClass::I64);
+    let zero = bif.new_virtual_reg(RegClass::I64);
+    let i = bif.new_virtual_reg(RegClass::I64);
+    let j = bif.new_virtual_reg(RegClass::I64);
+    let k = bif.new_virtual_reg(RegClass::I64);
+    let bi = bif.new_virtual_reg(RegClass::I64);
+    let bj = bif.new_virtual_reg(RegClass::I64);
+    let f0 = bif.new_virtual_reg(RegClass::V128);
+    let f1 = bif.new_virtual_reg(RegClass::V128);
+    let f2 = bif.new_virtual_reg(RegClass::V128);
 
     // This test has a double-nested loop with a bit of FP register action in
     // the innermost loop.
@@ -1378,11 +1378,11 @@ fn test_fp2() -> Func {
 fn test_stmt_repeat() -> Func {
     let mut bif = Blockifier::new("stmt_repeat");
 
-    let max_j = bif.new_virtual_reg(RegClass::I32);
-    let i = bif.new_virtual_reg(RegClass::I32);
-    let j = bif.new_virtual_reg(RegClass::I32);
-    let k = bif.new_virtual_reg(RegClass::I32);
-    let bi = bif.new_virtual_reg(RegClass::I32);
+    let max_j = bif.new_virtual_reg(RegClass::I64);
+    let i = bif.new_virtual_reg(RegClass::I64);
+    let j = bif.new_virtual_reg(RegClass::I64);
+    let k = bif.new_virtual_reg(RegClass::I64);
+    let bi = bif.new_virtual_reg(RegClass::I64);
 
     let stmts = vec![
         s_imm(max_j, 3),

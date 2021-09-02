@@ -26,9 +26,10 @@ fuzz_target!(|func: ir::Func| {
     func.render("before allocation", &mut rendered).unwrap();
     println!("{}", rendered);
 
+    let env = regalloc::RegEnv::from_rru_and_opts(reg_universe, &opts);
     let result = match regalloc::allocate_registers(
         &mut func,
-        &reg_universe,
+        &env,
         None,
         regalloc::AlgorithmWithDefaults::LinearScan,
     ) {

@@ -1,5 +1,7 @@
 //! Data structures for the whole crate.
 
+#![allow(dead_code)]
+
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;

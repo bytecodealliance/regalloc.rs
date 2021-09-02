@@ -596,7 +596,7 @@ impl MoveOp {
                 MoveOperand::Reg(to) => InstToInsert::Move {
                     to_reg: Writable::from_reg(to),
                     from_reg: from,
-                    for_vreg: self.vreg,
+                    for_vreg: Some(self.vreg),
                 },
                 MoveOperand::Stack(to) => InstToInsert::Spill {
                     to_slot: to,

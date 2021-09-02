@@ -23,8 +23,8 @@ fuzz_target!(|func: ir::Func| {
         algorithm: regalloc::Algorithm::Backtracking(Default::default()),
     };
 
-    let result = match regalloc::allocate_registers_with_opts(&mut func, &reg_universe, None, opts)
-    {
+    let env = regalloc::RegEnv::from_rru_and_opts(reg_universe, &opts);
+    let result = match regalloc::allocate_registers_with_opts(&mut func, &env, None, opts) {
         Ok(result) => result,
         Err(err) => {
             if let regalloc::RegAllocError::RegChecker(_) = &err {

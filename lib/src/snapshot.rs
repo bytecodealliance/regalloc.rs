@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 enum IRInstKind {
     Spill { vreg: Option<VirtualReg> },
     Reload { vreg: Option<VirtualReg> },
-    Move { vreg: VirtualReg },
+    Move { vreg: Option<VirtualReg> },
     ZeroLenNop,
     UserReturn,
     UserMove,
@@ -51,8 +51,28 @@ pub struct IRFunction {
 #[derive(Clone)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct IRSnapshot {
-    reg_universe: RealRegUniverse,
-    func: IRFunction,
+    pub reg_universe: RealRegUniverse,
+    pub func: IRFunction,
+}
+
+impl std::fmt::Debug for IRFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        writeln!(f, "IRFunction {{{{")?;
+        for livein in self.func_liveins().iter() {
+            writeln!(f, "  livein: {:?}", livein)?;
+        }
+        for liveout in self.func_liveouts().iter() {
+            writeln!(f, "  liveout: {:?}", liveout)?;
+        }
+        for block in self.blocks() {
+            writeln!(f, "{:?}:", block)?;
+            for inst in self.block_insns(block) {
+                writeln!(f, "  {:?}: {:?}", inst, self.get_insn(inst))?;
+            }
+        }
+        writeln!(f, "}}}}")?;
+        Ok(())
+    }
 }
 
 impl IRSnapshot {
@@ -107,7 +127,7 @@ impl IRSnapshot {
             let mut handle_reg = |reg: &Reg| {
                 if let Some(vreg) = reg.as_virtual_reg() {
                     let rc = vreg.get_class();
-                    let spill_slot_size = func.get_spillslot_size(rc, vreg);
+                    let spill_slot_size = func.get_spillslot_size(rc, Some(vreg));
                     let index = vreg.get_index();
                     if index >= array.len() {
                         array.resize(index + 1, None);
@@ -158,9 +178,10 @@ impl IRSnapshot {
     }
 
     pub fn allocate(&mut self, opts: Options) -> Result<RegAllocResult<IRFunction>, RegAllocError> {
+        let env = RegEnv::from_rru_and_opts(self.reg_universe.clone(), &opts);
         allocate_registers_with_opts(
             &mut self.func,
-            &self.reg_universe,
+            &env,
             None, /*no stackmap request*/
             opts,
         )
@@ -284,7 +305,7 @@ impl Function for IRFunction {
         &self,
         to_reg: Writable<RealReg>,
         from_reg: RealReg,
-        for_vreg: VirtualReg,
+        for_vreg: Option<VirtualReg>,
     ) -> Self::Inst {
         IRInst {
             reg_uses: vec![from_reg.to_reg()],
@@ -302,9 +323,12 @@ impl Function for IRFunction {
         }
     }
 
-    fn get_spillslot_size(&self, regclass: RegClass, for_vreg: VirtualReg) -> u32 {
-        let entry =
-            self.vreg_spill_slot_sizes[for_vreg.get_index()].expect("missing spillslot info");
+    fn get_spillslot_size(&self, regclass: RegClass, for_vreg: Option<VirtualReg>) -> u32 {
+        if for_vreg.is_none() {
+            return 1;
+        }
+        let entry = self.vreg_spill_slot_sizes[for_vreg.unwrap().get_index()]
+            .expect("missing spillslot info");
         assert_eq!(entry.1, regclass);
         return entry.0;
     }

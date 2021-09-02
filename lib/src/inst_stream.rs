@@ -30,7 +30,7 @@ pub(crate) enum InstToInsert {
     Move {
         to_reg: Writable<RealReg>,
         from_reg: RealReg,
-        for_vreg: VirtualReg,
+        for_vreg: Option<VirtualReg>,
     },
     /// A spillslot reassignment (to another vreg). In the edited instruction
     /// stream, this is a nop, but this is needed for the checker to properly
@@ -43,6 +43,16 @@ pub(crate) enum InstToInsert {
         from_reg: Reg,
         to_reg: Reg,
     },
+    /// A definition of a Reg in a given RealReg. No machine code is
+    /// generated, but used to sync the checker with the effect of a
+    /// move that comes from a user move. Only used with regalloc2's
+    /// checker integration.
+    DefReg {
+        to_reg: Writable<RealReg>,
+        for_reg: Reg,
+    },
+    /// As for DefReg, for for spillslots.
+    DefSlot { to_slot: SpillSlot, for_reg: Reg },
 }
 
 impl InstToInsert {
@@ -62,8 +72,11 @@ impl InstToInsert {
                 to_reg,
                 from_reg,
                 for_vreg,
-            } => Some(f.gen_move(to_reg, from_reg, for_vreg)),
+            } if to_reg.to_reg() != from_reg => Some(f.gen_move(to_reg, from_reg, for_vreg)),
+            &InstToInsert::Move { .. } => None,
             &InstToInsert::ChangeSpillSlotOwnership { .. } => None,
+            &InstToInsert::DefReg { .. } => None,
+            &InstToInsert::DefSlot { .. } => None,
         }
     }
 
@@ -98,6 +111,13 @@ impl InstToInsert {
                 from_reg,
                 to_reg,
             },
+            &InstToInsert::DefReg { to_reg, for_reg } => CheckerInst::DefReg {
+                to_reg: to_reg.to_reg(),
+                for_reg,
+            },
+            &InstToInsert::DefSlot { to_slot, for_reg } => {
+                CheckerInst::DefSlot { to_slot, for_reg }
+            }
         }
     }
 }
@@ -460,7 +480,13 @@ fn map_vregs_to_rregs<F: Function>(
         if let &mut Some(ref mut checker) = &mut checker {
             let block_ix = insn_blocks[insn_ix.get() as usize];
             checker
-                .handle_insn(reg_universe, func, block_ix, insn_ix, &mapper)
+                .handle_insn::<F, _>(
+                    reg_universe,
+                    block_ix,
+                    insn_ix,
+                    func.get_insn(insn_ix),
+                    &mapper,
+                )
                 .unwrap();
         }
 

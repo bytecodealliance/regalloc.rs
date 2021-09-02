@@ -32,6 +32,8 @@ mod snapshot;
 mod sparse_set;
 mod union_find;
 
+mod regalloc2;
+
 use log::{debug, log_enabled, Level};
 use std::default;
 use std::{borrow::Cow, fmt};
@@ -286,7 +288,7 @@ pub trait Function {
     /// but we also use them for F32 and F64 values, we may use a different
     /// store-slot size and smaller-operand store/load instructions for an F64
     /// than for a true V128.
-    fn get_spillslot_size(&self, regclass: RegClass, for_vreg: VirtualReg) -> u32;
+    fn get_spillslot_size(&self, regclass: RegClass, for_vreg: Option<VirtualReg>) -> u32;
 
     /// Generate a spill instruction for insertion into the instruction
     /// sequence. The associated virtual register (whose value is being spilled)
@@ -319,7 +321,7 @@ pub trait Function {
         &self,
         to_reg: Writable<RealReg>,
         from_reg: RealReg,
-        for_vreg: VirtualReg,
+        for_vreg: Option<VirtualReg>,
     ) -> Self::Inst;
 
     /// Generate an instruction which is a no-op and has zero length.
@@ -411,6 +413,7 @@ pub struct RegAllocResult<F: Function> {
 pub enum AlgorithmWithDefaults {
     Backtracking,
     LinearScan,
+    Regalloc2,
 }
 
 pub use crate::analysis_main::AnalysisError;
@@ -434,11 +437,13 @@ impl fmt::Display for RegAllocError {
 
 pub use crate::bt_main::BacktrackingOptions;
 pub use crate::linear_scan::LinearScanOptions;
+pub use crate::regalloc2::Regalloc2Options;
 
 #[derive(Clone)]
 pub enum Algorithm {
     LinearScan(LinearScanOptions),
     Backtracking(BacktrackingOptions),
+    Regalloc2(Regalloc2Options),
 }
 
 impl fmt::Debug for Algorithm {
@@ -446,6 +451,7 @@ impl fmt::Debug for Algorithm {
         match self {
             Algorithm::LinearScan(opts) => write!(fmt, "{:?}", opts),
             Algorithm::Backtracking(opts) => write!(fmt, "{:?}", opts),
+            Algorithm::Regalloc2(opts) => write!(fmt, "{:?}", opts),
         }
     }
 }
@@ -501,6 +507,26 @@ pub struct StackmapRequestInfo {
     pub safepoint_insns: Vec<InstIx>,
 }
 
+#[derive(Debug)]
+pub struct RegEnv {
+    pub rru: RealRegUniverse,
+
+    // regalloc2-specific state.
+    regalloc2: Option<regalloc2::Regalloc2Env>,
+}
+
+impl RegEnv {
+    pub fn from_rru_and_opts(rru: RealRegUniverse, opts: &Options) -> RegEnv {
+        let regalloc2 = match opts.algorithm {
+            Algorithm::Regalloc2(ref ra2_opts) => {
+                Some(regalloc2::build_machine_env(&rru, ra2_opts))
+            }
+            _ => None,
+        };
+        RegEnv { rru, regalloc2 }
+    }
+}
+
 /// Allocate registers for a function's code, given a universe of real registers that we are
 /// allowed to use.  Optionally, stackmap support may be requested.
 ///
@@ -516,9 +542,9 @@ pub struct StackmapRequestInfo {
 /// common to all the backends. The choice of algorithm is done by passing a given [Algorithm]
 /// instance, with options tailored for each algorithm.
 #[inline(never)]
-pub fn allocate_registers_with_opts<F: Function>(
+pub fn allocate_registers_with_opts<'a, F: Function>(
     func: &mut F,
-    rreg_universe: &RealRegUniverse,
+    env: &RegEnv,
     stackmap_info: Option<&StackmapRequestInfo>,
     opts: Options,
 ) -> Result<RegAllocResult<F>, RegAllocError> {
@@ -527,7 +553,7 @@ pub fn allocate_registers_with_opts<F: Function>(
 
     if log_enabled!(Level::Debug) {
         debug!("with options: {:?}", opts);
-        let strs = rreg_universe.show();
+        let strs = env.rru.show();
         debug!("using RealRegUniverse:");
         for s in strs {
             debug!("  {}", s);
@@ -592,11 +618,12 @@ pub fn allocate_registers_with_opts<F: Function>(
     let run_checker = opts.run_checker;
     let res = match &opts.algorithm {
         Algorithm::Backtracking(opts) => {
-            bt_main::alloc_main(func, rreg_universe, stackmap_info, run_checker, opts)
+            bt_main::alloc_main(func, &env.rru, stackmap_info, run_checker, opts)
         }
         Algorithm::LinearScan(opts) => {
-            linear_scan::run(func, rreg_universe, stackmap_info, run_checker, opts)
+            linear_scan::run(func, &env.rru, stackmap_info, run_checker, opts)
         }
+        Algorithm::Regalloc2(opts) => regalloc2::run(func, env, stackmap_info, run_checker, opts),
     };
 
     debug!("================ regalloc.rs: END function ================");
@@ -626,12 +653,14 @@ pub fn allocate_registers<F: Function>(
     let algorithm = match algorithm {
         AlgorithmWithDefaults::Backtracking => Algorithm::Backtracking(Default::default()),
         AlgorithmWithDefaults::LinearScan => Algorithm::LinearScan(Default::default()),
+        AlgorithmWithDefaults::Regalloc2 => Algorithm::Regalloc2(Default::default()),
     };
     let opts = Options {
         algorithm,
         ..Default::default()
     };
-    allocate_registers_with_opts(func, rreg_universe, stackmap_info, opts)
+    let env = RegEnv::from_rru_and_opts(rreg_universe.clone(), &opts);
+    allocate_registers_with_opts(func, &env, stackmap_info, opts)
 }
 
 // Facilities to snapshot regalloc inputs and reproduce them in regalloc.rs.

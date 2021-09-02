@@ -31,6 +31,7 @@
 //!     with allocated form                [ R_i := op R_j, R_k, ... ]
 //!
 //!       R[R_i] := `V_i`
+//!       forall R_other != R_i, R[R_other] = V_i: R[R_other] := bot
 //!
 //!     In other words, a statement, even after allocation, generates a symbol
 //!     that corresponds to its original virtual-register def.
@@ -59,7 +60,7 @@ use crate::data_structures::{
     BlockIx, InstIx, Map, RealReg, RealRegUniverse, Reg, RegSets, SpillSlot, VirtualReg, Writable,
 };
 use crate::inst_stream::{ExtPoint, InstExtPoint, InstToInsertAndExtPoint};
-use crate::{analysis_data_flow::get_san_reg_sets_for_insn, StackmapRequestInfo};
+use crate::{analysis_data_flow::get_raw_reg_sets_for_insn, StackmapRequestInfo};
 use crate::{Function, RegUsageMapper};
 
 use rustc_hash::FxHashSet;
@@ -282,7 +283,9 @@ impl CheckerState {
             &Inst::Safepoint { inst_ix, ref slots } => {
                 self.check_stackmap(inst_ix, slots)?;
             }
-            _ => {}
+            _ => {
+                debug!("checker: inst {:?}", inst);
+            }
         }
         Ok(())
     }
@@ -341,6 +344,25 @@ impl CheckerState {
                     let orig = defs_orig[i];
                     let mapped = defs[i];
                     let reftyped = defs_reftyped[i];
+
+                    // For every other reg or spillslot with the
+                    // symbolic value, its value is no longer
+                    // up-to-date.
+                    for val in self.reg_values.values_mut() {
+                        if let CheckerValue::Reg(r, _) = *val {
+                            if r == orig {
+                                *val = CheckerValue::Conflicted;
+                            }
+                        }
+                    }
+                    for val in self.spill_slots.values_mut() {
+                        if let CheckerValue::Reg(r, _) = *val {
+                            if r == orig {
+                                *val = CheckerValue::Conflicted;
+                            }
+                        }
+                    }
+
                     self.reg_values
                         .insert(mapped, CheckerValue::Reg(orig, reftyped));
                 }
@@ -351,6 +373,7 @@ impl CheckerState {
                     .get(&from)
                     .cloned()
                     .unwrap_or(Default::default());
+
                 self.reg_values.insert(into.to_reg(), val);
             }
             &Inst::ChangeSpillSlotOwnership { slot, to_reg, .. } => {
@@ -364,6 +387,14 @@ impl CheckerState {
                 };
                 self.spill_slots
                     .insert(slot, CheckerValue::Reg(to_reg, reftyped));
+            }
+            &Inst::DefSlot { to_slot, for_reg } => {
+                self.spill_slots
+                    .insert(to_slot, CheckerValue::Reg(for_reg, false));
+            }
+            &Inst::DefReg { to_reg, for_reg } => {
+                self.reg_values
+                    .insert(to_reg, CheckerValue::Reg(for_reg, false));
             }
             &Inst::Spill { into, from } => {
                 let val = self
@@ -412,6 +443,10 @@ pub(crate) enum Inst {
         from_reg: Reg,
         to_reg: Reg,
     },
+    /// Similar to above, but just a def without a check. Used for regalloc2 checker.
+    DefSlot { to_slot: SpillSlot, for_reg: Reg },
+    /// Similar to above, but for a reg dest.
+    DefReg { to_reg: RealReg, for_reg: Reg },
     /// A regular instruction with fixed use and def slots. Contains both
     /// the original registers (as given to the regalloc) and the allocated ones.
     Op {
@@ -432,6 +467,7 @@ pub(crate) enum Inst {
 #[derive(Debug)]
 pub(crate) struct Checker {
     bb_entry: BlockIx,
+    num_blocks: usize,
     bb_in: Map<BlockIx, CheckerState>,
     bb_succs: Map<BlockIx, Vec<BlockIx>>,
     bb_insts: Map<BlockIx, Vec<Inst>>,
@@ -483,6 +519,7 @@ impl Checker {
         let mut bb_insts = Map::default();
 
         for block in f.blocks() {
+            log::debug!("checker: creating block {:?}", block);
             bb_in.insert(block, Default::default());
             bb_succs.insert(block, f.block_succs(block).to_vec());
             bb_insts.insert(block, vec![]);
@@ -493,6 +530,7 @@ impl Checker {
         let reftyped_vregs = reftyped_vregs.iter().cloned().collect::<FxHashSet<_>>();
         Checker {
             bb_entry: f.entry_block(),
+            num_blocks: f.blocks().len(),
             bb_in,
             bb_succs,
             bb_insts,
@@ -506,6 +544,7 @@ impl Checker {
     /// Can also accept an `Inst::Op`, but `add_op()` is better-suited
     /// for this.
     pub(crate) fn add_inst(&mut self, block: BlockIx, inst: Inst) {
+        log::debug!("checker: block {:?}: add_inst {:?}", block, inst);
         let insts = self.bb_insts.get_mut(&block).unwrap();
         insts.push(inst);
     }
@@ -527,7 +566,6 @@ impl Checker {
             inst_ix.get(),
             regsets
         );
-        assert!(regsets.is_sanitized());
         let mut uses_set = regsets.uses.clone();
         let mut defs_set = regsets.defs.clone();
         uses_set.union(&regsets.mods);
@@ -561,10 +599,16 @@ impl Checker {
     /// Perform the dataflow analysis to compute checker state at each BB entry.
     fn analyze(&mut self) {
         let mut queue = VecDeque::new();
-        queue.push_back(self.bb_entry);
+        let mut queue_set = FxHashSet::default();
+        for block in 0..self.num_blocks {
+            let block = BlockIx::new(block as u32);
+            queue.push_back(block);
+            queue_set.insert(block);
+        }
 
         while !queue.is_empty() {
             let block = queue.pop_front().unwrap();
+            queue_set.remove(&block);
             let mut state = self.bb_in.get(&block).cloned().unwrap();
             debug!("analyze: block {} has state {:?}", block.get(), state);
             for inst in self.bb_insts.get(&block).unwrap() {
@@ -573,6 +617,12 @@ impl Checker {
             }
 
             for succ in self.bb_succs.get(&block).unwrap() {
+                // Entry block's input state doesn't change: it has
+                // implicit defs of all real regs as liveins.
+                if *succ == self.bb_entry {
+                    continue;
+                }
+
                 let cur_succ_in = self.bb_in.get(succ).unwrap();
                 let mut new_state = state.clone();
                 new_state.meet_with(cur_succ_in);
@@ -585,7 +635,10 @@ impl Checker {
                         new_state
                     );
                     self.bb_in.insert(*succ, new_state);
-                    queue.push_back(*succ);
+                    if !queue_set.contains(succ) {
+                        queue.push_back(*succ);
+                        queue_set.insert(*succ);
+                    }
                 }
             }
         }
@@ -689,10 +742,10 @@ impl CheckerContext {
     /// within a block must be visited in program order.
     pub(crate) fn handle_insn<F: Function, RUM: RegUsageMapper>(
         &mut self,
-        ru: &RealRegUniverse,
-        func: &F,
+        _ru: &RealRegUniverse,
         bix: BlockIx,
         iix: InstIx,
+        insn: &F::Inst,
         mapper: &RUM,
     ) -> Result<(), CheckerErrors> {
         let empty = vec![];
@@ -714,9 +767,7 @@ impl CheckerContext {
         }
 
         if !skip_inst {
-            let regsets = get_san_reg_sets_for_insn::<F>(func.get_insn(iix), ru)
-                .expect("only existing real registers at this point");
-            assert!(regsets.is_sanitized());
+            let regsets = get_raw_reg_sets_for_insn::<F>(insn);
 
             debug!(
                 "at inst {:?}: regsets {:?} mapper {:?}",
