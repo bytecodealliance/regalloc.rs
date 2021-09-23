@@ -23,12 +23,12 @@ fuzz_target!(|func: ir::Func| {
         algorithm: regalloc::Algorithm::Backtracking(Default::default()),
     };
 
-    let env = regalloc::RegEnv::from_rru_and_opts(reg_universe, &opts);
+    let env = regalloc::RegEnv::from_rru_and_opts(reg_universe.clone(), &opts);
     let result = match regalloc::allocate_registers_with_opts(&mut func, &env, None, opts) {
         Ok(result) => result,
         Err(err) => {
             if let regalloc::RegAllocError::RegChecker(_) = &err {
-                panic!(format!("fuzz_bt_differential.rs: checker error: {:?}", err));
+                panic!("fuzz_bt_differential.rs: checker error: {:?}", err);
             }
             println!("allocation error: {}", err);
             return;
