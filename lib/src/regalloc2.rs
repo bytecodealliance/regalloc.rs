@@ -893,12 +893,6 @@ impl<'a, F: Function> regalloc2::Function for Shim<'a, F> {
         &[]
     }
 
-    fn is_call(&self, _insn: regalloc2::Inst) -> bool {
-        // We don't have this info in regalloc1 interface, but it is
-        // just for heuristics, not strictly needed.
-        false
-    }
-
     fn is_ret(&self, insn: regalloc2::Inst) -> bool {
         if insn.index() == 0 {
             false

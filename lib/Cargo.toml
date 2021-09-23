@@ -13,7 +13,7 @@ rustc-hash = "1.0.1"
 log = { version = "0.4.8", default-features = false }
 smallvec = "1.6.1"
 serde = { version = "1.0.94", features = ["derive"], optional = true }
-regalloc2 = { git = "https://github.com/bytecodealliance/regalloc2", rev = "57ccaefa04a0da8ea7e0135449dffa99b12d7eae" }
+regalloc2 = { git = "https://github.com/bytecodealliance/regalloc2", rev = "44612690dc5a1401ea3982129bd590e79b08350f" }
 
 [features]
 default = []
