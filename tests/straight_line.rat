@@ -1,4 +1,4 @@
-vA = i32
+vA = i64
 
 b0:
     println "Start"

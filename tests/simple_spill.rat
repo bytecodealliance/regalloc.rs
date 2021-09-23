@@ -1,7 +1,7 @@
 ; Requires a spill when there's only one register.
 
-vA = i32
-vB = i32
+vA = i64
+vB = i64
 
 b0:
     imm vA, 10

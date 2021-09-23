@@ -1,6 +1,6 @@
-vNENT = i32
-vI = i32
-rTMP = real i32 0
+vNENT = i64
+vI = i64
+rTMP = real i64 0
 
 start:
     imm vNENT, 10

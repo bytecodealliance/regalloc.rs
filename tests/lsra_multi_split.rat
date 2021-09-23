@@ -1,11 +1,11 @@
-v0I = i32
-v2I = i32
-v6I = i32
-v8I = i32
+v0I = i64
+v2I = i64
+v6I = i64
+v8I = i64
 
-r0I = real i32 0
-r1I = real i32 1
-r3I = real i32 3
+r0I = real i64 0
+r1I = real i64 1
+r3I = real i64 3
 
 b0:
     imm     v0I, 3405774903

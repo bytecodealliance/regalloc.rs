@@ -1,9 +1,9 @@
 reftype_start = 2
-v0I = I32
-v1I = I32
-v2I = I32
-r1I = real I32 1
-r3I = real I32 3
+v0I = I64
+v1I = I64
+v2I = I64
+r1I = real I64 1
+r3I = real I64 3
 
 b0:
     imm     v1I, 1337

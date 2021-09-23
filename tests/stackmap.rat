@@ -1,7 +1,7 @@
 reftype_start = 1
-v0 = I32
-v1_ref = I32
-real = real I32 2
+v0 = I64
+v1_ref = I64
+real = real I64 2
 
 b0:
     imm     v0, 42

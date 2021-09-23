@@ -4,12 +4,12 @@
 ;;
 ;; RUST_LOG=debug cargo run -- -a btc -t fuzz_checker2 -f 3 -i 3
 
-v7I = I32
-v11I = I32
-v13I = I32
-v15I = I32
-r0I = real I32 0
-r1I = real I32 1
+v7I = I64
+v11I = I64
+v13I = I64
+v15I = I64
+r0I = real I64 0
+r1I = real I64 1
 
 b0:
     imm     r0I, 3123165882

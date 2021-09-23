@@ -8,11 +8,11 @@
 ;; are two entry nodes to this loop: 3, which is jumped to from 5,
 ;; and 4, which is jumped to from 1 and 2.
 
-v11I = I32
-v13I = I32
-v15I = I32
+v11I = I64
+v13I = I64
+v15I = I64
 
-r0I = real I32 0
+r0I = real I64 0
 r6F = real F32 6
 
 b0:

@@ -1,9 +1,9 @@
 ; Regs, virtual and real, that we want to use.
-vNENT = i32
-vI = i32
-vSUM = i32
-rTMP = real i32 2
-vTMP2 = i32
+vNENT = i64
+vI = i64
+vSUM = i64
+rTMP = real i64 2
+vTMP2 = i64
 
 ; Loop pre-header for filling array with numbers.
 ; This is also the entry point.

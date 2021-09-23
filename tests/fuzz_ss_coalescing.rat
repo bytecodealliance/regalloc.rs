@@ -1,10 +1,10 @@
-v0I = I32
-v5I = I32
-v7I = I32
-r0I = real I32 0
-r1I = real I32 1
-r2I = real I32 2
-r3I = real I32 3
+v0I = I64
+v5I = I64
+v7I = I64
+r0I = real I64 0
+r1I = real I64 1
+r2I = real I64 2
+r3I = real I64 3
 r7F = real F32 7
 
 b0:

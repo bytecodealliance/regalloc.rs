@@ -2,7 +2,7 @@
 ;; This caused an assertion failure in merge_RangeFrags, in the small-group
 ;; merge logic.
 
-v5I = i32
+v5I = i64
 
 b0:
     imm     v5I, 1768515945

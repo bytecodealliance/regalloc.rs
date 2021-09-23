@@ -1,12 +1,12 @@
-v0I = i32
-v1F = f32
-v2I = i32
-v3I = i32
-v4I = i32
+v0I = i64
+v1F = v128
+v2I = i64
+v3I = i64
+v4I = i64
 
-r0I = real i32 0
-r2I = real i32 2
-r3I = real i32 3
+r0I = real i64 0
+r2I = real i64 2
+r3I = real i64 3
 
 b0:
     immf    v1F, 0.0000001669003
