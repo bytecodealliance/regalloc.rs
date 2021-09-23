@@ -468,8 +468,8 @@ pub fn does_inst_use_def_or_mod_reg(
 // This is slow, really slow.  Don't use it on critical paths.  This applies
 // `get_regs` to `inst`, performs cleanups (1) and (2), but does not sanitize
 // the results.  The results are wrapped up as Sets for convenience.
-// JRS 2020Apr09: remove this if no further use for it appears soon.
-#[allow(dead_code)]
+//
+// This is used in the checker.
 #[inline(never)]
 pub fn get_raw_reg_sets_for_insn<F: Function>(inst: &F::Inst) -> RegSets {
     let mut reg_vecs = RegVecs::new(false);
@@ -485,32 +485,6 @@ pub fn get_raw_reg_sets_for_insn<F: Function>(inst: &F::Inst) -> RegSets {
     assert!(!reg_vecs.is_sanitized());
     let single_insn_rvb = RegVecsAndBounds::new(reg_vecs, single_insn_bounds);
     single_insn_rvb.get_reg_sets_for_iix(InstIx::new(0))
-}
-
-// ==== EXPORTED ====
-// This is even slower.  This applies `get_regs` to `inst`, performs cleanups
-// (1) (2) and (3).  The results are wrapped up as Sets for convenience.  Note
-// this function can fail.
-#[allow(dead_code)]
-#[inline(never)]
-pub fn get_san_reg_sets_for_insn<F: Function>(
-    inst: &F::Inst,
-    reg_universe: &RealRegUniverse,
-) -> Result<RegSets, RealReg> {
-    let mut reg_vecs = RegVecs::new(false);
-    let mut bounds = RegVecBounds::new();
-
-    add_san_reg_vecs_for_insn::<F>(inst, &reg_universe, &mut reg_vecs, &mut bounds)?;
-
-    // Make up a fake RegVecsAndBounds for just this insn, so we can hand it to
-    // RegVecsAndBounds::get_reg_sets_for_iix.
-    let mut single_insn_bounds = TypedIxVec::<InstIx, RegVecBounds>::new();
-    single_insn_bounds.push(bounds);
-
-    assert!(!reg_vecs.is_sanitized());
-    reg_vecs.set_sanitized(true);
-    let single_insn_rvb = RegVecsAndBounds::new(reg_vecs, single_insn_bounds);
-    Ok(single_insn_rvb.get_reg_sets_for_iix(InstIx::new(0)))
 }
 
 //=============================================================================

@@ -325,19 +325,6 @@ impl PerRealReg {
         assert!(running_cost.is_less_than(&evict_cost_budget));
         Some((running_set, running_cost))
     }
-
-    #[allow(dead_code)]
-    #[inline(never)]
-    fn show1_with_envs(&self, _frag_env: &TypedIxVec<RangeFragIx, RangeFrag>) -> String {
-        //"in_use:   ".to_string() + &self.committed.show_with_frag_env(&frag_env)
-        "(show1_with_envs:FIXME)".to_string()
-    }
-    #[allow(dead_code)]
-    #[inline(never)]
-    fn show2_with_envs(&self, _frag_env: &TypedIxVec<RangeFragIx, RangeFrag>) -> String {
-        //"assigned: ".to_string() + &format!("{:?}", &self.vlrixs_assigned)
-        "(show2_with_envs:FIXME)".to_string()
-    }
 }
 
 //=============================================================================

@@ -420,9 +420,8 @@ mod test_utils {
                 .expect("generic allocator failed!");
 
             let env = RegEnv::from_rru_and_opts(reg_universe.clone(), &opts);
-            let result =
-                allocate_registers_with_opts(&mut func, &env, sri.as_ref(), opts.clone())
-                    .expect("regalloc failure");
+            let result = allocate_registers_with_opts(&mut func, &env, sri.as_ref(), opts.clone())
+                .expect("regalloc failure");
 
             func.update_from_alloc(result);
             func.print("AFTER", &None);

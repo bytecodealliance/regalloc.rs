@@ -54,8 +54,6 @@
 //! program point, and check that the real reg for each op arg (input/use) contains the symbol
 //! corresponding to the original (usually virtual) register specified for this arg.
 
-#![allow(dead_code)]
-
 use crate::data_structures::{
     BlockIx, InstIx, Map, RealReg, RealRegUniverse, Reg, RegSets, SpillSlot, VirtualReg, Writable,
 };

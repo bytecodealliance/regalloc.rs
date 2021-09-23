@@ -542,7 +542,7 @@ impl RegEnv {
 /// common to all the backends. The choice of algorithm is done by passing a given [Algorithm]
 /// instance, with options tailored for each algorithm.
 #[inline(never)]
-pub fn allocate_registers_with_opts<'a, F: Function>(
+pub fn allocate_registers_with_opts<F: Function>(
     func: &mut F,
     env: &RegEnv,
     stackmap_info: Option<&StackmapRequestInfo>,

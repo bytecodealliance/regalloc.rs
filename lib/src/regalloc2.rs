@@ -1,7 +1,5 @@
 //! Compatibility layer that allows us to use regalloc2.
 
-#![allow(dead_code)]
-
 use crate::analysis_main::AnalysisError;
 use crate::checker::{CheckerContext, CheckerErrors};
 use crate::data_structures::RegVecs;

@@ -1,7 +1,5 @@
 //! Data structures for the whole crate.
 
-#![allow(dead_code)]
-
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
@@ -1157,7 +1155,7 @@ impl RegSets {
             sanitized,
         }
     }
-
+    #[allow(dead_code)] // This is definitely used, but rustc doesn't think it is.
     pub fn is_sanitized(&self) -> bool {
         self.sanitized
     }
