@@ -282,20 +282,36 @@ pub trait Function {
     /// vector value will require two slots.  The regalloc will always align on
     /// this size.
     ///
-    /// This passes the associated virtual register to the client as well,
-    /// because the way in which we spill a real register may depend on the
-    /// value that we are using it for. E.g., if a machine has V128 registers
-    /// but we also use them for F32 and F64 values, we may use a different
-    /// store-slot size and smaller-operand store/load instructions for an F64
+    /// If known, this passes the associated virtual register to the
+    /// client as well, because the way in which we spill a real
+    /// register may depend on the value that we are using it
+    /// for. E.g., if a machine has V128 registers but we also use
+    /// them for F32 and F64 values, we may use a different store-slot
+    /// size and smaller-operand store/load instructions for an F64
     /// than for a true V128.
+    ///
+    /// However, the particular regalloc algorithm may not always know
+    /// or be able to track which virtual register is being actually
+    /// spilled; in this case, `for_vreg` may not be provided. If it
+    /// is not provided, the user should assume that the entire native
+    /// register width for the given register class is being spilled.
     fn get_spillslot_size(&self, regclass: RegClass, for_vreg: Option<VirtualReg>) -> u32;
 
-    /// Generate a spill instruction for insertion into the instruction
-    /// sequence. The associated virtual register (whose value is being spilled)
-    /// is passed, if it exists, so that the client may make decisions about the
-    /// instruction to generate based on the type of value in question.  Because
-    /// the register allocator will insert spill instructions at arbitrary points,
-    /// the returned instruction here must not modify the machine's condition codes.
+    /// Generate a spill instruction for insertion into the
+    /// instruction sequence. The associated virtual register (whose
+    /// value is being spilled) is passed, if it is known, so that the
+    /// client may make decisions about the instruction to generate
+    /// based on the type of value in question.  Because the register
+    /// allocator will insert spill instructions at arbitrary points,
+    /// the returned instruction here must not modify the machine's
+    /// condition codes.
+    ///
+    /// As for `get_spillslot_size()`, here the particular regalloc
+    /// algorithm may not always know or be able to track which
+    /// virtual register is being actually spilled; in this case,
+    /// `for_vreg` may not be provided. If it is not provided, the
+    /// user should assume that the entire native register width for
+    /// the given register is being spilled.
     fn gen_spill(
         &self,
         to_slot: SpillSlot,
@@ -303,10 +319,18 @@ pub trait Function {
         for_vreg: Option<VirtualReg>,
     ) -> Self::Inst;
 
-    /// Generate a reload instruction for insertion into the instruction
-    /// sequence. The associated virtual register (whose value is being loaded)
-    /// is passed as well, if it exists.  The returned instruction must not modify
-    /// the machine's condition codes.
+    /// Generate a reload instruction for insertion into the
+    /// instruction sequence. The associated virtual register (whose
+    /// value is being loaded) is passed as well, if known.  The
+    /// returned instruction must not modify the machine's condition
+    /// codes.
+    ///
+    /// As for `get_spillslot_size()`, here the particular regalloc
+    /// algorithm may not always know or be able to track which
+    /// virtual register is being actually spilled; in this case,
+    /// `for_vreg` may not be provided. If it is not provided, the
+    /// user should assume that the entire native register width for
+    /// the given register is being reloaded.
     fn gen_reload(
         &self,
         to_reg: Writable<RealReg>,
@@ -314,9 +338,14 @@ pub trait Function {
         for_vreg: Option<VirtualReg>,
     ) -> Self::Inst;
 
-    /// Generate a register-to-register move for insertion into the instruction
-    /// sequence. The associated virtual register is passed as well.  The
-    /// returned instruction must not modify the machine's condition codes.
+    /// Generate a register-to-register move for insertion into the
+    /// instruction sequence. The associated virtual register is
+    /// passed as well, if it is known. The returned instruction must
+    /// not modify the machine's condition codes.
+    ///
+    /// If the associated virtual register is not provided, the full
+    /// native register width for the given registers (which will be
+    /// of the same register class) should be moved.
     fn gen_move(
         &self,
         to_reg: Writable<RealReg>,

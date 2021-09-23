@@ -20,16 +20,27 @@ pub(crate) enum InstToInsert {
     Spill {
         to_slot: SpillSlot,
         from_reg: RealReg,
+        // This is an `Option<VirtualReg>` because some regalloc
+        // algorithms cannot tell us which VirtualReg is being moved
+        // between locations, due to the way that they track their
+        // allocation decisions. The client/embedded should treat this
+        // as a nice hint if available, but should not rely on knowing
+        // it; if not present, conceptually the whole value in the
+        // physical register (up to its native width) is moved.
         for_vreg: Option<VirtualReg>,
     },
     Reload {
         to_reg: Writable<RealReg>,
         from_slot: SpillSlot,
+        // As above for the `for_vreg` field in `InstToInsert::Spill`,
+        // this may not be known by every regalloc algorithm.
         for_vreg: Option<VirtualReg>,
     },
     Move {
         to_reg: Writable<RealReg>,
         from_reg: RealReg,
+        // As above for the `for_vreg` field in `InstToInsert::Spill`,
+        // this may not be known by every regalloc algorithm.
         for_vreg: Option<VirtualReg>,
     },
     /// A spillslot reassignment (to another vreg). In the edited instruction
@@ -45,13 +56,12 @@ pub(crate) enum InstToInsert {
     },
     /// A definition of a Reg in a given RealReg. No machine code is
     /// generated, but used to sync the checker with the effect of a
-    /// move that comes from a user move. Only used with regalloc2's
-    /// checker integration.
+    /// move that comes from a user move.
     DefReg {
         to_reg: Writable<RealReg>,
         for_reg: Reg,
     },
-    /// As for DefReg, for for spillslots.
+    /// As for DefReg, but for spillslots.
     DefSlot { to_slot: SpillSlot, for_reg: Reg },
 }
 
@@ -73,10 +83,10 @@ impl InstToInsert {
                 from_reg,
                 for_vreg,
             } if to_reg.to_reg() != from_reg => Some(f.gen_move(to_reg, from_reg, for_vreg)),
-            &InstToInsert::Move { .. } => None,
-            &InstToInsert::ChangeSpillSlotOwnership { .. } => None,
-            &InstToInsert::DefReg { .. } => None,
-            &InstToInsert::DefSlot { .. } => None,
+            &InstToInsert::Move { .. }
+            | &InstToInsert::ChangeSpillSlotOwnership { .. }
+            | &InstToInsert::DefReg { .. }
+            | &InstToInsert::DefSlot { .. } => None,
         }
     }
 
@@ -480,13 +490,7 @@ fn map_vregs_to_rregs<F: Function>(
         if let &mut Some(ref mut checker) = &mut checker {
             let block_ix = insn_blocks[insn_ix.get() as usize];
             checker
-                .handle_insn::<F, _>(
-                    reg_universe,
-                    block_ix,
-                    insn_ix,
-                    func.get_insn(insn_ix),
-                    &mapper,
-                )
+                .handle_insn::<F, _>(block_ix, insn_ix, func.get_insn(insn_ix), &mapper)
                 .unwrap();
         }
 

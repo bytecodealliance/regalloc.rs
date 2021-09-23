@@ -552,7 +552,7 @@ fn edit_insn_registers<'a, F: Function>(
     log::debug!("iix {:?}: mapper {:?}", iix, mapper);
 
     if let Some(checker) = checker.as_mut() {
-        checker.handle_insn::<F, _>(&shim.env.rru, bix, iix, insn, &mapper)?;
+        checker.handle_insn::<F, _>(bix, iix, insn, &mapper)?;
     }
 
     F::map_regs(insn, &mapper);
@@ -583,7 +583,7 @@ fn handle_nop<'a, F: Function>(
             allocs: &[],
         };
         let nop = shim.func.gen_zero_len_nop();
-        checker.handle_insn::<F, _>(&shim.env.rru, bix, iix, &nop, &mapper)?;
+        checker.handle_insn::<F, _>(bix, iix, &nop, &mapper)?;
     }
     Ok(())
 }

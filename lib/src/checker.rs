@@ -740,7 +740,6 @@ impl CheckerContext {
     /// within a block must be visited in program order.
     pub(crate) fn handle_insn<F: Function, RUM: RegUsageMapper>(
         &mut self,
-        _ru: &RealRegUniverse,
         bix: BlockIx,
         iix: InstIx,
         insn: &F::Inst,
