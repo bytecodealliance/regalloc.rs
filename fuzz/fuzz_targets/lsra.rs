@@ -27,17 +27,15 @@ fuzz_target!(|func: ir::Func| {
     let num_regs = minira::fuzzing::NUM_REAL_REGS_PER_RC as usize + 1;
     let reg_universe = ir::make_universe(num_regs, num_regs);
 
+    let opts = regalloc::Options {
+        run_checker: true,
+
+        algorithm: regalloc::Algorithm::LinearScan(Default::default()),
+    };
+
     let env = regalloc::RegEnv::from_rru_and_opts(reg_universe, &opts);
     let sri = func.get_stackmap_request();
-    let result = match regalloc::allocate_registers_with_opts(
-        &mut func,
-        &env,
-        sri.as_ref(),
-        regalloc::Options {
-            run_checker: true,
-            algorithm: regalloc::Algorithm::LinearScan(Default::default()),
-        },
-    ) {
+    let result = match regalloc::allocate_registers_with_opts(&mut func, &env, sri.as_ref(), opts) {
         Ok(result) => {
             unsafe {
                 COUNTER_OK += 1;
@@ -50,10 +48,7 @@ fuzz_target!(|func: ir::Func| {
                 original_func.render("func:", &mut rendered).unwrap();
                 println!("{}", rendered);
 
-                panic!(format!(
-                    "fuzz_lsra_differential.rs: checker error: {:?}",
-                    err
-                ));
+                panic!("fuzz_lsra_differential.rs: checker error: {:?}", err);
             }
 
             println!("allocation error: {}", err);

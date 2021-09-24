@@ -26,20 +26,18 @@ fuzz_target!(|func: ir::Func| {
     func.render("before allocation", &mut rendered).unwrap();
     println!("{}", rendered);
 
-    let env = regalloc::RegEnv::from_rru_and_opts(reg_universe, &opts);
-    let result = match regalloc::allocate_registers(
-        &mut func,
-        &env,
-        None,
-        regalloc::AlgorithmWithDefaults::LinearScan,
-    ) {
+    let opts = regalloc::Options {
+        run_checker: true,
+
+        algorithm: regalloc::Algorithm::LinearScan(Default::default()),
+    };
+
+    let env = regalloc::RegEnv::from_rru_and_opts(reg_universe.clone(), &opts);
+    let result = match regalloc::allocate_registers_with_opts(&mut func, &env, None, opts) {
         Ok(result) => result,
         Err(err) => {
             if let regalloc::RegAllocError::RegChecker(_) = &err {
-                panic!(format!(
-                    "fuzz_lsra_differential.rs: checker error: {:?}",
-                    err
-                ));
+                panic!("fuzz_lsra_differential.rs: checker error: {:?}", err);
             }
             println!("allocation error: {}", err);
             return;
