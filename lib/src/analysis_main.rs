@@ -1,6 +1,6 @@
 //! Top level module for all analysis activities.
 
-use log::trace;
+use log::{log_enabled, trace, Level};
 
 use crate::data_structures::*;
 use crate::sparse_set::SparseSet;
@@ -248,22 +248,24 @@ pub fn run_analysis<F: Function>(
 
     debug_assert!(liveout_sets_per_block.len() == estimated_frequencies.len());
 
-    trace!("");
-    let mut n = 0;
-    for rlr in rlr_env.iter() {
-        trace!(
-            "{:<4?}   {}",
-            RealRangeIx::new(n),
-            rlr.show_with_rru(&reg_universe)
-        );
-        n += 1;
-    }
+    if log_enabled!(Level::Trace) {
+        trace!("");
+        let mut n = 0;
+        for rlr in rlr_env.iter() {
+            trace!(
+                "{:<4?}   {}",
+                RealRangeIx::new(n),
+                rlr.show_with_rru(&reg_universe)
+            );
+            n += 1;
+        }
 
-    trace!("");
-    n = 0;
-    for vlr in vlr_env.iter() {
-        trace!("{:<4?}   {:?}", VirtualRangeIx::new(n), vlr);
-        n += 1;
+        trace!("");
+        n = 0;
+        for vlr in vlr_env.iter() {
+            trace!("{:<4?}   {:?}", VirtualRangeIx::new(n), vlr);
+            n += 1;
+        }
     }
 
     // Now a bit of auxiliary info collection, which isn't really either control- or data-flow
