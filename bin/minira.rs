@@ -18,55 +18,56 @@ use pretty_env_logger;
 fn main() {
     pretty_env_logger::init();
 
-    let app = clap::App::new("minira")
+    let mut app = clap::App::new("minira")
         .about("a simple program to allow separate testing of regalloc.rs")
         .arg(
-            clap::Arg::with_name("iregs")
-                .short("i")
+            clap::Arg::new("iregs")
+                .short('i')
                 .takes_value(true)
                 .help("number of integer registers available (0 if not set)"),
         )
         .arg(
-            clap::Arg::with_name("fregs")
-                .short("f")
+            clap::Arg::new("fregs")
+                .short('f')
                 .takes_value(true)
                 .help("number of floating-point registers available (0 if not set)"),
         )
         .arg(
-            clap::Arg::with_name("test")
-                .short("t")
+            clap::Arg::new("test")
+                .short('t')
                 .takes_value(true)
                 .help("test case name"),
         )
         .arg(
-            clap::Arg::with_name("algorithm")
-                .short("a")
+            clap::Arg::new("algorithm")
+                .short('a')
                 .takes_value(true)
                 .required(true)
                 .possible_values(&["bt", "lsra", "btc", "lsrac"])
                 .help("algorithm name"),
         )
         .arg(
-            clap::Arg::with_name("quiet")
-            .short("q")
+            clap::Arg::new("quiet")
+            .short('q')
             .takes_value(false)
             .help("whether to run in quiet mode (i.e. not print the function's body before and after regalloc)"))
         .arg(
-            clap::Arg::with_name("snapshot")
-            .short("s")
+            clap::Arg::new("snapshot")
+            .short('s')
             .takes_value(true)
             .help("Path to a snapshot file (.bin) or directory containing snapshot files."))
         .arg(
-            clap::Arg::with_name("run-snapshot")
-            .short("r")
+            clap::Arg::new("run-snapshot")
+            .short('r')
             .takes_value(false)
             .help("Rerun the whole program as a snapshotted test.")
             );
 
+    let usage_string = app.render_usage();
     let matches = app.get_matches();
     if matches.value_of("snapshot").is_none() && matches.value_of("test").is_none() {
         println!("Missing test or snapshot parameter, aborting.");
-        println!("Usage: {}", matches.usage());
+        println!("Usage: {}", usage_string);
         return;
     }
 
@@ -112,7 +113,7 @@ fn main() {
     ) {
         (Ok(num_i32), Ok(num_f32)) => (num_i32, num_f32),
         _other => {
-            println!("invalid iregs/fregs values: {}", matches.usage());
+            println!("invalid iregs/fregs values: {}", usage_string);
             return;
         }
     };
