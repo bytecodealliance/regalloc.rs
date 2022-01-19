@@ -901,10 +901,6 @@ impl Reg {
 /// create a distinction, at the Rust type level, between a plain "register"
 /// and a "writable register".
 ///
-/// Only structs that implement the `WritableBase` trait can be wrapped with
-/// `Writable`. These are the Reg, RealReg and VirtualReg data structures only,
-/// since `WritableBase` is not exposed to end users.
-///
 /// Writable<..> can be used by the client to ensure that, internally, it only
 /// generates instructions that write to registers that should be written. The
 /// `InstRegUses` below, which must be implemented for every instruction,
@@ -927,9 +923,10 @@ pub trait WritableBase:
 {
 }
 
-impl WritableBase for Reg {}
-impl WritableBase for RealReg {}
-impl WritableBase for VirtualReg {}
+impl<T> WritableBase for T where
+    T: Copy + Clone + PartialEq + Eq + Hash + PartialOrd + Ord + fmt::Debug
+{
+}
 
 impl<R> Writable<R> {
     /// Create a Writable<R> from an R. The client should carefully audit where
