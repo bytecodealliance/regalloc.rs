@@ -60,6 +60,7 @@ pub use crate::data_structures::RealReg;
 pub use crate::data_structures::VirtualReg;
 
 pub use crate::data_structures::Writable;
+pub use crate::data_structures::WritableBase;
 
 pub use crate::data_structures::NUM_REG_CLASSES;
 
