@@ -1,7 +1,7 @@
 regalloc.rs
 ===
 
-⚠ This project has been deprecated in favor of the [regalloc2](https://github.com/cfallin/regalloc2), which is maintained and expected to be faster. No security updates will be made, and contributions will be disabled.
+⚠ This project has been deprecated in favor of the [regalloc2](https://github.com/bytecodealliance/regalloc2), which is maintained and expected to be faster. No security updates will be made, and contributions will be disabled.
 
 ---
 
